@@ -1,0 +1,736 @@
+// Pure Functional Uniform Batch Clearing Engine (Hybrid CoW + FM-AMM).
+//
+// FE-SPECIFIC HIGHLIGHT:
+// Every function in this module — including `solve_batch` — has ZERO `uses` clauses.
+// The Fe 26.5 compiler statically guarantees that pricing and fill allocation cannot
+// read or mutate contract storage, emit events, make external calls, or inspect block
+// / transaction context (`Ctx`), eliminating state-dependent pricing bugs by construction.
+
+use core::fixed::Wad
+use core::marker::Copy
+use core::num::{mul_div, mul_div_ceil}
+use core::ops::{Eq, Ord}
+use core::ptr::{MemArray, MemSlice, MemVec}
+use core::sort::{dedup_sorted, reverse, sort}
+
+use ingot::math::{
+    base_from_quote_floor,
+    compute_fm_amm_price,
+    denormalize_floor,
+    mul_ge_512,
+    mul_le_512,
+    normalize_amount,
+    quote_from_base_floor,
+    verify_lnd_invariant,
+}
+use ingot::types::{BUY_BASE, FillOutcome, Order, SELL_BASE}
+
+/// Result of pure uniform batch clearing across all submitted orders.
+pub struct ClearingOutput {
+    pub clearing_price: Wad,
+    pub total_sell_base_raw: u256,
+    pub total_buy_quote_raw: u256,
+    pub cow_matched_base_norm: u256,
+    pub cow_matched_quote_norm: u256,
+    pub reserve_base_after_raw: u256,
+    pub reserve_quote_after_raw: u256,
+    pub fills: MemArray<FillOutcome>,
+}
+
+/// Compact normalized order entry for in-memory sorting via `core::sort::sort`.
+struct OrderEntry { limit_price: Wad, amount_norm: u256 }
+
+impl Copy for OrderEntry {}
+
+impl Eq for OrderEntry {
+    const fn eq(self, _ other: Self) -> bool {
+        self.limit_price == other.limit_price && self.amount_norm == other.amount_norm
+    }
+}
+
+impl Ord for OrderEntry {
+    const fn lt(self, _ other: Self) -> bool {
+        self.limit_price < other.limit_price
+    }
+
+    const fn le(self, _ other: Self) -> bool {
+        self.limit_price <= other.limit_price
+    }
+
+    const fn gt(self, _ other: Self) -> bool {
+        self.limit_price > other.limit_price
+    }
+
+    const fn ge(self, _ other: Self) -> bool {
+        self.limit_price >= other.limit_price
+    }
+}
+
+/// Aggregated volume at a single limit price tier.
+struct PriceTier { price: Wad, total_norm: u256 }
+
+impl Copy for PriceTier {}
+
+/// Equilibrium solution specifying the uniform clearing price `p*` and exact
+/// marginal tier fill ratios for orders sitting directly on `limit_price == p*`.
+struct Equilibrium {
+    price: Wad,
+    marginal_sell_fill: u256,
+    marginal_sell_total: u256,
+    marginal_buy_fill: u256,
+    marginal_buy_total: u256,
+    matched_any: bool,
+}
+
+impl Copy for Equilibrium {}
+
+/// Groups a sorted `MemVec<OrderEntry>` into distinct `PriceTier` buckets.
+fn build_tiers(_ sorted: MemSlice<OrderEntry>) -> MemVec<PriceTier> {
+    var tiers: MemVec<PriceTier> = MemVec::new()
+    let n = sorted.len()
+    if n == 0 { return tiers }
+
+    var cur_price = sorted[0].limit_price
+    var cur_total = sorted[0].amount_norm
+    var i: usize = 1
+    while i < n {
+        let entry = sorted[i]
+        if entry.limit_price == cur_price {
+            cur_total = cur_total + entry.amount_norm
+        } else {
+            tiers.push(PriceTier { price: cur_price, total_norm: cur_total })
+            cur_price = entry.limit_price
+            cur_total = entry.amount_norm
+        }
+        i = i + 1
+    }
+    tiers.push(PriceTier { price: cur_price, total_norm: cur_total })
+    tiers
+}
+
+/// Computes `(strict_below, equal_at)` Seller Base volume (18-dec normalized)
+/// relative to candidate price `p`.
+fn seller_volumes_at(_ tiers: MemSlice<PriceTier>, _ p: Wad) -> (u256, u256) {
+    var strict_below: u256 = 0
+    var equal_at: u256 = 0
+    let n = tiers.len()
+    var i: usize = 0
+    while i < n {
+        let t = tiers[i]
+        if t.price < p {
+            strict_below = strict_below + t.total_norm
+        } else if t.price == p {
+            equal_at = equal_at + t.total_norm
+        } else {
+            return (strict_below, equal_at)
+        }
+        i = i + 1
+    }
+    (strict_below, equal_at)
+}
+
+/// Computes `(strict_above, equal_at)` Buyer Quote volume (18-dec normalized)
+/// relative to candidate price `p` (`tiers` sorted descending by `price`).
+fn buyer_volumes_at(_ tiers: MemSlice<PriceTier>, _ p: Wad) -> (u256, u256) {
+    var strict_above: u256 = 0
+    var equal_at: u256 = 0
+    let n = tiers.len()
+    var i: usize = 0
+    while i < n {
+        let t = tiers[i]
+        if t.price > p {
+            strict_above = strict_above + t.total_norm
+        } else if t.price == p {
+            equal_at = equal_at + t.total_norm
+        } else {
+            return (strict_above, equal_at)
+        }
+        i = i + 1
+    }
+    (strict_above, equal_at)
+}
+
+/// True iff Quote demand `(ry + 2 * dy) * WAD >= p * (rx + 2 * sx)` (512-bit exact).
+const fn demand_ge_supply(rx: u256, ry: u256, sx: u256, dy: u256, p: Wad) -> bool {
+    mul_ge_512(a: ry + 2 * dy, b: Wad::SCALE, c: p.raw(), d: rx + 2 * sx)
+}
+
+/// True iff Quote demand `(ry + 2 * dy) * WAD <= p * (rx + 2 * sx)` (512-bit exact).
+const fn demand_le_supply(rx: u256, ry: u256, sx: u256, dy: u256, p: Wad) -> bool {
+    mul_le_512(a: ry + 2 * dy, b: Wad::SCALE, c: p.raw(), d: rx + 2 * sx)
+}
+
+/// Solves for the unique Hybrid CoW + FM-AMM uniform clearing equilibrium.
+fn find_equilibrium(
+    rx: u256,
+    ry: u256,
+    sell_tiers: MemSlice<PriceTier>,
+    buy_tiers: MemSlice<PriceTier>,
+) -> Equilibrium {
+    let pure_p2p = rx == 0 && ry == 0
+
+    // Pure P2P requires both sides present and best ask <= best bid.
+    if pure_p2p {
+        if sell_tiers.len() == 0 || buy_tiers.len() == 0 {
+            return Equilibrium {
+                price: Wad::zero(),
+                marginal_sell_fill: 0,
+                marginal_sell_total: 0,
+                marginal_buy_fill: 0,
+                marginal_buy_total: 0,
+                matched_any: false,
+            }
+        }
+        if sell_tiers[0].price > buy_tiers[0].price {
+            return Equilibrium {
+                price: Wad::zero(),
+                marginal_sell_fill: 0,
+                marginal_sell_total: 0,
+                marginal_buy_fill: 0,
+                marginal_buy_total: 0,
+                matched_any: false,
+            }
+        }
+    }
+
+    // Empty batch with positive passive reserves reports pool spot price and 0 fills.
+    if sell_tiers.len() == 0 && buy_tiers.len() == 0 {
+        let spot = if rx > 0 && ry > 0 {
+            Wad::from_ratio(ry, rx)
+        } else {
+            Wad::zero()
+        }
+        return Equilibrium {
+            price: spot,
+            marginal_sell_fill: 0,
+            marginal_sell_total: 0,
+            marginal_buy_fill: 0,
+            marginal_buy_total: 0,
+            matched_any: false,
+        }
+    }
+
+    // Collect and sort all unique positive critical limit prices in the batch.
+    var crit_vec: MemVec<Wad> = MemVec::with_capacity(sell_tiers.len() + buy_tiers.len())
+    var si: usize = 0
+    while si < sell_tiers.len() {
+        let p = sell_tiers[si].price
+        if !p.is_zero() {
+            crit_vec.push(p)
+        }
+        si = si + 1
+    }
+    var bi: usize = 0
+    while bi < buy_tiers.len() {
+        let p = buy_tiers[bi].price
+        if !p.is_zero() {
+            crit_vec.push(p)
+        }
+        bi = bi + 1
+    }
+
+    sort(mut crit_vec)
+    let unique_count = dedup_sorted(mut crit_vec)
+    crit_vec.truncate(unique_count)
+    let q = crit_vec.len()
+
+    // Case: only market-sell orders with limit_price == 0 (so `q == 0`).
+    if q == 0 {
+        let (sx0, sx_zero) = seller_volumes_at(sell_tiers, Wad::zero())
+        let total_sx = sx0 + sx_zero
+        let p_star = compute_fm_amm_price(rx_norm: rx, ry_norm: ry, sx_norm: total_sx, dy_norm: 0)
+        return Equilibrium {
+            price: p_star,
+            marginal_sell_fill: 0,
+            marginal_sell_total: 0,
+            marginal_buy_fill: 0,
+            marginal_buy_total: 0,
+            matched_any: !p_star.is_zero() && total_sx > 0,
+        }
+    }
+
+    // Walk the partition `(0, c_0), c_0, (c_0, c_1), c_1, ..., c_{q-1}, (c_{q-1}, inf)`.
+    // 1. Check lowest open interval `(0, c_0)`:
+    let c0 = crit_vec[0]
+    let (s_lt_c0, _) = seller_volumes_at(sell_tiers, c0)
+    let (b_gt_c0, b_eq_c0) = buyer_volumes_at(buy_tiers, c0)
+    let dy_i0 = b_gt_c0 + b_eq_c0
+    if (ry + 2 * dy_i0 > 0) && !demand_ge_supply(rx, ry, sx: s_lt_c0, dy: dy_i0, p: c0) {
+        // Strict excess supply already before reaching `c_0`: interior equilibrium in `(0, c_0)`.
+        let p_star = compute_fm_amm_price(
+            rx_norm: rx,
+            ry_norm: ry,
+            sx_norm: s_lt_c0,
+            dy_norm: dy_i0,
+        )
+        return Equilibrium {
+            price: p_star,
+            marginal_sell_fill: 0,
+            marginal_sell_total: 0,
+            marginal_buy_fill: 0,
+            marginal_buy_total: 0,
+            matched_any: !p_star.is_zero() && (s_lt_c0 > 0 || dy_i0 > 0),
+        }
+    }
+
+    // 2. Check each critical price `c_t` and the following open interval `(c_t, c_{t+1})`.
+    var t: usize = 0
+    while t < q {
+        let p_lim = crit_vec[t]
+        let (s_lt, s_eq) = seller_volumes_at(sell_tiers, p_lim)
+        let (b_gt, b_eq) = buyer_volumes_at(buy_tiers, p_lim)
+
+        let left_ok = demand_ge_supply(rx, ry, sx: s_lt, dy: b_gt + b_eq, p: p_lim)
+        let right_ok = demand_le_supply(rx, ry, sx: s_lt + s_eq, dy: b_gt, p: p_lim)
+
+        if left_ok && right_ok {
+            // Equilibrium is pinned at `p* = p_lim`!
+            // Determine which side (marginal sellers `s_eq` vs marginal buyers `b_eq`) is rationed.
+            let full_both_ge = demand_ge_supply(rx, ry, sx: s_lt + s_eq, dy: b_gt + b_eq, p: p_lim)
+            let full_both_le = demand_le_supply(rx, ry, sx: s_lt + s_eq, dy: b_gt + b_eq, p: p_lim)
+
+            var marg_sell_fill: u256 = s_eq
+            var marg_buy_fill: u256 = b_eq
+
+            if full_both_ge && full_both_le {
+                // Exact balance when both marginal tiers fill 100%.
+                marg_sell_fill = s_eq
+                marg_buy_fill = b_eq
+            } else if full_both_le {
+                // Supply exceeds demand when both marginal tiers are included:
+                // all marginal buyers fill 100%, marginal sellers fill pro-rata.
+                let d_filled = b_gt + b_eq
+                let target_rx_plus_2sx = mul_div(ry + 2 * d_filled, Wad::SCALE, p_lim.raw())
+                if target_rx_plus_2sx > rx {
+                    let max_sx = (target_rx_plus_2sx - rx) / 2
+                    if max_sx > s_lt {
+                        let rem_sx = max_sx - s_lt
+                        marg_sell_fill = if rem_sx < s_eq { rem_sx } else { s_eq }
+                    } else {
+                        marg_sell_fill = 0
+                    }
+                } else {
+                    marg_sell_fill = 0
+                }
+            } else {
+                // Demand exceeds supply when both marginal tiers are included:
+                // all marginal sellers fill 100%, marginal buyers fill pro-rata.
+                let s_filled = s_lt + s_eq
+                let target_ry_plus_2dy = mul_div(p_lim.raw(), rx + 2 * s_filled, Wad::SCALE)
+                if target_ry_plus_2dy > ry {
+                    let max_dy = (target_ry_plus_2dy - ry) / 2
+                    if max_dy > b_gt {
+                        let rem_dy = max_dy - b_gt
+                        marg_buy_fill = if rem_dy < b_eq { rem_dy } else { b_eq }
+                    } else {
+                        marg_buy_fill = 0
+                    }
+                } else {
+                    marg_buy_fill = 0
+                }
+            }
+
+            let total_s = s_lt + marg_sell_fill
+            let total_d = b_gt + marg_buy_fill
+            let any_vol = total_s > 0 || total_d > 0
+            let final_price = if pure_p2p && !any_vol {
+                Wad::zero()
+            } else {
+                p_lim
+            }
+
+            return Equilibrium {
+                price: final_price,
+                marginal_sell_fill: marg_sell_fill,
+                marginal_sell_total: s_eq,
+                marginal_buy_fill: marg_buy_fill,
+                marginal_buy_total: b_eq,
+                matched_any: any_vol,
+            }
+        }
+
+        // Otherwise check open interval `(c_t, c_{t+1})` (or `(c_{q-1}, inf)` when `t + 1 == q`).
+        let sx_open = s_lt + s_eq
+        let dy_open = b_gt
+        let in_this_open_interval = if t + 1 < q {
+            let next_c = crit_vec[t + 1]
+            !demand_ge_supply(rx, ry, sx: sx_open, dy: dy_open, p: next_c)
+        } else {
+            true
+        }
+
+        if in_this_open_interval {
+            let p_star = compute_fm_amm_price(
+                rx_norm: rx,
+                ry_norm: ry,
+                sx_norm: sx_open,
+                dy_norm: dy_open,
+            )
+            // Handle sub-1-wei truncation onto `p_lim`: sellers at `p_lim` belong to `sx_open` (100%),
+            // while buyers at `p_lim` do not belong to `dy_open` (0%).
+            let sell_at_p = if p_star == p_lim { s_eq } else { 0 }
+            let buy_at_p = if p_star == p_lim { b_eq } else { 0 }
+            let any_vol = !p_star.is_zero() && (sx_open > 0 || dy_open > 0)
+
+            return Equilibrium {
+                price: if pure_p2p && !any_vol {
+                    Wad::zero()
+                } else {
+                    p_star
+                },
+                marginal_sell_fill: sell_at_p,
+                marginal_sell_total: sell_at_p,
+                marginal_buy_fill: 0,
+                marginal_buy_total: buy_at_p,
+                matched_any: any_vol,
+            }
+        }
+
+        t = t + 1
+    }
+
+    Equilibrium {
+        price: Wad::zero(),
+        marginal_sell_fill: 0,
+        marginal_sell_total: 0,
+        marginal_buy_fill: 0,
+        marginal_buy_total: 0,
+        matched_any: false,
+    }
+}
+
+/// Pure, zero-effect uniform batch solver (`uses ()`).
+///
+/// Sorts sellers ascending and buyers descending via `core::sort::sort`, finds the
+/// closed-form Hybrid CoW + FM-AMM equilibrium `p*`, computes floor-rounded payouts
+/// and refunds in raw token atoms, and verifies 512-bit LND & solvency invariants.
+pub fn solve_batch(
+    rx_raw: u256,
+    ry_raw: u256,
+    base_decimals: u8,
+    quote_decimals: u8,
+    orders: MemSlice<Order>,
+) -> ClearingOutput {
+    let rx_norm = normalize_amount(rx_raw, base_decimals)
+    let ry_norm = normalize_amount(ry_raw, quote_decimals)
+    let pure_p2p = rx_raw == 0 && ry_raw == 0
+
+    let count = orders.len()
+    var sellers: MemVec<OrderEntry> = MemVec::new()
+    var buyers: MemVec<OrderEntry> = MemVec::new()
+
+    var idx: usize = 0
+    while idx < count {
+        let ord = orders[idx]
+        if ord.side == SELL_BASE {
+            let amt_norm = normalize_amount(ord.amount_in, base_decimals)
+            if amt_norm > 0 {
+                sellers
+                    .push(
+                        OrderEntry {
+                            limit_price: Wad::from_raw(ord.limit_price),
+                            amount_norm: amt_norm,
+                        },
+                    )
+            }
+        } else if ord.side == BUY_BASE {
+            let amt_norm = normalize_amount(ord.amount_in, quote_decimals)
+            if amt_norm > 0 {
+                buyers
+                    .push(
+                        OrderEntry {
+                            limit_price: Wad::from_raw(ord.limit_price),
+                            amount_norm: amt_norm,
+                        },
+                    )
+            }
+        }
+        idx = idx + 1
+    }
+
+    // Sort active sellers ascending by min acceptable price (`p_min`)
+    // and active buyers descending by max acceptable price (`p_max`).
+    sort(mut sellers)
+    sort(mut buyers)
+    reverse(mut buyers)
+
+    let sell_tiers = build_tiers(sellers.as_slice())
+    let buy_tiers = build_tiers(buyers.as_slice())
+
+    let eq = find_equilibrium(
+        rx: rx_norm,
+        ry: ry_norm,
+        sell_tiers: sell_tiers.as_slice(),
+        buy_tiers: buy_tiers.as_slice(),
+    )
+    let p_star = eq.price
+
+    // Pass 1: Quantize each order's filled input in raw token atoms (floor rounded)
+    // so `filled_raw + refund_raw == amount_in` holds identically for every order.
+    var filled_raw_vec: MemVec<u256> = MemVec::with_capacity(count)
+    var total_sell_filled_raw: u256 = 0
+    var total_buy_filled_raw: u256 = 0
+
+    var k: usize = 0
+    while k < count {
+        let ord = orders[k]
+        var filled_raw: u256 = 0
+
+        if eq.matched_any && !p_star.is_zero() {
+            let lim = Wad::from_raw(ord.limit_price)
+            if ord.side == SELL_BASE {
+                let amt_norm = normalize_amount(ord.amount_in, base_decimals)
+                let filled_norm = if lim < p_star {
+                    amt_norm
+                } else if lim == p_star && eq.marginal_sell_total > 0 {
+                    mul_div(amt_norm, eq.marginal_sell_fill, eq.marginal_sell_total)
+                } else {
+                    0
+                }
+                filled_raw = denormalize_floor(filled_norm, base_decimals)
+                if filled_raw > ord.amount_in {
+                    filled_raw = ord.amount_in
+                }
+                // Never consume raw input tokens when 6d/low-decimal output floors to 0.
+                if !pure_p2p && filled_raw > 0 {
+                    let prelim_out_norm = quote_from_base_floor(
+                        base_norm: normalize_amount(filled_raw, base_decimals),
+                        price: p_star,
+                    )
+                    if denormalize_floor(prelim_out_norm, quote_decimals) == 0 {
+                        filled_raw = 0
+                    }
+                }
+                total_sell_filled_raw = total_sell_filled_raw + filled_raw
+            } else if ord.side == BUY_BASE {
+                let amt_norm = normalize_amount(ord.amount_in, quote_decimals)
+                let filled_norm = if lim > p_star {
+                    amt_norm
+                } else if lim == p_star && eq.marginal_buy_total > 0 {
+                    mul_div(amt_norm, eq.marginal_buy_fill, eq.marginal_buy_total)
+                } else {
+                    0
+                }
+                filled_raw = denormalize_floor(filled_norm, quote_decimals)
+                if filled_raw > ord.amount_in {
+                    filled_raw = ord.amount_in
+                }
+                if !pure_p2p && filled_raw > 0 {
+                    let prelim_out_norm = base_from_quote_floor(
+                        quote_norm: normalize_amount(filled_raw, quote_decimals),
+                        price: p_star,
+                    )
+                    if denormalize_floor(prelim_out_norm, base_decimals) == 0 {
+                        filled_raw = 0
+                    }
+                }
+                total_buy_filled_raw = total_buy_filled_raw + filled_raw
+            }
+        }
+
+        filled_raw_vec.push(filled_raw)
+        k = k + 1
+    }
+
+    // In Pure P2P (`R_x == R_y == 0`), if quantized atom rounding zeroed out one side,
+    // clear 0 volume cleanly and refund 100% of both sides.
+    let effective_match = if pure_p2p {
+        total_sell_filled_raw > 0 && total_buy_filled_raw > 0
+    } else {
+        eq.matched_any && (total_sell_filled_raw > 0 || total_buy_filled_raw > 0)
+    }
+
+    if !effective_match {
+        var zero_fills: MemVec<FillOutcome> = MemVec::with_capacity(count)
+        var z: usize = 0
+        while z < count {
+            let ord = orders[z]
+            zero_fills
+                .push(
+                    FillOutcome {
+                        order_id: ord.order_id,
+                        trader: ord.trader,
+                        side: ord.side,
+                        amount_in: ord.amount_in,
+                        amount_filled: 0,
+                        payout_out: 0,
+                        refund_in: ord.amount_in,
+                    },
+                )
+            z = z + 1
+        }
+        let idle_price = if pure_p2p {
+            Wad::zero()
+        } else if rx_norm > 0 && ry_norm > 0 {
+            Wad::from_ratio(ry_norm, rx_norm)
+        } else {
+            Wad::zero()
+        }
+        return ClearingOutput {
+            clearing_price: idle_price,
+            total_sell_base_raw: 0,
+            total_buy_quote_raw: 0,
+            cow_matched_base_norm: 0,
+            cow_matched_quote_norm: 0,
+            reserve_base_after_raw: rx_raw,
+            reserve_quote_after_raw: ry_raw,
+            fills: zero_fills.into_array(),
+        }
+    }
+
+    let total_sell_norm = normalize_amount(total_sell_filled_raw, base_decimals)
+    let total_buy_norm = normalize_amount(total_buy_filled_raw, quote_decimals)
+
+    // Compute directional execution price bounds from actual Pass-1 executed volumes:
+    //   `p_sell / WAD <= p_exact <= p_buy / WAD`
+    // By AM-GM & ceiling bounds, this strictly preserves Base solvency, Quote solvency,
+    // and the 512-bit LND invariant `R_x' * R_y' >= R_x * R_y` for every `u256` input.
+    let (p_exec_floor, p_exec_ceil) = if pure_p2p {
+        (
+            mul_div(total_buy_norm, Wad::SCALE, total_sell_norm),
+            mul_div_ceil(total_buy_norm, Wad::SCALE, total_sell_norm),
+        )
+    } else {
+        let numer = ry_norm + 2 * total_buy_norm
+        let denom = rx_norm + 2 * total_sell_norm
+        (mul_div(numer, Wad::SCALE, denom), mul_div_ceil(numer, Wad::SCALE, denom))
+    }
+    let p_sell = Wad::from_raw(
+        if p_star.raw() < p_exec_floor {
+            p_star.raw()
+        } else {
+            p_exec_floor
+        },
+    )
+    let p_buy = Wad::from_raw(
+        if p_star.raw() > p_exec_ceil {
+            p_star.raw()
+        } else {
+            p_exec_ceil
+        },
+    )
+
+    // Pass 2: Compute floor-rounded payouts and refunds for every order.
+    var outcomes: MemVec<FillOutcome> = MemVec::with_capacity(count)
+    var final_sell_filled_raw: u256 = 0
+    var final_buy_filled_raw: u256 = 0
+    var total_buyer_base_payout_raw: u256 = 0
+    var total_seller_quote_payout_raw: u256 = 0
+
+    var m: usize = 0
+    while m < count {
+        let ord = orders[m]
+        var filled_raw = filled_raw_vec[m]
+        var payout_raw: u256 = 0
+
+        if filled_raw > 0 {
+            if ord.side == SELL_BASE {
+                let filled_norm = normalize_amount(filled_raw, base_decimals)
+                var payout_norm = quote_from_base_floor(base_norm: filled_norm, price: p_sell)
+                if pure_p2p && total_sell_norm > 0 {
+                    let cap_norm = mul_div(filled_norm, total_buy_norm, total_sell_norm)
+                    if cap_norm < payout_norm {
+                        payout_norm = cap_norm
+                    }
+                }
+                payout_raw = denormalize_floor(payout_norm, quote_decimals)
+                if payout_raw == 0 && !pure_p2p {
+                    filled_raw = 0
+                } else {
+                    final_sell_filled_raw = final_sell_filled_raw + filled_raw
+                    total_seller_quote_payout_raw = total_seller_quote_payout_raw + payout_raw
+                }
+            } else if ord.side == BUY_BASE {
+                let filled_norm = normalize_amount(filled_raw, quote_decimals)
+                var payout_norm = base_from_quote_floor(quote_norm: filled_norm, price: p_buy)
+                if pure_p2p && total_buy_norm > 0 {
+                    let cap_norm = mul_div(filled_norm, total_sell_norm, total_buy_norm)
+                    if cap_norm < payout_norm {
+                        payout_norm = cap_norm
+                    }
+                }
+                payout_raw = denormalize_floor(payout_norm, base_decimals)
+                if payout_raw == 0 && !pure_p2p {
+                    filled_raw = 0
+                } else {
+                    final_buy_filled_raw = final_buy_filled_raw + filled_raw
+                    total_buyer_base_payout_raw = total_buyer_base_payout_raw + payout_raw
+                }
+            }
+        }
+
+        let refund_raw = ord.amount_in - filled_raw
+        outcomes
+            .push(
+                FillOutcome {
+                    order_id: ord.order_id,
+                    trader: ord.trader,
+                    side: ord.side,
+                    amount_in: ord.amount_in,
+                    amount_filled: filled_raw,
+                    payout_out: payout_raw,
+                    refund_in: refund_raw,
+                },
+            )
+        m = m + 1
+    }
+
+    // Strict raw token conservation & solvency assertions:
+    assert!(
+        rx_raw + final_sell_filled_raw >= total_buyer_base_payout_raw,
+        "Base solvency violated",
+    )
+    assert!(
+        ry_raw + final_buy_filled_raw >= total_seller_quote_payout_raw,
+        "Quote solvency violated",
+    )
+
+    let rx_after_raw = if pure_p2p {
+        0
+    } else {
+        rx_raw + final_sell_filled_raw - total_buyer_base_payout_raw
+    }
+    let ry_after_raw = if pure_p2p {
+        0
+    } else {
+        ry_raw + final_buy_filled_raw - total_seller_quote_payout_raw
+    }
+
+    // Verify 512-bit Liquidity-Nondecreasing (LND) invariant `R_x' * R_y' >= R_x * R_y`:
+    if !pure_p2p {
+        let rx_after_norm = normalize_amount(rx_after_raw, base_decimals)
+        let ry_after_norm = normalize_amount(ry_after_raw, quote_decimals)
+        assert!(
+            verify_lnd_invariant(
+                rx_before: rx_norm,
+                ry_before: ry_norm,
+                rx_after: rx_after_norm,
+                ry_after: ry_after_norm,
+            ),
+            "FM-AMM LND invariant violated",
+        )
+    }
+
+    let final_sell_norm = normalize_amount(final_sell_filled_raw, base_decimals)
+    let final_buy_norm = normalize_amount(final_buy_filled_raw, quote_decimals)
+
+    // Compute Coincidence of Wants (CoW) P2P matched volume in 18-dec Wad space:
+    let buyer_demand_base_norm = base_from_quote_floor(quote_norm: final_buy_norm, price: p_star)
+    let cow_base_norm = if final_sell_norm < buyer_demand_base_norm {
+        final_sell_norm
+    } else {
+        buyer_demand_base_norm
+    }
+    let cow_quote_norm = quote_from_base_floor(base_norm: cow_base_norm, price: p_star)
+
+    ClearingOutput {
+        clearing_price: p_star,
+        total_sell_base_raw: final_sell_filled_raw,
+        total_buy_quote_raw: final_buy_filled_raw,
+        cow_matched_base_norm: cow_base_norm,
+        cow_matched_quote_norm: cow_quote_norm,
+        reserve_base_after_raw: rx_after_raw,
+        reserve_quote_after_raw: ry_after_raw,
+        fills: outcomes.into_array(),
+    }
+}

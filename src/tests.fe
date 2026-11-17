@@ -1,85 +1,2926 @@
-// Run the tests with `fe test`.
+// Comprehensive Test, Property, Invariant & Security Audit Suite for FairBatch.
+// Run with: `fe test`
 
-use ingot::{Vault, VaultMsg}
-use std::evm::{days, ether}
+use core::abi::Bytes
+use core::fixed::Wad
+use core::marker::Copy
+use core::num::mul_div
+use core::ptr::MemVec
+use std::abi::{Bytes32, DynArray, dyn_array_from}
+use std::evm::StorageMap
+use std::evm::effects::encode_msg_calldata
+use std::evm::eip712::domain_separator
+use std::evm::multicall::MulticallMsg
+use std::evm::packed::encode_packed
+use std::evm::{ether, gwei, seconds}
 
-#[test(balance = 10_000_000_000_000_000_000)]
-fn deposit_is_locked() uses (evm: mut Evm) {
-    let vault = evm.create2<Vault>(value: Wei::zero(), args: (days(7),), salt: 0)
+use ingot::clearing::solve_batch
+use ingot::intent::{
+    EIP712_NAME_HASH,
+    EIP712_VERSION_HASH,
+    compute_commitment_hash,
+    hash_signed_order,
+    recover_order_signer,
+}
+use ingot::math::{
+    base_from_quote_floor,
+    compute_fm_amm_price,
+    denormalize_floor,
+    normalize_amount,
+    quote_from_base_floor,
+    scale_factor,
+    verify_lnd_invariant,
+}
+use ingot::mock_erc20::{MockERC20, MockErc20Msg}
+use ingot::storage::{BatchMeta, MarketConfig}
+use ingot::types::{
+    BUY_BASE,
+    BatchInfo,
+    BatchSummary,
+    Commitment,
+    MODE_DIRECT,
+    Order,
+    OrderReceipt,
+    PHASE_OPEN,
+    PHASE_READY_TO_SETTLE,
+    PHASE_REVEAL,
+    PHASE_SETTLED,
+    ReserveInfo,
+    SELL_BASE,
+    Side,
+    SignedOrder,
+    WAD,
+}
+use ingot::{
+    BatchClock,
+    FairBatch,
+    FairBatchMsg,
+    assert_intent_window,
+    assert_open_window,
+    assert_reveal_window,
+    assert_settlement_window,
+    evaluate_batch_phase,
+}
 
-    let unlock: Timestamp = evm
-        .call(
-            addr: vault,
-            gas: 200000,
-            value: ether(1),
-            message: VaultMsg::Deposit {},
+// ============================================================================
+// Mock Clock & Test Actor Helper Contracts
+// ============================================================================
+
+struct MockClock { ts: Timestamp }
+
+impl Copy for MockClock {}
+
+impl BatchClock for MockClock {
+    fn now(self) -> Timestamp {
+        self.ts
+    }
+}
+
+/// Multi-user trader & ERC-1271 smart wallet actor for EVM integration tests.
+msg TraderActorMsg {
+    #[selector = sol("approveToken(address,address,uint256)")]
+    ApproveToken { token: Address, spender: Address, amount: u256 } -> bool,
+
+    #[selector = sol("submitDirect(address,uint8,uint256,uint256)")]
+    SubmitDirect { exchange: Address, side: u8, amount_in: u256, limit_price: u256 } -> u256,
+
+    #[selector = sol("commitOnExchange(address,uint256,uint256)")]
+    CommitOnExchange { exchange: Address, commitment_hash: u256, bond_wei: Wei } -> u256,
+
+    #[selector = sol(
+        "revealOnExchange(address,uint256,uint8,uint256,uint256,uint256)",
+    )]
+    RevealOnExchange {
+        exchange: Address,
+        commit_id: u256,
+        side: u8,
+        amount_in: u256,
+        limit_price: u256,
+        salt: u256,
+    } -> u256,
+
+    #[selector = sol("claimOnExchange(address,uint256,uint256)")]
+    ClaimOnExchange { exchange: Address, batch_id: u256, order_id: u256 } -> (u256, u256),
+
+    #[selector = sol(
+        "relaySignedIntent(address,(address,uint8,uint256,uint256,uint256,uint256,uint256),bytes)",
+    )]
+    RelaySignedIntent { exchange: Address, order: SignedOrder, signature: Bytes } -> u256,
+
+    #[selector = sol("authorizeDigest(uint256)")]
+    AuthorizeDigest { digest: u256 } -> bool,
+
+    #[selector = sol("isValidSignature(bytes32,bytes)")]
+    IsValidSignature { digest: Bytes32, signature: Bytes } -> u256,
+}
+
+contract TraderActor uses (call: mut Call) {
+    mut approved_digest: u256,
+
+    init() uses (mut approved_digest) { approved_digest = 0 }
+
+    recv TraderActorMsg {
+        ApproveToken { token, spender, amount } -> bool
+        uses (mut call)
+        {
+            call.call(
+                addr: token,
+                gas: 200_000,
+                value: Wei::zero(),
+                message: MockErc20Msg::Approve { spender, amount },
+            )
+        }
+
+        SubmitDirect { exchange, side, amount_in, limit_price } -> u256
+        uses (mut call)
+        {
+            call.call(
+                addr: exchange,
+                gas: 800_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SubmitDirectOrder { side, amount_in, limit_price },
+            )
+        }
+
+        #[payable]
+        CommitOnExchange { exchange, commitment_hash, bond_wei } -> u256
+        uses (mut call)
+        {
+            call.call(
+                addr: exchange,
+                gas: 500_000,
+                value: bond_wei,
+                message: FairBatchMsg::CommitOrder { commitment_hash },
+            )
+        }
+
+        RevealOnExchange { exchange, commit_id, side, amount_in, limit_price, salt } -> u256
+        uses (mut call)
+        {
+            call.call(
+                addr: exchange,
+                gas: 1_200_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::RevealOrder {
+                    commit_id,
+                    side,
+                    amount_in,
+                    limit_price,
+                    salt,
+                },
+            )
+        }
+
+        ClaimOnExchange { exchange, batch_id, order_id } -> (u256, u256)
+        uses (mut call)
+        {
+            call.call(
+                addr: exchange,
+                gas: 800_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::Claim { batch_id, order_id },
+            )
+        }
+
+        RelaySignedIntent { exchange, order, signature } -> u256
+        uses (mut call)
+        {
+            call.call(
+                addr: exchange,
+                gas: 1_000_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SubmitSignedIntent { order, signature },
+            )
+        }
+
+        AuthorizeDigest { digest } -> bool uses (mut approved_digest) {
+            approved_digest = digest
+            true
+        }
+
+        IsValidSignature { digest, signature } -> u256
+        uses (approved_digest)
+        {
+            let _ = signature
+            if approved_digest != 0 && digest.word() == approved_digest {
+                // ERC-1271 magic value `0x1626ba7e` left-aligned in 32-byte word
+                0x1626ba7e00000000000000000000000000000000000000000000000000000000
+            } else {
+                0xffffffff00000000000000000000000000000000000000000000000000000000
+            }
+        }
+    }
+
+    recv {
+        #[payable]
+        _ {}
+    }
+}
+
+/// Adversarial ERC-20 token that attempts a reentrant callback into `FairBatch`
+/// during `transfer`, verifying that `std::evm::mutex::Mutex` (`TLOAD`/`TSTORE`)
+/// blocks reentrancy immediately.
+msg ReentrantTokenAdminMsg {
+    #[selector = sol("armAttack(address,uint256,uint256)")]
+    ArmAttack { target: Address, batch_id: u256, order_id: u256 } -> bool,
+}
+
+contract MaliciousReentrantERC20 uses (ctx: Ctx, call: mut Call) {
+    mut balances: StorageMap<Address, u256>,
+    mut allowances: StorageMap<(Address, Address), u256>,
+    mut target_exchange: Address,
+    mut attack_batch: u256,
+    mut attack_order: u256,
+    mut armed: bool,
+
+    init() uses (mut armed) { armed = false }
+
+    recv ReentrantTokenAdminMsg {
+        ArmAttack { target, batch_id, order_id } -> bool
+        uses (mut target_exchange, mut attack_batch, mut attack_order, mut armed)
+        {
+            target_exchange = target
+            attack_batch = batch_id
+            attack_order = order_id
+            armed = true
+            true
+        }
+    }
+
+    recv MockErc20Msg {
+        Decimals -> u8 {
+            18
+        }
+
+        TotalSupply -> u256 {
+            0
+        }
+
+        BalanceOf { account } -> u256 uses (balances) {
+            balances.get(key: account)
+        }
+
+        Allowance { owner, spender } -> u256 uses (allowances) {
+            allowances.get(key: (owner, spender))
+        }
+
+        Transfer { to, amount } -> bool uses (
+            ctx,
+            mut call,
+            mut balances,
+            target_exchange,
+            attack_batch,
+            attack_order,
+            mut armed,
+        ) {
+            let sender = ctx.caller()
+            let bal = balances.get(key: sender)
+            assert!(bal >= amount, "Insufficient balance")
+            balances.set(key: sender, value: bal - amount)
+            balances.set(key: to, value: balances.get(key: to) + amount)
+
+            if armed {
+                armed = false
+                // Attempt reentrant call into `FairBatch` while `guard.lock()` is held!
+                let _: (u256, u256) = call
+                    .call(
+                        addr: target_exchange,
+                        gas: 500_000,
+                        value: Wei::zero(),
+                        message: FairBatchMsg::Claim {
+                            batch_id: attack_batch,
+                            order_id: attack_order,
+                        },
+                    )
+            }
+            true
+        }
+
+        Approve { spender, amount } -> bool uses (ctx, mut allowances) {
+            allowances.set(key: (ctx.caller(), spender), value: amount)
+            true
+        }
+
+        TransferFrom { from, to, amount } -> bool
+        uses (ctx, mut balances, mut allowances)
+        {
+            let spender = ctx.caller()
+            let allowed = allowances.get(key: (from, spender))
+            assert!(allowed >= amount, "Insufficient allowance")
+            let bal = balances.get(key: from)
+            assert!(bal >= amount, "Insufficient balance")
+            allowances.set(key: (from, spender), value: allowed - amount)
+            balances.set(key: from, value: bal - amount)
+            balances.set(key: to, value: balances.get(key: to) + amount)
+            true
+        }
+
+        Mint { to, amount } -> bool uses (mut balances) {
+            balances.set(key: to, value: balances.get(key: to) + amount)
+            true
+        }
+
+        MintAndApprove { owner, spender, amount } -> bool
+        uses (mut balances, mut allowances)
+        {
+            balances.set(key: owner, value: balances.get(key: owner) + amount)
+            allowances
+                .set(
+                    key: (owner, spender),
+                    value: allowances.get(key: (owner, spender)) + amount,
+                )
+            true
+        }
+
+        SetBlacklisted { account, blocked } -> bool {
+            let _ = account
+            let _ = blocked
+            true
+        }
+    }
+}
+
+fn make_order(id: u256, trader_id: u256, side: u8, amount_in: u256, limit_price: u256) -> Order {
+    Order {
+        order_id: id,
+        trader: Address::new(trader_id),
+        side,
+        amount_in,
+        limit_price,
+        mode: MODE_DIRECT,
+    }
+}
+
+// ============================================================================
+// Group A: Pure Clearing & Equilibrium Math Unit Tests (`uses ()`)
+// ============================================================================
+
+#[test]
+fn pure_five_eth_sellers_uniform_price() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x11,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_000 * WAD,
+            ),
         )
-    let balance: Wei = evm
-        .call(
-            addr: vault,
-            gas: 100000,
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x12,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_100 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0x13,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_200 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 3,
+                trader_id: 0x14,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_300 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 4,
+                trader_id: 0x15,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_400 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    // p* = 300,000 / (100 + 2*5) = 2727.272727272727272727 Wad
+    let expected_p = (300_000 * WAD) / 110
+    assert!(out.clearing_price.raw() == expected_p)
+    assert!(out.total_sell_base_raw == 5 * WAD)
+    assert!(out.total_buy_quote_raw == 0)
+    assert!(out.cow_matched_base_norm == 0)
+
+    var i: usize = 0
+    while i < 5 {
+        let f = out.fills[i]
+        assert!(f.amount_filled == WAD)
+        assert!(f.payout_out == expected_p)
+        assert!(f.refund_in == 0)
+        i = i + 1
+    }
+
+    // Strict LND growth: R_x' * R_y' > R_x * R_y on imbalanced flow
+    assert!(out.reserve_base_after_raw == 105 * WAD)
+    assert!(
+        out.reserve_quote_after_raw * out.reserve_base_after_raw > rx * ry,
+    )
+}
+
+#[test]
+fn pure_cow_balanced_zero_slippage() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x21,
+                side: SELL_BASE,
+                amount_in: 5 * WAD,
+                limit_price: 2_900 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x22,
+                side: BUY_BASE,
+                amount_in: 15_000 * WAD,
+                limit_price: 3_100 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price == Wad::from_int(3_000))
+    assert!(out.cow_matched_base_norm == 5 * WAD)
+    assert!(out.cow_matched_quote_norm == 15_000 * WAD)
+    assert!(out.reserve_base_after_raw == rx)
+    assert!(out.reserve_quote_after_raw == ry)
+    assert!(out.fills[0].payout_out == 15_000 * WAD)
+    assert!(out.fills[1].payout_out == 5 * WAD)
+}
+
+#[test]
+fn pure_p2p_zero_reserves_crossing() {
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x31,
+                side: SELL_BASE,
+                amount_in: 4 * WAD,
+                limit_price: 2_800 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x32,
+                side: BUY_BASE,
+                amount_in: 12_000 * WAD,
+                limit_price: 3_200 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: 0,
+        ry_raw: 0,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price == Wad::from_int(3_000))
+    assert!(out.total_sell_base_raw == 4 * WAD)
+    assert!(out.total_buy_quote_raw == 12_000 * WAD)
+    assert!(out.cow_matched_base_norm == 4 * WAD)
+    assert!(out.reserve_base_after_raw == 0)
+    assert!(out.reserve_quote_after_raw == 0)
+    assert!(out.fills[0].payout_out == 12_000 * WAD)
+    assert!(out.fills[1].payout_out == 4 * WAD)
+}
+
+#[test]
+fn pure_p2p_rounding_solvency_stress() {
+    // Non-terminating ratio 10 / 6 = 1.666666666666666666... Wad:
+    // Without pure-P2P solvency capping, floor(10e18 * 1e18 / 1666666666666666666)
+    // would exceed 6e18 by 2 wei! Verify FairBatch never over-allocates even 1 wei.
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x41,
+                side: SELL_BASE,
+                amount_in: 3 * WAD,
+                limit_price: WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x42,
+                side: SELL_BASE,
+                amount_in: 3 * WAD,
+                limit_price: WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0x43,
+                side: BUY_BASE,
+                amount_in: 5 * WAD,
+                limit_price: 2 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 3,
+                trader_id: 0x44,
+                side: BUY_BASE,
+                amount_in: 5 * WAD,
+                limit_price: 2 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: 0,
+        ry_raw: 0,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    let seller_quote_sum = out.fills[0].payout_out + out.fills[1].payout_out
+    let buyer_base_sum = out.fills[2].payout_out + out.fills[3].payout_out
+    assert!(seller_quote_sum <= 10 * WAD)
+    assert!(buyer_base_sum <= 6 * WAD && buyer_base_sum >= 6 * WAD - 2)
+}
+
+#[test]
+fn regression_counterexample_a_buyer_denominator_lnd() {
+    // Counterexample A from Philogy/Marius audit (#17):
+    // rx = 3*WAD, ry = 10_000*WAD, Seller 30_000*WAD @ 0, Buyer 100_000_000*WAD @ 5_000*WAD.
+    // Verifies directional `p_buy = max(p_star, p_exec_ceil)` prevents buyer over-allocation
+    // and strictly preserves `k_after >= k_before`.
+    let rx = 3 * WAD
+    let ry = 10_000 * WAD
+
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xE1,
+                side: SELL_BASE,
+                amount_in: 30_000 * WAD,
+                limit_price: 0,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0xE2,
+                side: BUY_BASE,
+                amount_in: 100_000_000 * WAD,
+                limit_price: 5_000 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price.raw() == 3_333_333_333_333_333_333_333)
+    assert!(out.fills[1].payout_out <= 30_000 * WAD)
+    assert!(
+        verify_lnd_invariant(
+            rx_before: rx,
+            ry_before: ry,
+            rx_after: out.reserve_base_after_raw,
+            ry_after: out.reserve_quote_after_raw,
+        ),
+    )
+    assert!(
+        out.reserve_base_after_raw >= rx && out.reserve_quote_after_raw >= ry,
+    )
+}
+
+#[test]
+fn regression_counterexample_b_tiny_reserve_base_solvency() {
+    // Counterexample B (#17): rx = 1 wei, ry = 3_333 wei, Seller 30_000*WAD @ 0, Buyer 100_000_000*WAD @ 5_000*WAD.
+    // Verifies Base solvency (`buyer_payout <= rx + sx`) and 512-bit LND invariant hold strictly.
+    let rx: u256 = 1
+    let ry: u256 = 3_333
+
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xE3,
+                side: SELL_BASE,
+                amount_in: 30_000 * WAD,
+                limit_price: 0,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0xE4,
+                side: BUY_BASE,
+                amount_in: 100_000_000 * WAD,
+                limit_price: 5_000 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.fills[1].payout_out <= rx + 30_000 * WAD)
+    assert!(
+        verify_lnd_invariant(
+            rx_before: rx,
+            ry_before: ry,
+            rx_after: out.reserve_base_after_raw,
+            ry_after: out.reserve_quote_after_raw,
+        ),
+    )
+}
+
+#[test]
+fn regression_counterexample_c_marginal_pro_rata_spot_pin_lnd() {
+    // Counterexample C (#17): rx = 100*WAD, ry = 100*WAD, 1 Seller 30_000*WAD @ 0.9*WAD,
+    // 7 Buyers 5_000*WAD each @ 1.0*WAD. Pro-rata buyer floor leaves `total_buy_filled = 30_000*WAD - 5`.
+    // Verifies `p_sell = min(p_star, p_exec_floor)` adjusts seller Quote payout so `k_after >= k_before`.
+    let rx = 100 * WAD
+    let ry = 100 * WAD
+
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xE5,
+                side: SELL_BASE,
+                amount_in: 30_000 * WAD,
+                limit_price: 900_000_000_000_000_000,
+            ),
+        )
+    var b: u256 = 0
+    while b < 7 {
+        orders
+            .push(
+                make_order(
+                    id: 1 + b,
+                    trader_id: 0xF0 + b,
+                    side: BUY_BASE,
+                    amount_in: 5_000 * WAD,
+                    limit_price: WAD,
+                ),
+            )
+        b = b + 1
+    }
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price == Wad::one())
+    assert!(out.total_buy_quote_raw == 30_000 * WAD - 5)
+    assert!(
+        verify_lnd_invariant(
+            rx_before: rx,
+            ry_before: ry,
+            rx_after: out.reserve_base_after_raw,
+            ry_after: out.reserve_quote_after_raw,
+        ),
+    )
+    assert!(
+        out.reserve_base_after_raw > rx && out.reserve_quote_after_raw > ry,
+    )
+}
+
+#[test]
+fn regression_dust_weth_to_6dec_usdc_zero_payout_refunded() {
+    // 1,000 wei WETH (`MIN_ORDER_AMOUNT`) sold against 6-decimal USDC at $3,000/WETH
+    // yields `0.000000000003` USDC (< 1 raw micro-USDC atom). Must be 100% refunded!
+    let rx = 100 * WAD
+    let ry = 300_000_000_000
+
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xEA,
+                side: SELL_BASE,
+                amount_in: 1_000,
+                limit_price: 2_000 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.fills[0].amount_filled == 0)
+    assert!(out.fills[0].payout_out == 0)
+    assert!(out.fills[0].refund_in == 1_000)
+    assert!(out.reserve_base_after_raw == rx)
+    assert!(out.reserve_quote_after_raw == ry)
+}
+
+#[test]
+fn pure_p2p_one_sided_and_non_crossing_refunds() {
+    // 1. One-sided pure P2P (`R_x = R_y = 0`, no buyers)
+    var one_sided: MemVec<Order> = MemVec::new()
+    one_sided
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x51,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_500 * WAD,
+            ),
+        )
+    let out1 = solve_batch(
+        rx_raw: 0,
+        ry_raw: 0,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: one_sided.as_slice(),
+    )
+    assert!(out1.clearing_price.is_zero())
+    assert!(out1.fills[0].amount_filled == 0)
+    assert!(out1.fills[0].refund_in == 2 * WAD)
+
+    // 2. Non-crossing pure P2P (seller asks 3,200 > buyer bids 2,800)
+    var uncrossed: MemVec<Order> = MemVec::new()
+    uncrossed
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x51,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 3_200 * WAD,
+            ),
+        )
+    uncrossed
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x52,
+                side: BUY_BASE,
+                amount_in: 5_000 * WAD,
+                limit_price: 2_800 * WAD,
+            ),
+        )
+    let out2 = solve_batch(
+        rx_raw: 0,
+        ry_raw: 0,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: uncrossed.as_slice(),
+    )
+    assert!(out2.clearing_price.is_zero())
+    assert!(out2.fills[0].refund_in == 2 * WAD)
+    assert!(out2.fills[1].refund_in == 5_000 * WAD)
+}
+
+#[test]
+fn pure_empty_batch_preserves_reserves() {
+    let rx = 100 * WAD
+    let ry = 300_000_000_000
+    let empty: MemVec<Order> = MemVec::new()
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: empty.as_slice(),
+    )
+    assert!(out.clearing_price == Wad::from_int(3_000))
+    assert!(out.total_sell_base_raw == 0)
+    assert!(out.total_buy_quote_raw == 0)
+    assert!(out.reserve_base_after_raw == rx)
+    assert!(out.reserve_quote_after_raw == ry)
+}
+
+#[test]
+fn pure_out_of_the_money_orders_full_refund() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    var orders: MemVec<Order> = MemVec::new()
+    // ITM seller (2500 < 3000) & ITM buyer (3500 > 3000) matched at 3000
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x61,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_500 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x62,
+                side: BUY_BASE,
+                amount_in: 6_000 * WAD,
+                limit_price: 3_500 * WAD,
+            ),
+        )
+    // OTM seller (3400 > 3000) & OTM buyer (2600 < 3000) must get 0 fill, 100% refund
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0x63,
+                side: SELL_BASE,
+                amount_in: 10 * WAD,
+                limit_price: 3_400 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 3,
+                trader_id: 0x64,
+                side: BUY_BASE,
+                amount_in: 20_000 * WAD,
+                limit_price: 2_600 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price == Wad::from_int(3_000))
+    assert!(out.fills[0].amount_filled == 2 * WAD)
+    assert!(out.fills[0].refund_in == 0)
+    assert!(out.fills[1].amount_filled == 6_000 * WAD)
+    assert!(out.fills[1].refund_in == 0)
+    assert!(out.fills[2].amount_filled == 0)
+    assert!(out.fills[2].payout_out == 0)
+    assert!(out.fills[2].refund_in == 10 * WAD)
+    assert!(out.fills[3].amount_filled == 0)
+    assert!(out.fills[3].payout_out == 0)
+    assert!(out.fills[3].refund_in == 20_000 * WAD)
+}
+
+#[test]
+fn pure_marginal_seller_tier_pinning_pro_rata() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    // 4 sellers offering 2.5 ETH each (10 ETH total) with min price 2,800.
+    // Full 10 ETH would push p* = 300,000 / 120 = 2,500 < 2,800.
+    // Solver pins p* = 2,800 and fills ((300,000 / 2,800) - 100) / 2 = 3.571428571428571428 ETH pro-rata!
+    var orders: MemVec<Order> = MemVec::new()
+    let each = 2_500_000_000_000_000_000
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x71,
+                side: SELL_BASE,
+                amount_in: each,
+                limit_price: 2_800 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x72,
+                side: SELL_BASE,
+                amount_in: each,
+                limit_price: 2_800 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0x73,
+                side: SELL_BASE,
+                amount_in: each,
+                limit_price: 2_800 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 3,
+                trader_id: 0x74,
+                side: SELL_BASE,
+                amount_in: each,
+                limit_price: 2_800 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price == Wad::from_int(2_800))
+    let f0 = out.fills[0]
+    let f1 = out.fills[1]
+    let f2 = out.fills[2]
+    let f3 = out.fills[3]
+    // Identical pro-rata partial fills across all 4 equal sellers!
+    assert!(f0.amount_filled > 0 && f0.amount_filled < each)
+    assert!(f0.amount_filled == f1.amount_filled)
+    assert!(f1.amount_filled == f2.amount_filled)
+    assert!(f2.amount_filled == f3.amount_filled)
+    assert!(f0.amount_filled + f0.refund_in == each)
+}
+
+#[test]
+fn pure_marginal_buyer_tier_pinning_pro_rata() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    // 3 buyers bidding 20,000 USDC each (60,000 USDC total) with max price 3,300.
+    // Full 60,000 USDC would push p* = (300,000 + 120,000)/100 = 4,200 > 3,300.
+    // Solver pins p* = 3,300 and fills ((3,300 * 100) - 300,000)/2 = 15,000 USDC total (5,000 each = 25%!).
+    var orders: MemVec<Order> = MemVec::new()
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x81,
+                side: BUY_BASE,
+                amount_in: 20_000 * WAD,
+                limit_price: 3_300 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x82,
+                side: BUY_BASE,
+                amount_in: 20_000 * WAD,
+                limit_price: 3_300 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0x83,
+                side: BUY_BASE,
+                amount_in: 20_000 * WAD,
+                limit_price: 3_300 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+
+    assert!(out.clearing_price == Wad::from_int(3_300))
+    assert!(out.total_buy_quote_raw == 15_000 * WAD)
+    var i: usize = 0
+    while i < 3 {
+        assert!(out.fills[i].amount_filled == 5_000 * WAD)
+        assert!(out.fills[i].refund_in == 15_000 * WAD)
+        i = i + 1
+    }
+}
+
+#[test]
+fn pure_decimal_scaling_weth18_usdc6_solvency() {
+    assert!(scale_factor(18) == 1)
+    assert!(scale_factor(6) == 1_000_000_000_000)
+
+    let rx_raw = 100 * WAD
+    let ry_raw = 300_000_000_000 // 300,000 USDC (6 decimals)
+
+    var orders: MemVec<Order> = MemVec::new()
+    let s1 = 1_234_567_890_123_456_789
+    let s2 = 2_718_281_828_459_045_235
+    let b1 = 4_321_987_654 // 4,321.987654 USDC
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0x91,
+                side: SELL_BASE,
+                amount_in: s1,
+                limit_price: 2_500 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0x92,
+                side: SELL_BASE,
+                amount_in: s2,
+                limit_price: 2_600 * WAD,
+            ),
+        )
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0x93,
+                side: BUY_BASE,
+                amount_in: b1,
+                limit_price: 3_500 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw,
+        ry_raw,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: orders.as_slice(),
+    )
+
+    // Verify exact raw atom conservation across 18-dec Base and 6-dec Quote:
+    let total_base_in = rx_raw + s1 + s2
+    let total_base_out = out.reserve_base_after_raw
+        + out.fills[0].refund_in
+        + out.fills[1].refund_in
+        + out.fills[2].payout_out
+    assert!(total_base_in == total_base_out)
+
+    let total_quote_in = ry_raw + b1
+    let total_quote_out = out.reserve_quote_after_raw
+        + out.fills[0].payout_out
+        + out.fills[1].payout_out
+        + out.fills[2].refund_in
+    assert!(total_quote_in == total_quote_out)
+}
+
+#[test]
+fn pure_math_helpers_floor_rounding_and_price() {
+    let price = Wad::from_raw(2_727_272_727_272_727_272_727)
+    let q = quote_from_base_floor(base_norm: WAD, price)
+    assert!(q == 2_727_272_727_272_727_272_727)
+    let b = base_from_quote_floor(quote_norm: q, price)
+    assert!(b <= WAD)
+    assert!(
+        compute_fm_amm_price(rx_norm: 0, ry_norm: 0, sx_norm: 0, dy_norm: 100).is_zero(),
+    )
+}
+
+// ============================================================================
+// Group B: Property, Invariant & MEV Game-Theory Proof Tests
+// ============================================================================
+
+#[test]
+fn property_order_permutation_invariance() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    // 6 heterogeneous orders including ITM, OTM, and 2 marginal sellers at the exact pinned price 2,850!
+    let o0 = make_order(
+        id: 10,
+        trader_id: 0xA0,
+        side: SELL_BASE,
+        amount_in: 1 * WAD,
+        limit_price: 2_200 * WAD,
+    )
+    let o1 = make_order(
+        id: 11,
+        trader_id: 0xA1,
+        side: SELL_BASE,
+        amount_in: 4 * WAD,
+        limit_price: 2_850 * WAD,
+    )
+    let o2 = make_order(
+        id: 12,
+        trader_id: 0xA2,
+        side: SELL_BASE,
+        amount_in: 6 * WAD,
+        limit_price: 2_850 * WAD,
+    )
+    let o3 = make_order(
+        id: 13,
+        trader_id: 0xA3,
+        side: SELL_BASE,
+        amount_in: 3 * WAD,
+        limit_price: 3_400 * WAD,
+    )
+    let o4 = make_order(
+        id: 14,
+        trader_id: 0xA4,
+        side: BUY_BASE,
+        amount_in: 5_000 * WAD,
+        limit_price: 3_300 * WAD,
+    )
+    let o5 = make_order(
+        id: 15,
+        trader_id: 0xA5,
+        side: BUY_BASE,
+        amount_in: 4_000 * WAD,
+        limit_price: 2_500 * WAD,
+    )
+
+    // Permutation 1: [o0, o1, o2, o3, o4, o5]
+    var p1: MemVec<Order> = MemVec::new()
+    p1.push(o0)
+    p1.push(o1)
+    p1.push(o2)
+    p1.push(o3)
+    p1.push(o4)
+    p1.push(o5)
+
+    // Permutation 2 (reversed): [o5, o4, o3, o2, o1, o0]
+    var p2: MemVec<Order> = MemVec::new()
+    p2.push(o5)
+    p2.push(o4)
+    p2.push(o3)
+    p2.push(o2)
+    p2.push(o1)
+    p2.push(o0)
+
+    // Permutation 3 (interleaved): [o2, o4, o0, o5, o3, o1]
+    var p3: MemVec<Order> = MemVec::new()
+    p3.push(o2)
+    p3.push(o4)
+    p3.push(o0)
+    p3.push(o5)
+    p3.push(o3)
+    p3.push(o1)
+
+    let r1 = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: p1.as_slice(),
+    )
+    let r2 = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: p2.as_slice(),
+    )
+    let r3 = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: p3.as_slice(),
+    )
+
+    assert!(
+        r1.clearing_price == r2.clearing_price && r2.clearing_price == r3.clearing_price,
+    )
+    assert!(
+        r1.cow_matched_base_norm == r2.cow_matched_base_norm
+            && r2.cow_matched_base_norm == r3.cow_matched_base_norm,
+    )
+    assert!(
+        r1.reserve_base_after_raw == r2.reserve_base_after_raw
+            && r2.reserve_base_after_raw == r3.reserve_base_after_raw,
+    )
+    assert!(
+        r1.reserve_quote_after_raw == r2.reserve_quote_after_raw
+            && r2.reserve_quote_after_raw == r3.reserve_quote_after_raw,
+    )
+
+    // Verify o1 (index 1 in p1, index 4 in p2, index 5 in p3) has bit-for-bit identical fills!
+    assert!(r1.fills[1].amount_filled == r2.fills[4].amount_filled)
+    assert!(r1.fills[1].amount_filled == r3.fills[5].amount_filled)
+    assert!(r1.fills[1].payout_out == r2.fills[4].payout_out)
+    assert!(r1.fills[1].payout_out == r3.fills[5].payout_out)
+}
+
+#[test]
+fn property_lnd_invariant_across_imbalanced_regimes() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    // Regime 1: Whale sell (50 ETH)
+    var sell_whale: MemVec<Order> = MemVec::new()
+    sell_whale
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xB1,
+                side: SELL_BASE,
+                amount_in: 50 * WAD,
+                limit_price: 1_000 * WAD,
+            ),
+        )
+    let out1 = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: sell_whale.as_slice(),
+    )
+    assert!(
+        verify_lnd_invariant(
+            rx_before: rx,
+            ry_before: ry,
+            rx_after: out1.reserve_base_after_raw,
+            ry_after: out1.reserve_quote_after_raw,
+        ),
+    )
+    assert!(
+        out1.reserve_base_after_raw * out1.reserve_quote_after_raw > rx * ry,
+    )
+
+    // Regime 2: Whale buy (180,000 USDC)
+    var buy_whale: MemVec<Order> = MemVec::new()
+    buy_whale
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xB2,
+                side: BUY_BASE,
+                amount_in: 180_000 * WAD,
+                limit_price: 10_000 * WAD,
+            ),
+        )
+    let out2 = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: buy_whale.as_slice(),
+    )
+    assert!(
+        verify_lnd_invariant(
+            rx_before: rx,
+            ry_before: ry,
+            rx_after: out2.reserve_base_after_raw,
+            ry_after: out2.reserve_quote_after_raw,
+        ),
+    )
+    assert!(
+        out2.reserve_base_after_raw * out2.reserve_quote_after_raw > rx * ry,
+    )
+}
+
+#[test]
+fn proof_mev_sandwich_zero_profit() {
+    let rx = 100 * WAD
+    let ry = 300_000 * WAD
+
+    // Victim wants to buy ETH with 30,000 USDC (max 3,800 USDC/ETH).
+    // MEV Bot attempts classic sandwich:
+    //   1. Front-run BuyBase with 30,000 USDC
+    //   2. Back-run SellBase with 10 ETH
+    var orders: MemVec<Order> = MemVec::new()
+    let bot_quote_in = 30_000 * WAD
+    let bot_base_in = 10 * WAD
+
+    // Front-run (arrives first!)
+    orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xDEAD,
+                side: BUY_BASE,
+                amount_in: bot_quote_in,
+                limit_price: 5_000 * WAD,
+            ),
+        )
+    // Victim (arrives in the middle)
+    orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0xBEEF,
+                side: BUY_BASE,
+                amount_in: 30_000 * WAD,
+                limit_price: 3_800 * WAD,
+            ),
+        )
+    // Back-run (arrives last!)
+    orders
+        .push(
+            make_order(
+                id: 2,
+                trader_id: 0xDEAD,
+                side: SELL_BASE,
+                amount_in: bot_base_in,
+                limit_price: 1_000 * WAD,
+            ),
+        )
+
+    let out = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 18,
+        orders: orders.as_slice(),
+    )
+    let p_star = out.clearing_price
+
+    // Mark-to-market value of MEV Bot's portfolio BEFORE vs AFTER at uniform clearing price `p*`:
+    let bot_value_before = bot_quote_in + mul_div(bot_base_in, p_star.raw(), WAD)
+
+    let front_fill = out.fills[0] // Bot bought Base (`payout_out`), Quote refund (`refund_in`)
+    let back_fill = out.fills[2] // Bot sold Base (`refund_in` Base left, `payout_out` Quote received)
+    let bot_base_after = front_fill.payout_out + back_fill.refund_in
+    let bot_quote_after = front_fill.refund_in + back_fill.payout_out
+    let bot_value_after = bot_quote_after + mul_div(bot_base_after, p_star.raw(), WAD)
+
+    // Bot earns <= 0 profit (strictly zero in continuous math, <= 0 with floor rounding)!
+    assert!(bot_value_after <= bot_value_before)
+}
+
+// ============================================================================
+// Group C: Capability-Mocked (`with (...)`) & Cryptographic Unit Tests
+// ============================================================================
+
+#[test]
+fn effect_mocked_clock_transitions() {
+    let cfg = MarketConfig {
+        base_token: Address::new(1),
+        quote_token: Address::new(2),
+        base_decimals: 18,
+        quote_decimals: 6,
+        commit_window: seconds(60),
+        reveal_window: seconds(60),
+        min_bond: ether(1),
+    }
+    let meta = BatchMeta {
+        start_time: Timestamp::from_seconds(1_000),
+        commit_deadline: Timestamp::from_seconds(1_060),
+        reveal_deadline: Timestamp::from_seconds(1_120),
+        order_count: 0,
+        commit_count: 0,
+        settled: false,
+    }
+
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_030) }) {
+        assert!(evaluate_batch_phase(meta, cfg) == PHASE_OPEN)
+        assert_open_window(meta)
+        assert_intent_window(meta)
+    }
+
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_090) }) {
+        assert!(evaluate_batch_phase(meta, cfg) == PHASE_REVEAL)
+        assert_reveal_window(meta, cfg)
+        assert_intent_window(meta)
+    }
+
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_121) }) {
+        assert!(evaluate_batch_phase(meta, cfg) == PHASE_READY_TO_SETTLE)
+        assert_settlement_window(meta, cfg)
+    }
+
+    let settled_meta = BatchMeta {
+        start_time: meta.start_time,
+        commit_deadline: meta.commit_deadline,
+        reveal_deadline: meta.reveal_deadline,
+        order_count: 2,
+        commit_count: 1,
+        settled: true,
+    }
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_200) }) {
+        assert!(
+            evaluate_batch_phase(meta: settled_meta, cfg) == PHASE_SETTLED,
+        )
+    }
+}
+
+#[test]
+fn pure_commitment_hash_determinism_and_sensitivity() {
+    let trader = Address::new(0xCAFE)
+    let h0 = compute_commitment_hash(
+        batch_id: 1,
+        trader,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 3_000 * WAD,
+        salt: 0x123456,
+    )
+    let h_same = compute_commitment_hash(
+        batch_id: 1,
+        trader,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 3_000 * WAD,
+        salt: 0x123456,
+    )
+    assert!(h0 == h_same)
+
+    // Changing any field changes the commitment hash
+    assert!(
+        h0
+            != compute_commitment_hash(
+                batch_id: 2,
+                trader,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 3_000 * WAD,
+                salt: 0x123456,
+            ),
+    )
+    assert!(
+        h0
+            != compute_commitment_hash(
+                batch_id: 1,
+                trader: Address::new(0xCAFF),
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 3_000 * WAD,
+                salt: 0x123456,
+            ),
+    )
+    assert!(
+        h0
+            != compute_commitment_hash(
+                batch_id: 1,
+                trader,
+                side: BUY_BASE,
+                amount_in: WAD,
+                limit_price: 3_000 * WAD,
+                salt: 0x123456,
+            ),
+    )
+    assert!(
+        h0
+            != compute_commitment_hash(
+                batch_id: 1,
+                trader,
+                side: SELL_BASE,
+                amount_in: WAD + 1,
+                limit_price: 3_000 * WAD,
+                salt: 0x123456,
+            ),
+    )
+    assert!(
+        h0
+            != compute_commitment_hash(
+                batch_id: 1,
+                trader,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 3_000 * WAD + 1,
+                salt: 0x123456,
+            ),
+    )
+    assert!(
+        h0
+            != compute_commitment_hash(
+                batch_id: 1,
+                trader,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 3_000 * WAD,
+                salt: 0x123457,
+            ),
+    )
+}
+
+#[test]
+fn eip712_ecdsa_recover_and_tamper_rejection() uses (_evm: Evm) {
+    let trader = Address::new(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266)
+    let sep = domain_separator(
+        name_hash: EIP712_NAME_HASH,
+        version_hash: EIP712_VERSION_HASH,
+        chain_id: 31337,
+        verifying_contract: Address::new(0xfa12ba7c),
+    )
+    assert!(
+        sep == 0x3a235f870b2c4bafee7ad1a5b63f8cbaab291d0a7a27f22c3fe172d53c1c01f5,
+    )
+
+    let order = SignedOrder {
+        trader,
+        side: SELL_BASE,
+        amount_in: 2 * WAD,
+        limit_price: 2_900 * WAD,
+        batch_id: 1,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+    assert!(
+        hash_signed_order(order)
+            == 0x72377c2b7a32710fef52052f14382d28b79f4fb8cb993f1f152014c877f349bc,
+    )
+
+    let r: u256 = 0xf38b542e2186e128524844f45ba4097cc612ca5693553a551bd852a39864b001
+    let s: u256 = 0x46bb54daf0e46947904cb054de1bd275ff54127c5fa67b0cad44b4c4eecd474c
+    let v: u8 = 0x1b
+    let sig = encode_packed((r, s, v)).as_bytes()
+
+    match recover_order_signer(domain_separator: sep, order, signature: sig) {
+        Option::Some(recovered) => {
+            assert!(recovered == trader)
+        },
+        Option::None => {
+            assert!(false, "Expected valid secp256k1 signature recovery")
+        },
+    }
+
+    // Tampering with limit_price recovers a different random address != trader
+    let tampered = SignedOrder {
+        trader,
+        side: SELL_BASE,
+        amount_in: 2 * WAD,
+        limit_price: 2_800 * WAD,
+        batch_id: 1,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+    match recover_order_signer(domain_separator: sep, order: tampered, signature: sig) {
+        Option::Some(recovered) => {
+            assert!(recovered != trader)
+        },
+        Option::None => {},
+    }
+}
+
+// ============================================================================
+// Group D: Full Multi-User EVM Lifecycle, Multicall & Security Boundary Tests
+// ============================================================================
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_basic_lifecycle_weth_usdc_6dec() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
+    let fb = evm
+        .create2<FairBatch>(
             value: Wei::zero(),
-            message: VaultMsg::BalanceOf { owner: evm.address() },
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 3,
         )
-    assert!(balance == ether(1))
 
-    let stored: Timestamp = evm
+    let me = evm.address()
+    let _: bool = evm
         .call(
-            addr: vault,
-            gas: 100000,
+            addr: weth,
+            gas: 500_000,
             value: Wei::zero(),
-            message: VaultMsg::UnlockTime { owner: evm.address() },
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 200 * WAD },
         )
-    assert!(stored == unlock)
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 500_000_000_000,
+            },
+        )
+
+    let shares: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    assert!(shares > 0)
+
+    let ord_id: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: 5 * WAD,
+                limit_price: 2_500 * WAD,
+            },
+        )
+    assert!(ord_id == 0)
+
+    let summary: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 5_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(summary.settled)
+    assert!(summary.clearing_price == (300_000 * WAD) / 110)
+
+    let (claimed_weth, claimed_usdc): (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::Claim { batch_id: 1, order_id: 0 },
+        )
+    assert!(claimed_weth == 0)
+    let expected_norm = mul_div(normalize_amount(5 * WAD, 18), summary.clearing_price, WAD)
+    assert!(claimed_usdc == denormalize_floor(expected_norm, 6))
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_five_distinct_traders_uniform_execution() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 11)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 12)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 13,
+        )
+
+    let lp = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: lp, spender: fb, amount: 100 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: lp,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    // Deploy 5 independent TraderActor accounts (Alice..Eve)
+    var actors: MemVec<Address> = MemVec::new()
+    var i: u256 = 0
+    while i < 5 {
+        let actor = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 100 + i)
+        let _: bool = evm
+            .call(
+                addr: weth,
+                gas: 300_000,
+                value: Wei::zero(),
+                message: MockErc20Msg::Mint { to: actor, amount: WAD },
+            )
+        let _: bool = evm
+            .call(
+                addr: actor,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: WAD },
+            )
+        let oid: u256 = evm
+            .call(
+                addr: actor,
+                gas: 1_200_000,
+                value: Wei::zero(),
+                message: TraderActorMsg::SubmitDirect {
+                    exchange: fb,
+                    side: SELL_BASE,
+                    amount_in: WAD,
+                    limit_price: (2_000 + i * 100) * WAD,
+                },
+            )
+        assert!(oid == i)
+        actors.push(actor)
+        i = i + 1
+    }
+
+    let summary: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(summary.order_count == 5)
+    assert!(summary.clearing_price == (300_000 * WAD) / 110)
+
+    // Every single trader claims and receives the EXACT same 6-decimal USDC balance (2,727.272727 USDC)!
+    var idx: usize = 0
+    while idx < 5 {
+        let actor = actors[idx]
+        let (out_base, out_quote): (u256, u256) = evm
+            .call(
+                addr: actor,
+                gas: 1_200_000,
+                value: Wei::zero(),
+                message: TraderActorMsg::ClaimOnExchange {
+                    exchange: fb,
+                    batch_id: 1,
+                    order_id: idx as u256,
+                },
+            )
+        assert!(out_base == 0)
+        assert!(out_quote == 2_727_272_727)
+
+        let usdc_bal: u256 = evm
+            .call(
+                addr: usdc,
+                gas: 200_000,
+                value: Wei::zero(),
+                message: MockErc20Msg::BalanceOf { account: actor },
+            )
+        assert!(usdc_bal == 2_727_272_727)
+        idx = idx + 1
+    }
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 21)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 22)
+    let bond_req = gwei(100_000_000) // 0.1 ETH reveal bond
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), bond_req),
+            salt: 23,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 110 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    // 1. Honest trader (`alice`) commits & reveals -> receives 0.1 ETH bond back!
+    let alice = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 25)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: alice, amount: 2 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: alice,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: 2 * WAD },
+        )
+
+    let honest_hash: u256 = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeCommitmentHash {
+                batch_id: 1,
+                trader: alice,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_500 * WAD,
+                salt: 0xAA11CE,
+            },
+        )
+    let c0: u256 = evm
+        .call(
+            addr: alice,
+            gas: 800_000,
+            value: bond_req,
+            message: TraderActorMsg::CommitOnExchange {
+                exchange: fb,
+                commitment_hash: honest_hash,
+                bond_wei: bond_req,
+            },
+        )
+    assert!(c0 == 0)
+    assert!(evm.balance(fb) == bond_req)
+    assert!(evm.balance(alice) == Wei::zero())
+
+    let ord0: u256 = evm
+        .call(
+            addr: alice,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::RevealOnExchange {
+                exchange: fb,
+                commit_id: c0,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_500 * WAD,
+                salt: 0xAA11CE,
+            },
+        )
+    assert!(ord0 == 0)
+    assert!(evm.balance(alice) == bond_req)
+    assert!(evm.balance(fb) == Wei::zero())
+
+    // 2. Griefer (`mallory`) commits with 0.1 ETH bond and withholds reveal!
+    let mallory = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 24)
+    let c1: u256 = evm
+        .call(
+            addr: mallory,
+            gas: 800_000,
+            value: bond_req,
+            message: TraderActorMsg::CommitOnExchange {
+                exchange: fb,
+                commitment_hash: 0xDEADBEEF1234,
+                bond_wei: bond_req,
+            },
+        )
+    assert!(c1 == 1)
+
+    // Settle Batch #1, then slash Mallory's unrevealed commitment!
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    let forfeited: Wei = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SlashUnrevealed { batch_id: 1, commit_id: c1 },
+        )
+    assert!(forfeited == bond_req)
+
+    let comm_state: Commitment = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetCommitment { batch_id: 1, commit_id: c1 },
+        )
+    assert!(comm_state.slashed)
+    assert!(!comm_state.revealed)
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
+    // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
+    // `0x551bfdb22633839a95b807b8631c77f014ada5dd` on chain_id = 1.
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 3,
+        )
+
+    let lp = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: lp, spender: fb, amount: 100 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: lp,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    // Fund EOA signer `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` with 2 WETH & allowance
+    let signer = Address::new(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: signer, spender: fb, amount: 2 * WAD },
+        )
+
+    let intent = SignedOrder {
+        trader: signer,
+        side: SELL_BASE,
+        amount_in: 2 * WAD,
+        limit_price: 2_500 * WAD,
+        batch_id: 1,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+
+    // Verify on-chain EIP-712 digest matches offline secp256k1 digest
+    let onchain_digest: u256 = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeIntentDigest { order: intent },
+        )
+    assert!(
+        onchain_digest == 0xd478dda09a8eb13ac2ef94af2c6ee41f3e31ca6ddf3ff04a021bd43411c36858,
+    )
+
+    let r: u256 = 0x855c6f89b5583b63e417dc1e5dcea3d4548635d0f66d82a53395fe4af7102ec9
+    let s: u256 = 0x46e875b6bd04e3de4a5d22335ee0c91f1c782b65f72e8628dc298d87c3db658a
+    let v: u8 = 0x1c
+    let sig = encode_packed((r, s, v)).as_bytes()
+
+    // Separate relayer contract submits the gasless EIP-712 intent on behalf of `signer`!
+    let relayer = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 55)
+    let ord_id: u256 = evm
+        .call(
+            addr: relayer,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::RelaySignedIntent {
+                exchange: fb,
+                order: intent,
+                signature: sig,
+            },
+        )
+    assert!(ord_id == 0)
+
+    let next_nonce: u256 = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetNonce { trader: signer },
+        )
+    assert!(next_nonce == 1)
+
+    let summary: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(summary.settled)
+
+    let rec: OrderReceipt = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetOrderReceipt { batch_id: 1, order_id: 0 },
+        )
+    assert!(rec.trader == signer)
+    assert!(rec.amount_filled == 2 * WAD)
+    assert!(rec.payout_quote > 0)
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_eip712_erc1271_smart_wallet_intent() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 31)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 32)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 33,
+        )
+
+    let lp = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: lp, spender: fb, amount: 100 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: lp,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    let smart_wallet = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 34)
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: smart_wallet, amount: 6_000_000_000 },
+        )
+    let _: bool = evm
+        .call(
+            addr: smart_wallet,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken {
+                token: usdc,
+                spender: fb,
+                amount: 6_000_000_000,
+            },
+        )
+
+    let intent = SignedOrder {
+        trader: smart_wallet,
+        side: BUY_BASE,
+        amount_in: 6_000_000_000,
+        limit_price: 3_500 * WAD,
+        batch_id: 1,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+    let digest: u256 = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeIntentDigest { order: intent },
+        )
+    let _: bool = evm
+        .call(
+            addr: smart_wallet,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::AuthorizeDigest { digest },
+        )
+
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitSignedIntent { order: intent, signature: Bytes::empty() },
+        )
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    let (claimed_weth, _): (u256, u256) = evm
+        .call(
+            addr: smart_wallet,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ClaimOnExchange { exchange: fb, batch_id: 1, order_id: 0 },
+        )
+    assert!(claimed_weth > WAD)
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_multicall_batch_claim_across_orders() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 41)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 42)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 43,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 110 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 350_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    // Submit 2 separate orders in Batch #1
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_500 * WAD,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: BUY_BASE,
+                amount_in: 6_000_000_000,
+                limit_price: 3_500 * WAD,
+            },
+        )
+
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+
+    // Batch-claim BOTH orders in a single `MulticallMsg::Multicall` transaction!
+    let c0_buf = encode_msg_calldata(FairBatchMsg::Claim { batch_id: 1, order_id: 0 })
+    let c1_buf = encode_msg_calldata(FairBatchMsg::Claim { batch_id: 1, order_id: 1 })
+    let calls = dyn_array_from(
+        [Bytes::from_payload(source: c0_buf.span()), Bytes::from_payload(source: c1_buf.span())],
+    )
+
+    let results: DynArray<Bytes> = evm
+        .call(
+            addr: fb,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: MulticallMsg::Multicall { data: calls },
+        )
+    assert!(results.len() == 2)
+
+    let r0: OrderReceipt = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetOrderReceipt { batch_id: 1, order_id: 0 },
+        )
+    let r1: OrderReceipt = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetOrderReceipt { batch_id: 1, order_id: 1 },
+        )
+    assert!(r0.claimed && r1.claimed)
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_multi_batch_rollover_and_lp_withdraw() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 51)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 52)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 53,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 300 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 900_000_000_000,
+            },
+        )
+
+    let shares1: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    let shares2: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidity {
+                amount_base: 50 * WAD,
+                amount_quote: 150_000_000_000,
+            },
+        )
+    let total_owned: u256 = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetLpShares { provider: me },
+        )
+    assert!(total_owned == shares1 + shares2)
+
+    // Batch #1 -> Settle -> automatically advances to Batch #2
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: 5 * WAD,
+                limit_price: 2_500 * WAD,
+            },
+        )
+    let s1: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(s1.batch_id == 1)
+
+    let b2_info: BatchInfo = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::CurrentBatch {},
+        )
+    assert!(b2_info.batch_id == 2 && b2_info.order_count == 0)
+
+    // Batch #2 -> Settle -> advances to Batch #3
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: BUY_BASE,
+                amount_in: 15_000_000_000,
+                limit_price: 3_500 * WAD,
+            },
+        )
+    let s2: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(s2.batch_id == 2)
+
+    // Withdraw 50% of LP shares cleanly
+    let res_before: ReserveInfo = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetReserves {},
+        )
+    let (out_x, out_y): (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RemoveLiquidity { shares: total_owned / 2 },
+        )
+    assert!(out_x > 0 && out_y > 0)
+    assert!(
+        out_x <= res_before.reserve_base && out_y <= res_before.reserve_quote,
+    )
+}
+
+#[test(balance = 100_000_000_000_000_000_000)]
+fn evm_blacklisted_usdc_user_never_blocks_settlement() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 61)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 62)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 63,
+        )
+
+    let alice = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: alice, spender: fb, amount: 110 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: alice,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    let sanctioned = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 64)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: sanctioned, amount: 2 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: sanctioned,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: 2 * WAD },
+        )
+
+    // Both `alice` (order 0) and `sanctioned` (order 1) submit WETH sell orders
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_000 * WAD,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: sanctioned,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::SubmitDirect {
+                exchange: fb,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_000 * WAD,
+            },
+        )
+
+    // Circle USDC blacklists `sanctioned` BEFORE settlement!
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::SetBlacklisted { account: sanctioned, blocked: true },
+        )
+
+    // Because FairBatch uses pull-over-push claims, `SettleBatch` succeeds 100% cleanly!
+    let summary: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 5_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(summary.settled)
+
+    // And Alice claims her USDC with zero interference from `sanctioned`!
+    let (_, alice_usdc): (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::Claim { batch_id: 1, order_id: 0 },
+        )
+    assert!(alice_usdc > 5_000_000_000)
+}
+
+// ============================================================================
+// Group E: Security Boundary & Attack Revert Tests (`#[test(should_revert)]`)
+// ============================================================================
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_reentrancy_mutex_blocks_malicious_token_callback() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 71)
+    let evil_quote = evm.create2<MaliciousReentrantERC20>(value: Wei::zero(), args: (), salt: 72)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, evil_quote, 18, 18, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 73,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 110 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: evil_quote,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 300_000 * WAD },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000 * WAD,
+            },
+        )
+
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_000 * WAD,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_000 * WAD,
+            },
+        )
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+
+    // Arm `evil_quote` to re-enter `Claim(1, 1)` inside `Claim(1, 0)`'s `safe_transfer`:
+    let _: bool = evm
+        .call(
+            addr: evil_quote,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: ReentrantTokenAdminMsg::ArmAttack { target: fb, batch_id: 1, order_id: 1 },
+        )
+
+    // Reentrant callback hits EIP-1153 transient `Mutex` lock and reverts!
+    let _: (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::Claim { batch_id: 1, order_id: 0 },
+        )
 }
 
 #[test(should_revert, balance = 10_000_000_000_000_000_000)]
-fn withdraw_before_unlock_reverts() uses (evm: mut Evm) {
-    let vault = evm.create2<Vault>(value: Wei::zero(), args: (days(7),), salt: 0)
-    let _: Timestamp = evm
-        .call(
-            addr: vault,
-            gas: 200000,
-            value: ether(1),
-            message: VaultMsg::Deposit {},
-        )
-    let _: Wei = evm
-        .call(
-            addr: vault,
-            gas: 200000,
+fn evm_revert_payable_multicall_double_value_attack() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 81)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 82)
+    let fb = evm
+        .create2<FairBatch>(
             value: Wei::zero(),
-            message: VaultMsg::Withdraw { to: evm.address() },
+            args: (weth, usdc, 18, 6, seconds(60), seconds(60), ether(1)),
+            salt: 83,
+        )
+
+    let c1 = encode_msg_calldata(FairBatchMsg::CommitOrder { commitment_hash: 0x1111 })
+    let c2 = encode_msg_calldata(FairBatchMsg::CommitOrder { commitment_hash: 0x2222 })
+    let calls = dyn_array_from(
+        [Bytes::from_payload(source: c1.span()), Bytes::from_payload(source: c2.span())],
+    )
+
+    // Attempting to send 1 ETH once to satisfy two 1-ETH bonds via DELEGATECALL `Multicall` reverts!
+    let _: DynArray<Bytes> = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: ether(1),
+            message: MulticallMsg::Multicall { data: calls },
         )
 }
 
-#[test(balance = 10_000_000_000_000_000_000)]
-fn withdraw_after_unlock() uses (evm: mut Evm) {
-    // Without a lock period, a deposit can be withdrawn right away.
-    let vault = evm.create2<Vault>(value: Wei::zero(), args: (Duration::zero(),), salt: 0)
-    let _: Timestamp = evm
-        .call(
-            addr: vault,
-            gas: 200000,
-            value: ether(1),
-            message: VaultMsg::Deposit {},
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_early_settle_before_reveal_deadline() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 91)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 92)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, seconds(60), seconds(60), Wei::zero()),
+            salt: 93,
         )
 
-    let payee = Address::new(0x1234)
-    let withdrawn: Wei = evm
+    let _: BatchSummary = evm
         .call(
-            addr: vault,
-            gas: 200000,
+            addr: fb,
+            gas: 2_000_000,
             value: Wei::zero(),
-            message: VaultMsg::Withdraw { to: payee },
+            message: FairBatchMsg::SettleBatch {},
         )
-    assert!(withdrawn == ether(1))
-    assert!(evm.balance(payee) == ether(1))
-    let balance: Wei = evm
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_bad_reveal_salt() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 101)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 102)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 103,
+        )
+
+    let me = evm.address()
+    let h = compute_commitment_hash(
+        batch_id: 1,
+        trader: me,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 2_500 * WAD,
+        salt: 0x1111,
+    )
+    let cid: u256 = evm
         .call(
-            addr: vault,
-            gas: 100000,
+            addr: fb,
+            gas: 500_000,
             value: Wei::zero(),
-            message: VaultMsg::BalanceOf { owner: evm.address() },
+            message: FairBatchMsg::CommitOrder { commitment_hash: h },
         )
-    assert!(balance == Wei::zero())
+    // Wrong salt `0x2222` must revert!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RevealOrder {
+                commit_id: cid,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_500 * WAD,
+                salt: 0x2222,
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 3,
+        )
+
+    let signer = Address::new(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: signer, spender: fb, amount: 10 * WAD },
+        )
+
+    let intent = SignedOrder {
+        trader: signer,
+        side: SELL_BASE,
+        amount_in: 2 * WAD,
+        limit_price: 2_500 * WAD,
+        batch_id: 1,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+    let r: u256 = 0x855c6f89b5583b63e417dc1e5dcea3d4548635d0f66d82a53395fe4af7102ec9
+    let s: u256 = 0x46e875b6bd04e3de4a5d22335ee0c91f1c782b65f72e8628dc298d87c3db658a
+    let v: u8 = 0x1c
+
+    let first_id: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitSignedIntent {
+                order: intent,
+                signature: encode_packed((r, s, v)).as_bytes(),
+            },
+        )
+    assert!(first_id == 0)
+    // Replaying exact same signed order reverts because `nonces[signer]` is now 1!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitSignedIntent {
+                order: intent,
+                signature: encode_packed((r, s, v)).as_bytes(),
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_expired_eip712_deadline() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 111)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 112)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 113,
+        )
+
+    let wallet = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 114)
+    let now_secs = evm.timestamp().as_seconds()
+    assert!(now_secs > 0)
+
+    let expired = SignedOrder {
+        trader: wallet,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 2_000 * WAD,
+        batch_id: 1,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(now_secs - 1),
+    }
+    let d: u256 = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeIntentDigest { order: expired },
+        )
+    let _: bool = evm
+        .call(
+            addr: wallet,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::AuthorizeDigest { digest: d },
+        )
+
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitSignedIntent { order: expired, signature: Bytes::empty() },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_double_claim() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 121)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 122)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 123,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 110 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_000 * WAD,
+            },
+        )
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 4_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    let _: (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::Claim { batch_id: 1, order_id: 0 },
+        )
+    // Second claim on the same order must revert!
+    let _: (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::Claim { batch_id: 1, order_id: 0 },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_dust_order_below_minimum() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 131)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 132)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 133,
+        )
+
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: 999,
+                // < MIN_ORDER_AMOUNT (1,000)
+                limit_price: 2_000 * WAD,
+            },
+        )
 }

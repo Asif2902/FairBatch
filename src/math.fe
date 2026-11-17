@@ -1,0 +1,119 @@
+// Overflow-safe 512-bit & Wad (UFixed<18>) decimal scaling and equilibrium helpers.
+// Zero `uses` clauses: every function in this module is compiler-enforced pure.
+
+use core::fixed::Wad
+use core::num::{full_mul, isqrt, mul_div, mul_div_ceil}
+
+pub const MAX_DECIMALS: u8 = 18
+
+/// Returns `10^(18 - decimals)` for normalizing raw ERC-20 token amounts into
+/// 18-decimal internal `Wad` precision. Reverts if `decimals > 18`.
+pub const fn scale_factor(_ decimals: u8) -> u256 {
+    assert!(decimals <= MAX_DECIMALS, "Unsupported token decimals")
+    let diff: u256 = (MAX_DECIMALS - decimals) as u256
+    10 ** diff
+}
+
+/// Scales a raw token amount (`decimals <= 18`) into 18-decimal normalized units.
+/// Example: `3_000_000_000` (3,000 USDC, 6 decimals) -> `3_000 * 10^18`.
+pub const fn normalize_amount(_ raw_amount: u256, _ decimals: u8) -> u256 {
+    raw_amount * scale_factor(decimals)
+}
+
+/// Wraps a raw token amount into a typed `Wad` (`UFixed<18>`).
+pub const fn normalize_wad(_ raw_amount: u256, _ decimals: u8) -> Wad {
+    Wad::from_raw(normalize_amount(raw_amount, decimals))
+}
+
+/// Converts an 18-decimal normalized amount back to raw token atoms using
+/// STRICT FLOOR DIVISION so payouts and refunds never exceed available balance.
+pub const fn denormalize_floor(_ norm_amount: u256, _ decimals: u8) -> u256 {
+    norm_amount / scale_factor(decimals)
+}
+
+/// Converts an 18-decimal normalized amount to raw token atoms rounded UP
+/// (useful only when computing minimum required pool retention, never user payouts).
+pub const fn denormalize_ceil(_ norm_amount: u256, _ decimals: u8) -> u256 {
+    let scale = scale_factor(decimals)
+    mul_div_ceil(norm_amount, 1, scale)
+}
+
+/// Computes Quote output (18-dec normalized) for selling `base_norm` Base at `price` (`Wad`),
+/// rounded strictly DOWN via 512-bit `mul_div`.
+pub const fn quote_from_base_floor(base_norm: u256, price: Wad) -> u256 {
+    if base_norm == 0 || price.is_zero() {
+        return 0
+    }
+    mul_div(base_norm, price.raw(), Wad::SCALE)
+}
+
+/// Computes Base output (18-dec normalized) for spending `quote_norm` Quote at `price` (`Wad`),
+/// rounded strictly DOWN via 512-bit `mul_div`.
+pub const fn base_from_quote_floor(quote_norm: u256, price: Wad) -> u256 {
+    if quote_norm == 0 || price.is_zero() {
+        return 0
+    }
+    mul_div(quote_norm, Wad::SCALE, price.raw())
+}
+
+/// Closed-form Hybrid CoW + FM-AMM uniform clearing price in `Wad`:
+///   `p* = (R_y + 2 * D_y) / (R_x + 2 * S_x)`
+/// When `R_x == 0 && R_y == 0` (pure P2P mode):
+///   - if `S_x > 0 && D_y > 0`, `p* = D_y / S_x` (rounded down in `Wad`)
+///   - otherwise `p* = 0` (no match possible without counterparty).
+pub const fn compute_fm_amm_price(
+    rx_norm: u256,
+    ry_norm: u256,
+    sx_norm: u256,
+    dy_norm: u256,
+) -> Wad {
+    if rx_norm == 0 && ry_norm == 0 {
+        if sx_norm > 0 && dy_norm > 0 {
+            return Wad::from_ratio(dy_norm, sx_norm)
+        }
+        return Wad::zero()
+    }
+    let denom = rx_norm + 2 * sx_norm
+    if denom == 0 {
+        return Wad::zero()
+    }
+    let numer = ry_norm + 2 * dy_norm
+    Wad::from_ratio(numer, denom)
+}
+
+/// Returns true iff `a * b >= c * d` using exact 512-bit `full_mul` products
+/// (cannot overflow for any `u256` inputs).
+pub const fn mul_ge_512(a: u256, b: u256, c: u256, d: u256) -> bool {
+    let (hi_ab, lo_ab) = full_mul(a, b)
+    let (hi_cd, lo_cd) = full_mul(c, d)
+    if hi_ab > hi_cd {
+        true
+    } else if hi_ab < hi_cd { false } else { lo_ab >= lo_cd }
+}
+
+/// Returns true iff `a * b <= c * d` using exact 512-bit `full_mul` products.
+pub const fn mul_le_512(a: u256, b: u256, c: u256, d: u256) -> bool {
+    mul_ge_512(a: c, b: d, c: a, d: b)
+}
+
+/// Verifies the FM-AMM Liquidity-Nondecreasing (LND) invariant:
+///   `R_x' * R_y' >= R_x * R_y`
+/// across arbitrary 256-bit reserve values using exact 512-bit multiplication.
+pub const fn verify_lnd_invariant(
+    rx_before: u256,
+    ry_before: u256,
+    rx_after: u256,
+    ry_after: u256,
+) -> bool {
+    mul_ge_512(a: rx_after, b: ry_after, c: rx_before, d: ry_before)
+}
+
+/// Computes geometric-mean initial LP shares `floor(sqrt(base_norm * quote_norm))`
+/// safely using 512-bit safe scaling.
+pub fn compute_initial_lp_shares(base_norm: u256, quote_norm: u256) -> u256 {
+    let root_x = isqrt(base_norm)
+    let root_y = isqrt(quote_norm)
+    // Refine geometric mean without 256-bit overflow when possible
+    let (hi, lo) = full_mul(base_norm, quote_norm)
+    if hi == 0 { isqrt(lo) } else { root_x * root_y }
+}

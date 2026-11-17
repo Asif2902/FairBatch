@@ -1,0 +1,58 @@
+{
+    "network":  "sepolia",
+    "chain_id":  11155111,
+    "deployed_at_utc":  "2026-11-17T20:08:20Z",
+    "compiler":  "fe 26.5.0 (3dab95f) [sonatina]",
+    "deployer":  "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
+    "explorer_base_url":  "https://sepolia.etherscan.io",
+    "contracts":  {
+                      "fair_batch":  {
+                                         "address":  "0x60122518eccbeeb247cd42b0201f244432c7600d",
+                                         "tx_hash":  "0x017de9a5938f8c114db1515c17e9415a05375854bfe688a9c0f203f3f97c40d0",
+                                         "block_number":  12156617,
+                                         "gas_used":  33989460,
+                                         "runtime_bytes":  21543,
+                                         "explorer_url":  "https://sepolia.etherscan.io/address/0x60122518eccbeeb247cd42b0201f244432c7600d"
+                                     },
+                      "base_token":  {
+                                         "symbol":  "fWETH",
+                                         "decimals":  18,
+                                         "deployed_test_token":  true,
+                                         "address":  "0xe72678fb21267fbb5c02c59496f04a86a7d8d56b",
+                                         "tx_hash":  "0xb236855f2e244088b50c362826ef2bb504a0eb3b826acc3302c9fe837172ca8e",
+                                         "block_number":  12156615,
+                                         "gas_used":  2192556,
+                                         "explorer_url":  "https://sepolia.etherscan.io/address/0xe72678fb21267fbb5c02c59496f04a86a7d8d56b"
+                                     },
+                      "quote_token":  {
+                                          "symbol":  "fUSDC",
+                                          "decimals":  6,
+                                          "deployed_test_token":  true,
+                                          "address":  "0x0384fb6158fb2e5ea021af6f8fa3e81daeb075f0",
+                                          "tx_hash":  "0x67f7d5c3402f68db9a68dd708a602eb61e40cf55f2eee3e1a82e79f81195ed2f",
+                                          "block_number":  12156616,
+                                          "gas_used":  2192556,
+                                          "explorer_url":  "https://sepolia.etherscan.io/address/0x0384fb6158fb2e5ea021af6f8fa3e81daeb075f0"
+                                      }
+                  },
+    "init_params":  {
+                        "base_decimals":  18,
+                        "quote_decimals":  6,
+                        "commit_window_secs":  60,
+                        "reveal_window_secs":  60,
+                        "min_bond_wei":  "100000000000000"
+                    },
+    "initial_seed":  {
+                         "seeded":  true,
+                         "reserve_base_raw":  "100000000000000000000",
+                         "reserve_quote_raw":  "300000000000",
+                         "tx_hash":  "0x402adb9c6fba6d31b2cfc701c47b3f0e2b3f57c1bf0ed9de35990212b50c2dfd",
+                         "gas_used":  747631
+                     },
+    "onchain_verification":  {
+                                 "domain_separator":  "0xe718c08c5b766d15ba49f7fb773d29aae922828821cfe8a674a056a8c2b37dca",
+                                 "active_batch_id":  1,
+                                 "reserve_base_raw":  "100000000000000000000",
+                                 "reserve_quote_raw":  "300000000000"
+                             }
+}

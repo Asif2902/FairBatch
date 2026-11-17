@@ -1,0 +1,91 @@
+// Cryptographic Commit-Reveal hashing and EIP-712 Signed Intent verification.
+
+use core::abi::Bytes
+use core::bytes::keccak
+use std::evm::crypto::keccak_words
+use std::evm::eip712::{Domain, digest}
+use std::evm::signature::{is_valid_signature_now, recover}
+
+use ingot::types::SignedOrder
+
+pub const EIP712_NAME_HASH: u256 = keccak("FairBatch")
+pub const EIP712_VERSION_HASH: u256 = keccak("1")
+
+/// Canonical EIP-712 struct typehash matching:
+/// `SignedOrder(address trader,uint8 side,uint256 amountIn,uint256 limitPrice,uint256 batchId,uint256 nonce,uint256 deadline)`
+pub const SIGNED_ORDER_TYPEHASH: u256 = keccak(
+    "SignedOrder(address trader,uint8 side,uint256 amountIn,uint256 limitPrice,uint256 batchId,uint256 nonce,uint256 deadline)",
+)
+
+/// Computes the sealed commitment hash:
+///   `keccak256(abi.encode(batchId, trader, side, amountIn, limitPrice, salt))`
+/// Pure function (`uses ()`) foldable at compile time and O(1) in EVM memory.
+pub const fn compute_commitment_hash(
+    batch_id: u256,
+    trader: Address,
+    side: u8,
+    amount_in: u256,
+    limit_price: u256,
+    salt: u256,
+) -> u256 {
+    keccak_words(
+        [batch_id, trader.word(), side as u256, amount_in, limit_price, salt],
+    )
+}
+
+/// Computes the EIP-712 `structHash` of a `SignedOrder` (`uses ()`).
+pub const fn hash_signed_order(_ order: SignedOrder) -> u256 {
+    keccak_words(
+        [
+            SIGNED_ORDER_TYPEHASH,
+            order.trader.word(),
+            order.side as u256,
+            order.amount_in,
+            order.limit_price,
+            order.batch_id,
+            order.nonce,
+            order.deadline.as_seconds(),
+        ],
+    )
+}
+
+/// Pure helper computing an EIP-712 typed-data digest from an explicit `domain_separator`.
+pub fn compute_typed_digest(domain_separator: u256, order: SignedOrder) -> u256 {
+    digest(domain_separator, struct_hash: hash_signed_order(order))
+}
+
+/// Pure ECDSA recovery helper (`uses ()`) for off-call / pure unit testing.
+pub fn recover_order_signer(domain_separator: u256, order: SignedOrder, signature: Bytes) -> Option<
+    Address,
+> {
+    let d = compute_typed_digest(domain_separator, order)
+    recover(digest: d, signature.payload_span())
+}
+
+/// Verifies EIP-712 batch binding, sequential nonce, expiry `Timestamp`, and
+/// canonical ECDSA / EIP-7702 / ERC-1271 signature validity.
+pub fn verify_signed_order(
+    domain: Domain,
+    order: SignedOrder,
+    signature: Bytes,
+    active_batch_id: u256,
+    expected_nonce: u256,
+) -> bool
+uses (ctx: Ctx, call: Call)
+{
+    if order.batch_id != active_batch_id {
+        return false
+    }
+    if order.nonce != expected_nonce {
+        return false
+    }
+    if ctx.timestamp() > order.deadline {
+        return false
+    }
+    let d = domain.digest(struct_hash: hash_signed_order(order))
+    is_valid_signature_now(
+        order.trader,
+        digest: d,
+        signature: signature.payload_span(),
+    )
+}

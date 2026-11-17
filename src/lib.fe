@@ -1,82 +1,1029 @@
-// A time-locked vault: each account deposits ETH and can withdraw it once its
-// lock period has passed. Replace it with your own project.
+// FairBatch — Uniform Clearing Batch Exchange & Hybrid CoW + FM-AMM in Fe 26.5.0.
+//
+// Showcases Fe 26.5 capabilities:
+// - Compiler-enforced pure `clearing::solve_batch` (`uses ()` — zero effects!)
+// - Granular `uses (...)` capability declarations on every handler & helper
+// - Custom `BatchClock` capability with `with (BatchClock = ...)` effect injection
+// - EIP-1153 transient storage reentrancy guard (`std::evm::mutex::Mutex`)
+// - SafeERC20 transfers (`std::evm::erc20::{safe_transfer, safe_transfer_from}`)
+// - EIP-712 `Domain` & canonical ECDSA / ERC-1271 signature verification
+// - Builtin `MulticallMsg` batch execution (`std::evm::multicall`)
+// - Strongly-typed `Timestamp`, `Duration`, `Wei`, and `Wad` (`UFixed<18>`) units
 
+use core::abi::Bytes
+use core::num::mul_div
+use core::ptr::MemVec
+use std::abi::DynArray
 use std::evm::StorageMap
+use std::evm::eip712::Domain
+use std::evm::erc20::{safe_transfer, safe_transfer_from}
+use std::evm::multicall::{MulticallMsg, multicall}
+use std::evm::mutex::Mutex
 
-msg VaultMsg {
-    #[selector = sol("deposit()")]
-    Deposit -> Timestamp,
-    #[selector = sol("withdraw(address)")]
-    Withdraw { to: Address } -> Wei,
-    #[selector = sol("balanceOf(address)")]
-    BalanceOf { owner: Address } -> Wei,
-    #[selector = sol("unlockTime(address)")]
-    UnlockTime { owner: Address } -> Timestamp,
+use ingot::clearing::solve_batch
+use ingot::intent::{
+    EIP712_NAME_HASH,
+    EIP712_VERSION_HASH,
+    compute_commitment_hash,
+    hash_signed_order,
+    verify_signed_order,
+}
+use ingot::math::{compute_fm_amm_price, compute_initial_lp_shares, normalize_amount}
+use ingot::storage::{BatchMeta, MarketConfig, PoolState}
+use ingot::types::{
+    BUY_BASE,
+    BatchInfo,
+    BatchSettled,
+    BatchSummary,
+    Commitment,
+    CommitmentSlashed,
+    LiquidityAdded,
+    LiquidityRemoved,
+    MAX_ORDERS_PER_BATCH,
+    MIN_ORDER_AMOUNT,
+    MODE_COMMIT_REVEAL,
+    MODE_DIRECT,
+    MODE_SIGNED_INTENT,
+    Order,
+    OrderClaimed,
+    OrderCommitted,
+    OrderReceipt,
+    OrderRevealed,
+    OrderSubmitted,
+    PHASE_OPEN,
+    PHASE_READY_TO_SETTLE,
+    PHASE_REVEAL,
+    PHASE_SETTLED,
+    ReserveInfo,
+    SELL_BASE,
+    Side,
+    SignedOrder,
 }
 
-#[event]
-struct Deposited {
-    #[indexed]
-    owner: Address,
-    amount: Wei,
-    unlock_at: Timestamp,
+/// Time capability used by batch lifecycle window guards so tests can drive
+/// multi-phase timestamp transitions directly with `with (BatchClock = ...)`.
+pub trait BatchClock {
+    fn now(self) -> Timestamp
 }
 
-#[event]
-struct Withdrawn {
-    #[indexed]
-    owner: Address,
-    to: Address,
-    amount: Wei,
+pub struct EvmClock { pub ts: Timestamp }
+
+impl BatchClock for EvmClock {
+    fn now(self) -> Timestamp {
+        self.ts
+    }
 }
 
-pub contract Vault uses (ctx: Ctx, call: mut Call, log: mut Log) {
-    lock: Duration,
-    mut balances: StorageMap<Address, Wei>,
-    mut unlock_at: StorageMap<Address, Timestamp>,
+/// Computes the current phase of `meta` under `cfg` and `clock.now()`.
+pub fn evaluate_batch_phase(meta: BatchMeta, cfg: MarketConfig) -> u8
+uses (clock: BatchClock)
+{
+    if meta.settled {
+        return PHASE_SETTLED
+    }
+    let now = clock.now()
+    if cfg.commit_window == Duration::zero() && cfg.reveal_window == Duration::zero() {
+        return PHASE_OPEN
+    }
+    if now <= meta.commit_deadline {
+        PHASE_OPEN
+    } else if now <= meta.reveal_deadline {
+        PHASE_REVEAL
+    } else {
+        PHASE_READY_TO_SETTLE
+    }
+}
 
-    init(lock_period: Duration) uses (mut lock) { lock = lock_period }
+/// Enforces that the batch is currently in its Open / Commit window.
+pub fn assert_open_window(meta: BatchMeta) uses (clock: BatchClock) {
+    assert!(!meta.settled, "Batch already settled")
+    assert!(
+        clock.now() <= meta.commit_deadline,
+        "Commit window closed",
+    )
+}
 
-    recv VaultMsg {
-        // Every deposit restarts the depositor's lock period.
+/// Enforces that the batch is currently in its Reveal window.
+pub fn assert_reveal_window(meta: BatchMeta, cfg: MarketConfig)
+uses (clock: BatchClock)
+{
+    assert!(!meta.settled, "Batch already settled")
+    let now = clock.now()
+    if cfg.commit_window > Duration::zero() {
+        assert!(now > meta.commit_deadline, "Reveal window not open yet")
+    }
+    assert!(now <= meta.reveal_deadline, "Reveal window closed")
+}
+
+/// Enforces that the batch accepts EIP-712 signed intents (Open OR Reveal window).
+pub fn assert_intent_window(meta: BatchMeta) uses (clock: BatchClock) {
+    assert!(!meta.settled, "Batch already settled")
+    assert!(
+        clock.now() <= meta.reveal_deadline,
+        "Intent window closed",
+    )
+}
+
+/// Enforces that the batch reveal window has completed and settlement is permitted.
+pub fn assert_settlement_window(meta: BatchMeta, cfg: MarketConfig)
+uses (clock: BatchClock)
+{
+    assert!(!meta.settled, "Batch already settled")
+    if cfg.commit_window > Duration::zero() || cfg.reveal_window > Duration::zero() {
+        assert!(
+            clock.now() > meta.reveal_deadline,
+            "Reveal window still active",
+        )
+    }
+}
+
+/// Pure validation of order side, minimum anti-dust size, and positive buyer limit price.
+pub const fn validate_order_params(side: u8, amount_in: u256, limit_price: u256) {
+    match Side::from_u8(side) {
+        Option::Some(_) => {},
+        Option::None => {
+            assert!(false, "Invalid order side")
+        },
+    }
+    assert!(
+        amount_in >= MIN_ORDER_AMOUNT,
+        "Order below minimum amount",
+    )
+    if side == BUY_BASE {
+        assert!(limit_price > 0, "Buyer limit price must be positive")
+    }
+}
+
+pub msg FairBatchMsg {
+    #[selector = sol("seedReserves(uint256,uint256)")]
+    SeedReserves { amount_base: u256, amount_quote: u256 } -> u256,
+
+    #[selector = sol("addLiquidity(uint256,uint256)")]
+    AddLiquidity { amount_base: u256, amount_quote: u256 } -> u256,
+
+    #[selector = sol("removeLiquidity(uint256)")]
+    RemoveLiquidity { shares: u256 } -> (u256, u256),
+
+    #[selector = sol("commitOrder(uint256)")]
+    CommitOrder { commitment_hash: u256 } -> u256,
+
+    #[selector = sol("revealOrder(uint256,uint8,uint256,uint256,uint256)")]
+    RevealOrder {
+        commit_id: u256,
+        side: u8,
+        amount_in: u256,
+        limit_price: u256,
+        salt: u256,
+    } -> u256,
+
+    #[selector = sol("submitDirectOrder(uint8,uint256,uint256)")]
+    SubmitDirectOrder { side: u8, amount_in: u256, limit_price: u256 } -> u256,
+
+    #[selector = sol(
+        "submitSignedIntent((address,uint8,uint256,uint256,uint256,uint256,uint256),bytes)",
+    )]
+    SubmitSignedIntent { order: SignedOrder, signature: Bytes } -> u256,
+
+    #[selector = sol("slashUnrevealed(uint256,uint256)")]
+    SlashUnrevealed { batch_id: u256, commit_id: u256 } -> Wei,
+
+    #[selector = sol("settleBatch()")]
+    SettleBatch -> BatchSummary,
+
+    #[selector = sol("claim(uint256,uint256)")]
+    Claim { batch_id: u256, order_id: u256 } -> (u256, u256),
+
+    #[selector = sol("currentBatch()")]
+    CurrentBatch -> BatchInfo,
+
+    #[selector = sol("getReserves()")]
+    GetReserves -> ReserveInfo,
+
+    #[selector = sol("getBatchSummary(uint256)")]
+    GetBatchSummary { batch_id: u256 } -> BatchSummary,
+
+    #[selector = sol("getOrderReceipt(uint256,uint256)")]
+    GetOrderReceipt { batch_id: u256, order_id: u256 } -> OrderReceipt,
+
+    #[selector = sol("getCommitment(uint256,uint256)")]
+    GetCommitment { batch_id: u256, commit_id: u256 } -> Commitment,
+
+    #[selector = sol("getNonce(address)")]
+    GetNonce { trader: Address } -> u256,
+
+    #[selector = sol("getLpShares(address)")]
+    GetLpShares { provider: Address } -> u256,
+
+    #[selector = sol("domainSeparator()")]
+    DomainSeparator -> u256,
+
+    #[selector = sol(
+        "computeCommitmentHash(uint256,address,uint8,uint256,uint256,uint256)",
+    )]
+    ComputeCommitmentHash {
+        batch_id: u256,
+        trader: Address,
+        side: u8,
+        amount_in: u256,
+        limit_price: u256,
+        salt: u256,
+    } -> u256,
+
+    #[selector = sol(
+        "computeIntentDigest((address,uint8,uint256,uint256,uint256,uint256,uint256))",
+    )]
+    ComputeIntentDigest { order: SignedOrder } -> u256,
+}
+
+fn add_liquidity_internal(amount_base: u256, amount_quote: u256) -> u256
+uses (
+    ctx: Ctx,
+    call: mut Call,
+    log: mut Log,
+    config: MarketConfig,
+    pool: mut PoolState,
+    lp_shares: mut StorageMap<Address, u256>,
+    guard: mut Mutex<u256>,
+)
+{
+    guard.lock()
+    assert!(
+        amount_base > 0 && amount_quote > 0,
+        "Zero liquidity amount",
+    )
+
+    let provider = ctx.caller()
+    let self_addr = ctx.address()
+
+    let minted = if pool.total_shares == 0 {
+        let base_norm = normalize_amount(amount_base, config.base_decimals)
+        let quote_norm = normalize_amount(amount_quote, config.quote_decimals)
+        let init_shares = compute_initial_lp_shares(base_norm, quote_norm)
+        assert!(init_shares > 0, "Insufficient initial liquidity")
+        init_shares
+    } else {
+        let shares_x = mul_div(amount_base, pool.total_shares, pool.reserve_base)
+        let shares_y = mul_div(amount_quote, pool.total_shares, pool.reserve_quote)
+        let min_shares = if shares_x < shares_y {
+            shares_x
+        } else {
+            shares_y
+        }
+        assert!(min_shares > 0, "Zero LP shares minted")
+        min_shares
+    }
+
+    pool.reserve_base = pool.reserve_base + amount_base
+    pool.reserve_quote = pool.reserve_quote + amount_quote
+    pool.total_shares = pool.total_shares + minted
+    lp_shares.set(
+            key: provider,
+            value: lp_shares.get(key: provider) + minted,
+        )
+
+    safe_transfer_from(
+        token: config.base_token,
+        owner: provider,
+        receiver: self_addr,
+        amount: amount_base,
+    )
+    safe_transfer_from(
+        token: config.quote_token,
+        owner: provider,
+        receiver: self_addr,
+        amount: amount_quote,
+    )
+
+    log.emit(
+        LiquidityAdded { provider, amount_base, amount_quote, shares_minted: minted },
+    )
+
+    guard.unlock()
+    minted
+}
+
+pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    config: MarketConfig,
+    domain: Domain,
+    mut guard: Mutex<u256>,
+    mut pool: PoolState,
+    mut active_batch_id: u256,
+    mut batches: StorageMap<u256, BatchMeta>,
+    mut commitments: StorageMap<(u256, u256), Commitment>,
+    mut orders: StorageMap<(u256, u256), Order>,
+    mut receipts: StorageMap<(u256, u256), OrderReceipt>,
+    mut summaries: StorageMap<u256, BatchSummary>,
+    mut lp_shares: StorageMap<Address, u256>,
+    mut nonces: StorageMap<Address, u256>,
+
+    init(
+        base_token: Address,
+        quote_token: Address,
+        base_decimals: u8,
+        quote_decimals: u8,
+        commit_window: Duration,
+        reveal_window: Duration,
+        min_bond: Wei,
+    )
+    uses (ctx, mut config, mut domain, mut pool, mut active_batch_id, mut batches)
+    {
+        assert!(base_token != Address::zero(), "Zero base token")
+        assert!(quote_token != Address::zero(), "Zero quote token")
+        assert!(base_token != quote_token, "Identical tokens")
+        assert!(base_decimals <= 18, "Base decimals > 18")
+        assert!(quote_decimals <= 18, "Quote decimals > 18")
+
+        config = MarketConfig {
+            base_token,
+            quote_token,
+            base_decimals,
+            quote_decimals,
+            commit_window,
+            reveal_window,
+            min_bond,
+        }
+        domain = Domain::new(
+            name_hash: EIP712_NAME_HASH,
+            version_hash: EIP712_VERSION_HASH,
+        )
+        pool = PoolState {
+            reserve_base: 0,
+            reserve_quote: 0,
+            total_shares: 0,
+            slashed_bonds: Wei::zero(),
+        }
+
+        let start = ctx.timestamp()
+        let commit_dl = start + commit_window
+        let reveal_dl = commit_dl + reveal_window
+
+        active_batch_id = 1
+        batches
+            .set(
+                key: 1,
+                value: BatchMeta {
+                    start_time: start,
+                    commit_deadline: commit_dl,
+                    reveal_deadline: reveal_dl,
+                    order_count: 0,
+                    commit_count: 0,
+                    settled: false,
+                },
+            )
+    }
+
+    recv FairBatchMsg {
+        SeedReserves { amount_base, amount_quote } -> u256
+        uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut guard)
+        {
+            add_liquidity_internal(amount_base, amount_quote)
+        }
+
+        AddLiquidity { amount_base, amount_quote } -> u256
+        uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut guard)
+        {
+            add_liquidity_internal(amount_base, amount_quote)
+        }
+
+        RemoveLiquidity { shares } -> (u256, u256)
+        uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut guard)
+        {
+            guard.lock()
+            assert!(shares > 0, "Zero shares")
+            let provider = ctx.caller()
+            let owned = lp_shares.get(key: provider)
+            assert!(owned >= shares, "Insufficient LP shares")
+            assert!(pool.total_shares >= shares, "Invalid total shares")
+
+            // Round LP withdrawals strictly DOWN so remaining pool stays solvent.
+            let out_base = mul_div(shares, pool.reserve_base, pool.total_shares)
+            let out_quote = mul_div(shares, pool.reserve_quote, pool.total_shares)
+            assert!(out_base > 0 || out_quote > 0, "Zero withdrawal output")
+
+            let new_res_base = pool.reserve_base - out_base
+            let new_res_quote = pool.reserve_quote - out_quote
+            assert!(
+                (new_res_base == 0 && new_res_quote == 0)
+                    || (new_res_base > 0 && new_res_quote > 0),
+                "Cannot leave one-sided reserve",
+            )
+
+            lp_shares.set(key: provider, value: owned - shares)
+            pool.total_shares = pool.total_shares - shares
+            pool.reserve_base = new_res_base
+            pool.reserve_quote = new_res_quote
+
+            if out_base > 0 {
+                safe_transfer(
+                    token: config.base_token,
+                    receiver: provider,
+                    amount: out_base,
+                )
+            }
+            if out_quote > 0 {
+                safe_transfer(
+                    token: config.quote_token,
+                    receiver: provider,
+                    amount: out_quote,
+                )
+            }
+
+            log.emit(
+                LiquidityRemoved {
+                    provider,
+                    amount_base: out_base,
+                    amount_quote: out_quote,
+                    shares_burned: shares,
+                },
+            )
+
+            guard.unlock()
+            (out_base, out_quote)
+        }
+
         #[payable]
-        Deposit -> Timestamp uses (ctx, lock, mut balances, mut unlock_at, mut log) {
-            let owner = ctx.caller()
-            let amount = ctx.value()
-            assert!(amount > Wei::zero(), "Nothing to deposit")
+        CommitOrder { commitment_hash } -> u256 uses (
+            ctx,
+            mut log,
+            config,
+            active_batch_id,
+            mut batches,
+            mut commitments,
+        ) {
+            assert!(commitment_hash != 0, "Empty commitment hash")
+            let bond = ctx.value()
+            assert!(bond >= config.min_bond, "Insufficient reveal bond")
 
-            let unlock = ctx.timestamp() + lock
-            balances.set(key: owner, value: balances.get(key: owner) + amount)
-            unlock_at.set(key: owner, value: unlock)
-            log.emit(Deposited { owner, amount, unlock_at: unlock })
-            unlock
-        }
-
-        Withdraw { to } -> Wei uses (ctx, mut call, mut balances, unlock_at, mut log) {
-            let owner = ctx.caller()
-            let amount = balances.get(key: owner)
-            assert!(amount > Wei::zero(), "Nothing to withdraw")
+            let b_id = active_batch_id
+            var meta = batches.get(key: b_id)
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_open_window(meta)
+            }
             assert!(
-                ctx.timestamp() >= unlock_at.get(key: owner),
-                "Still locked",
+                meta.commit_count < MAX_ORDERS_PER_BATCH,
+                "Batch commit cap reached",
             )
 
-            // Update the balance before sending, so a reentrant call finds nothing.
-            balances.set(key: owner, value: Wei::zero())
-            assert!(
-                call.send_value(addr: to, gas: 0, value: amount).success(),
-                "Transfer failed",
+            let c_id = meta.commit_count
+            meta.commit_count = c_id + 1
+            batches.set(key: b_id, value: meta)
+
+            let trader = ctx.caller()
+            commitments
+                .set(
+                    key: (b_id, c_id),
+                    value: Commitment {
+                        commit_id: c_id,
+                        trader,
+                        commitment_hash,
+                        bond,
+                        revealed: false,
+                        slashed: false,
+                    },
+                )
+
+            log.emit(
+                OrderCommitted { batch_id: b_id, commit_id: c_id, trader, commitment_hash, bond },
             )
-            log.emit(Withdrawn { owner, to, amount })
-            amount
+            c_id
         }
 
-        BalanceOf { owner } -> Wei uses (balances) {
-            balances.get(key: owner)
+        RevealOrder { commit_id, side, amount_in, limit_price, salt } -> u256
+        uses (
+            ctx,
+            mut call,
+            mut log,
+            config,
+            active_batch_id,
+            mut batches,
+            mut commitments,
+            mut orders,
+            mut guard,
+        )
+        {
+            guard.lock()
+            validate_order_params(side, amount_in, limit_price)
+
+            let b_id = active_batch_id
+            var meta = batches.get(key: b_id)
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_reveal_window(meta, cfg: config)
+            }
+            assert!(commit_id < meta.commit_count, "Invalid commit id")
+            assert!(
+                meta.order_count < MAX_ORDERS_PER_BATCH,
+                "Batch order cap reached",
+            )
+
+            let caller = ctx.caller()
+            var comm = commitments.get(key: (b_id, commit_id))
+            assert!(comm.trader == caller, "Not commitment owner")
+            assert!(!comm.revealed, "Already revealed")
+            assert!(!comm.slashed, "Commitment slashed")
+
+            let expected_hash = compute_commitment_hash(
+                batch_id: b_id,
+                trader: caller,
+                side,
+                amount_in,
+                limit_price,
+                salt,
+            )
+            assert!(
+                expected_hash == comm.commitment_hash,
+                "Commitment hash mismatch",
+            )
+
+            // Effects before interactions (CEI + transient Mutex):
+            comm.revealed = true
+            let bond_to_refund = comm.bond
+            comm.bond = Wei::zero()
+            commitments.set(key: (b_id, commit_id), value: comm)
+
+            let ord_id = meta.order_count
+            meta.order_count = ord_id + 1
+            batches.set(key: b_id, value: meta)
+
+            orders
+                .set(
+                    key: (b_id, ord_id),
+                    value: Order {
+                        order_id: ord_id,
+                        trader: caller,
+                        side,
+                        amount_in,
+                        limit_price,
+                        mode: MODE_COMMIT_REVEAL,
+                    },
+                )
+
+            let token_in = if side == SELL_BASE {
+                config.base_token
+            } else {
+                config.quote_token
+            }
+            safe_transfer_from(
+                token: token_in,
+                owner: caller,
+                receiver: ctx.address(),
+                amount: amount_in,
+            )
+
+            if bond_to_refund > Wei::zero() {
+                assert!(
+                    call.send_value(addr: caller, gas: 0, value: bond_to_refund).success(),
+                    "Bond refund failed",
+                )
+            }
+
+            log.emit(
+                OrderRevealed {
+                    batch_id: b_id,
+                    order_id: ord_id,
+                    trader: caller,
+                    commit_id,
+                    side,
+                    amount_in,
+                    limit_price,
+                },
+            )
+
+            guard.unlock()
+            ord_id
         }
 
-        UnlockTime { owner } -> Timestamp uses (unlock_at) {
-            unlock_at.get(key: owner)
+        SubmitDirectOrder { side, amount_in, limit_price } -> u256
+        uses (ctx, mut call, mut log, config, active_batch_id, mut batches, mut orders, mut guard)
+        {
+            guard.lock()
+            validate_order_params(side, amount_in, limit_price)
+
+            let b_id = active_batch_id
+            var meta = batches.get(key: b_id)
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_open_window(meta)
+            }
+            assert!(
+                meta.order_count < MAX_ORDERS_PER_BATCH,
+                "Batch order cap reached",
+            )
+
+            let trader = ctx.caller()
+            let ord_id = meta.order_count
+            meta.order_count = ord_id + 1
+            batches.set(key: b_id, value: meta)
+
+            orders
+                .set(
+                    key: (b_id, ord_id),
+                    value: Order {
+                        order_id: ord_id,
+                        trader,
+                        side,
+                        amount_in,
+                        limit_price,
+                        mode: MODE_DIRECT,
+                    },
+                )
+
+            let token_in = if side == SELL_BASE {
+                config.base_token
+            } else {
+                config.quote_token
+            }
+            safe_transfer_from(
+                token: token_in,
+                owner: trader,
+                receiver: ctx.address(),
+                amount: amount_in,
+            )
+
+            log.emit(
+                OrderSubmitted {
+                    batch_id: b_id,
+                    order_id: ord_id,
+                    trader,
+                    side,
+                    amount_in,
+                    limit_price,
+                    mode: MODE_DIRECT,
+                },
+            )
+
+            guard.unlock()
+            ord_id
+        }
+
+        SubmitSignedIntent { order, signature } -> u256
+        uses (
+            ctx,
+            mut call,
+            mut log,
+            config,
+            domain,
+            active_batch_id,
+            mut batches,
+            mut orders,
+            mut nonces,
+            mut guard,
+        )
+        {
+            guard.lock()
+            validate_order_params(
+                side: order.side,
+                amount_in: order.amount_in,
+                limit_price: order.limit_price,
+            )
+
+            let b_id = active_batch_id
+            var meta = batches.get(key: b_id)
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_intent_window(meta)
+            }
+            assert!(
+                meta.order_count < MAX_ORDERS_PER_BATCH,
+                "Batch order cap reached",
+            )
+
+            let cur_nonce = nonces.get(key: order.trader)
+            let valid = verify_signed_order(
+                domain,
+                order,
+                signature,
+                active_batch_id: b_id,
+                expected_nonce: cur_nonce,
+            )
+            assert!(valid, "Invalid EIP-712 signed intent")
+
+            // Consume nonce before external ERC-20 call to prevent replay/reentrancy.
+            nonces.set(key: order.trader, value: cur_nonce + 1)
+
+            let ord_id = meta.order_count
+            meta.order_count = ord_id + 1
+            batches.set(key: b_id, value: meta)
+
+            orders
+                .set(
+                    key: (b_id, ord_id),
+                    value: Order {
+                        order_id: ord_id,
+                        trader: order.trader,
+                        side: order.side,
+                        amount_in: order.amount_in,
+                        limit_price: order.limit_price,
+                        mode: MODE_SIGNED_INTENT,
+                    },
+                )
+
+            let token_in = if order.side == SELL_BASE {
+                config.base_token
+            } else {
+                config.quote_token
+            }
+            safe_transfer_from(
+                token: token_in,
+                owner: order.trader,
+                receiver: ctx.address(),
+                amount: order.amount_in,
+            )
+
+            log.emit(
+                OrderSubmitted {
+                    batch_id: b_id,
+                    order_id: ord_id,
+                    trader: order.trader,
+                    side: order.side,
+                    amount_in: order.amount_in,
+                    limit_price: order.limit_price,
+                    mode: MODE_SIGNED_INTENT,
+                },
+            )
+
+            guard.unlock()
+            ord_id
+        }
+
+        SlashUnrevealed { batch_id, commit_id } -> Wei
+        uses (ctx, mut log, config, mut pool, batches, mut commitments, mut guard)
+        {
+            guard.lock()
+            let meta = batches.get(key: batch_id)
+            assert!(commit_id < meta.commit_count, "Invalid commit id")
+
+            let can_slash = if config.commit_window == Duration::zero()
+                && config.reveal_window == Duration::zero() {
+                meta.settled
+            } else {
+                ctx.timestamp() > meta.reveal_deadline
+            }
+            assert!(can_slash, "Reveal window not expired")
+
+            var comm = commitments.get(key: (batch_id, commit_id))
+            assert!(!comm.revealed, "Commitment was revealed")
+            assert!(!comm.slashed, "Already slashed")
+
+            let forfeited = comm.bond
+            comm.slashed = true
+            comm.bond = Wei::zero()
+            commitments.set(key: (batch_id, commit_id), value: comm)
+
+            pool.slashed_bonds = pool.slashed_bonds + forfeited
+
+            log.emit(
+                CommitmentSlashed {
+                    batch_id,
+                    commit_id,
+                    trader: comm.trader,
+                    forfeited_bond: forfeited,
+                },
+            )
+
+            guard.unlock()
+            forfeited
+        }
+
+        SettleBatch -> BatchSummary uses (
+            ctx,
+            mut log,
+            config,
+            mut pool,
+            mut active_batch_id,
+            mut batches,
+            orders,
+            mut receipts,
+            mut summaries,
+            mut guard,
+        ) {
+            guard.lock()
+
+            let b_id = active_batch_id
+            var meta = batches.get(key: b_id)
+            let now = ctx.timestamp()
+            with (BatchClock = EvmClock { ts: now }) {
+                assert_settlement_window(meta, cfg: config)
+            }
+
+            let count_u256 = meta.order_count
+            let count = count_u256 as usize
+            var batch_orders: MemVec<Order> = MemVec::with_capacity(count)
+
+            var idx: u256 = 0
+            while idx < count_u256 {
+                batch_orders.push(orders.get(key: (b_id, idx)))
+                idx = idx + 1
+            }
+
+            // Invoke compiler-enforced pure `solve_batch` (`uses ()` — zero effects!).
+            let cleared = solve_batch(
+                rx_raw: pool.reserve_base,
+                ry_raw: pool.reserve_quote,
+                base_decimals: config.base_decimals,
+                quote_decimals: config.quote_decimals,
+                orders: batch_orders.as_slice(),
+            )
+
+            pool.reserve_base = cleared.reserve_base_after_raw
+            pool.reserve_quote = cleared.reserve_quote_after_raw
+
+            // Record pull-based claimable payouts & refunds (zero push transfers!).
+            var k: usize = 0
+            while k < count {
+                let ord = batch_orders[k]
+                let fill = cleared.fills[k]
+                let (payout_base, payout_quote) = if ord.side == SELL_BASE {
+                    (fill.refund_in, fill.payout_out)
+                } else {
+                    (fill.payout_out, fill.refund_in)
+                }
+
+                receipts
+                    .set(
+                        key: (b_id, ord.order_id),
+                        value: OrderReceipt {
+                            order_id: ord.order_id,
+                            trader: ord.trader,
+                            side: ord.side,
+                            amount_in: ord.amount_in,
+                            limit_price: ord.limit_price,
+                            amount_filled: fill.amount_filled,
+                            payout_base,
+                            payout_quote,
+                            settled: true,
+                            claimed: false,
+                        },
+                    )
+                k = k + 1
+            }
+
+            meta.settled = true
+            batches.set(key: b_id, value: meta)
+
+            let summary = BatchSummary {
+                batch_id: b_id,
+                settled: true,
+                clearing_price: cleared.clearing_price.raw(),
+                total_sell_base: cleared.total_sell_base_raw,
+                total_buy_quote: cleared.total_buy_quote_raw,
+                cow_matched_base: cleared.cow_matched_base_norm,
+                cow_matched_quote: cleared.cow_matched_quote_norm,
+                reserve_base_after: cleared.reserve_base_after_raw,
+                reserve_quote_after: cleared.reserve_quote_after_raw,
+                order_count: count_u256,
+            }
+            summaries.set(key: b_id, value: summary)
+
+            // Automatically initialize `batch_id + 1`:
+            let next_id = b_id + 1
+            let next_commit_dl = now + config.commit_window
+            let next_reveal_dl = next_commit_dl + config.reveal_window
+            active_batch_id = next_id
+            batches
+                .set(
+                    key: next_id,
+                    value: BatchMeta {
+                        start_time: now,
+                        commit_deadline: next_commit_dl,
+                        reveal_deadline: next_reveal_dl,
+                        order_count: 0,
+                        commit_count: 0,
+                        settled: false,
+                    },
+                )
+
+            log.emit(
+                BatchSettled {
+                    batch_id: b_id,
+                    clearing_price: summary.clearing_price,
+                    total_sell_base: summary.total_sell_base,
+                    total_buy_quote: summary.total_buy_quote,
+                    cow_matched_base: summary.cow_matched_base,
+                    cow_matched_quote: summary.cow_matched_quote,
+                    reserve_base_after: summary.reserve_base_after,
+                    reserve_quote_after: summary.reserve_quote_after,
+                    order_count: count_u256,
+                },
+            )
+
+            guard.unlock()
+            summary
+        }
+
+        Claim { batch_id, order_id } -> (u256, u256)
+        uses (ctx, mut call, mut log, config, mut receipts, mut guard)
+        {
+            guard.lock()
+
+            var rec = receipts.get(key: (batch_id, order_id))
+            assert!(rec.settled, "Order not settled")
+            assert!(!rec.claimed, "Order already claimed")
+            let caller = ctx.caller()
+            assert!(rec.trader == caller, "Not order owner")
+
+            let out_base = rec.payout_base
+            let out_quote = rec.payout_quote
+            rec.claimed = true
+            receipts.set(key: (batch_id, order_id), value: rec)
+
+            if out_base > 0 {
+                safe_transfer(
+                    token: config.base_token,
+                    receiver: caller,
+                    amount: out_base,
+                )
+            }
+            if out_quote > 0 {
+                safe_transfer(
+                    token: config.quote_token,
+                    receiver: caller,
+                    amount: out_quote,
+                )
+            }
+
+            log.emit(
+                OrderClaimed {
+                    batch_id,
+                    order_id,
+                    trader: caller,
+                    payout_base: out_base,
+                    payout_quote: out_quote,
+                },
+            )
+
+            guard.unlock()
+            (out_base, out_quote)
+        }
+
+        CurrentBatch -> BatchInfo uses (ctx, config, active_batch_id, batches) {
+            let b_id = active_batch_id
+            let meta = batches.get(key: b_id)
+            let phase = with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                evaluate_batch_phase(meta, cfg: config)
+            }
+            BatchInfo {
+                batch_id: b_id,
+                start_time: meta.start_time,
+                commit_deadline: meta.commit_deadline,
+                reveal_deadline: meta.reveal_deadline,
+                order_count: meta.order_count,
+                commit_count: meta.commit_count,
+                phase,
+            }
+        }
+
+        GetReserves -> ReserveInfo uses (config, pool) {
+            let rx_norm = normalize_amount(pool.reserve_base, config.base_decimals)
+            let ry_norm = normalize_amount(pool.reserve_quote, config.quote_decimals)
+            let spot = compute_fm_amm_price(rx_norm, ry_norm, sx_norm: 0, dy_norm: 0)
+            ReserveInfo {
+                reserve_base: pool.reserve_base,
+                reserve_quote: pool.reserve_quote,
+                total_shares: pool.total_shares,
+                spot_price_wad: spot.raw(),
+            }
+        }
+
+        GetBatchSummary { batch_id } -> BatchSummary
+        uses (summaries)
+        {
+            summaries.get(key: batch_id)
+        }
+
+        GetOrderReceipt { batch_id, order_id } -> OrderReceipt
+        uses (receipts)
+        {
+            receipts.get(key: (batch_id, order_id))
+        }
+
+        GetCommitment { batch_id, commit_id } -> Commitment
+        uses (commitments)
+        {
+            commitments.get(key: (batch_id, commit_id))
+        }
+
+        GetNonce { trader } -> u256 uses (nonces) {
+            nonces.get(key: trader)
+        }
+
+        GetLpShares { provider } -> u256 uses (lp_shares) {
+            lp_shares.get(key: provider)
+        }
+
+        DomainSeparator -> u256 uses (ctx, domain) {
+            domain.separator()
+        }
+
+        ComputeCommitmentHash { batch_id, trader, side, amount_in, limit_price, salt } -> u256 {
+            compute_commitment_hash(batch_id, trader, side, amount_in, limit_price, salt)
+        }
+
+        ComputeIntentDigest { order } -> u256 uses (ctx, domain) {
+            domain.digest(struct_hash: hash_signed_order(order))
+        }
+    }
+
+    recv MulticallMsg {
+        Multicall { data } -> DynArray<Bytes> uses (ctx, mut call) {
+            multicall(data)
         }
     }
 }

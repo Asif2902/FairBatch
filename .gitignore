@@ -1,1 +1,27 @@
+# Fe compiler build artifacts & debug reports
 out/
+fe-build-report.tar.gz
+
+# Rust backend solver & simulator
+backend/target/
+backend/.cargo/config.toml
+
+# Frontend dependencies, local env & production bundle
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env.local
+frontend/.env.*.local
+
+# Environment variables & secrets (NEVER commit live private keys!)
+.env
+.env.local
+.env.*.local
+
+# Temporary transaction / deployment scratch files (deployments/*.json manifests stay tracked)
+*.txpayload.tmp
+deployments/*.tmp.json
+
+# OS & editor metadata
+.DS_Store
+Thumbs.db

@@ -1,0 +1,256 @@
+// Core domain types, constants, events, errors, and ABI records for FairBatch.
+
+use core::marker::Copy
+
+pub const SELL_BASE: u8 = 0
+pub const BUY_BASE: u8 = 1
+
+pub const MODE_DIRECT: u8 = 0
+pub const MODE_COMMIT_REVEAL: u8 = 1
+pub const MODE_SIGNED_INTENT: u8 = 2
+
+pub const PHASE_OPEN: u8 = 0
+pub const PHASE_REVEAL: u8 = 1
+pub const PHASE_READY_TO_SETTLE: u8 = 2
+pub const PHASE_SETTLED: u8 = 3
+
+pub const MAX_ORDERS_PER_BATCH: u256 = 64
+pub const MIN_ORDER_AMOUNT: u256 = 1_000
+pub const WAD: u256 = 1_000_000_000_000_000_000
+
+/// Strongly-typed order direction used inside internal logic.
+pub enum Side {
+    SellBase,
+    BuyBase,
+}
+
+impl Copy for Side {}
+
+impl Side {
+    pub const fn from_u8(_ raw: u8) -> Option<Self> {
+        if raw == SELL_BASE {
+            Option::Some(Side::SellBase)
+        } else if raw == BUY_BASE {
+            Option::Some(Side::BuyBase)
+        } else {
+            Option::None
+        }
+    }
+
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Side::SellBase => SELL_BASE,
+            Side::BuyBase => BUY_BASE,
+        }
+    }
+}
+
+#[abi]
+pub struct Order {
+    pub order_id: u256,
+    pub trader: Address,
+    pub side: u8,
+    pub amount_in: u256,
+    pub limit_price: u256,
+    pub mode: u8,
+}
+
+impl Copy for Order {}
+
+#[abi]
+pub struct Commitment {
+    pub commit_id: u256,
+    pub trader: Address,
+    pub commitment_hash: u256,
+    pub bond: Wei,
+    pub revealed: bool,
+    pub slashed: bool,
+}
+
+impl Copy for Commitment {}
+
+#[abi]
+pub struct SignedOrder {
+    pub trader: Address,
+    pub side: u8,
+    pub amount_in: u256,
+    pub limit_price: u256,
+    pub batch_id: u256,
+    pub nonce: u256,
+    pub deadline: Timestamp,
+}
+
+impl Copy for SignedOrder {}
+
+#[abi]
+pub struct FillOutcome {
+    pub order_id: u256,
+    pub trader: Address,
+    pub side: u8,
+    pub amount_in: u256,
+    pub amount_filled: u256,
+    pub payout_out: u256,
+    pub refund_in: u256,
+}
+
+impl Copy for FillOutcome {}
+
+#[abi]
+pub struct UserClaim {
+    pub trader: Address,
+    pub payout_base: u256,
+    pub payout_quote: u256,
+    pub claimed: bool,
+}
+
+impl Copy for UserClaim {}
+
+#[abi]
+pub struct OrderReceipt {
+    pub order_id: u256,
+    pub trader: Address,
+    pub side: u8,
+    pub amount_in: u256,
+    pub limit_price: u256,
+    pub amount_filled: u256,
+    pub payout_base: u256,
+    pub payout_quote: u256,
+    pub settled: bool,
+    pub claimed: bool,
+}
+
+impl Copy for OrderReceipt {}
+
+#[abi]
+pub struct BatchSummary {
+    pub batch_id: u256,
+    pub settled: bool,
+    pub clearing_price: u256,
+    pub total_sell_base: u256,
+    pub total_buy_quote: u256,
+    pub cow_matched_base: u256,
+    pub cow_matched_quote: u256,
+    pub reserve_base_after: u256,
+    pub reserve_quote_after: u256,
+    pub order_count: u256,
+}
+
+impl Copy for BatchSummary {}
+
+#[abi]
+pub struct BatchInfo {
+    pub batch_id: u256,
+    pub start_time: Timestamp,
+    pub commit_deadline: Timestamp,
+    pub reveal_deadline: Timestamp,
+    pub order_count: u256,
+    pub commit_count: u256,
+    pub phase: u8,
+}
+
+impl Copy for BatchInfo {}
+
+#[abi]
+pub struct ReserveInfo {
+    pub reserve_base: u256,
+    pub reserve_quote: u256,
+    pub total_shares: u256,
+    pub spot_price_wad: u256,
+}
+
+impl Copy for ReserveInfo {}
+
+#[event]
+pub struct LiquidityAdded {
+    #[indexed]
+    pub provider: Address,
+    pub amount_base: u256,
+    pub amount_quote: u256,
+    pub shares_minted: u256,
+}
+
+#[event]
+pub struct LiquidityRemoved {
+    #[indexed]
+    pub provider: Address,
+    pub amount_base: u256,
+    pub amount_quote: u256,
+    pub shares_burned: u256,
+}
+
+#[event]
+pub struct OrderCommitted {
+    #[indexed]
+    pub batch_id: u256,
+    #[indexed]
+    pub commit_id: u256,
+    #[indexed]
+    pub trader: Address,
+    pub commitment_hash: u256,
+    pub bond: Wei,
+}
+
+#[event]
+pub struct OrderRevealed {
+    #[indexed]
+    pub batch_id: u256,
+    #[indexed]
+    pub order_id: u256,
+    #[indexed]
+    pub trader: Address,
+    pub commit_id: u256,
+    pub side: u8,
+    pub amount_in: u256,
+    pub limit_price: u256,
+}
+
+#[event]
+pub struct OrderSubmitted {
+    #[indexed]
+    pub batch_id: u256,
+    #[indexed]
+    pub order_id: u256,
+    #[indexed]
+    pub trader: Address,
+    pub side: u8,
+    pub amount_in: u256,
+    pub limit_price: u256,
+    pub mode: u8,
+}
+
+#[event]
+pub struct CommitmentSlashed {
+    #[indexed]
+    pub batch_id: u256,
+    #[indexed]
+    pub commit_id: u256,
+    #[indexed]
+    pub trader: Address,
+    pub forfeited_bond: Wei,
+}
+
+#[event]
+pub struct BatchSettled {
+    #[indexed]
+    pub batch_id: u256,
+    pub clearing_price: u256,
+    pub total_sell_base: u256,
+    pub total_buy_quote: u256,
+    pub cow_matched_base: u256,
+    pub cow_matched_quote: u256,
+    pub reserve_base_after: u256,
+    pub reserve_quote_after: u256,
+    pub order_count: u256,
+}
+
+#[event]
+pub struct OrderClaimed {
+    #[indexed]
+    pub batch_id: u256,
+    #[indexed]
+    pub order_id: u256,
+    #[indexed]
+    pub trader: Address,
+    pub payout_base: u256,
+    pub payout_quote: u256,
+}

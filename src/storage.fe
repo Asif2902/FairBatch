@@ -1,0 +1,38 @@
+// Modular storage domain structures for FairBatch.
+
+use core::marker::Copy
+
+/// Immutable/configured market parameters initialized at deployment.
+pub struct MarketConfig {
+    pub base_token: Address,
+    pub quote_token: Address,
+    pub base_decimals: u8,
+    pub quote_decimals: u8,
+    pub commit_window: Duration,
+    pub reveal_window: Duration,
+    pub min_bond: Wei,
+}
+
+impl Copy for MarketConfig {}
+
+/// Embedded FM-AMM passive reserve pool state & accumulated forfeited reveal bonds.
+pub struct PoolState {
+    pub reserve_base: u256,
+    pub reserve_quote: u256,
+    pub total_shares: u256,
+    pub slashed_bonds: Wei,
+}
+
+impl Copy for PoolState {}
+
+/// Per-batch lifecycle state & counters.
+pub struct BatchMeta {
+    pub start_time: Timestamp,
+    pub commit_deadline: Timestamp,
+    pub reveal_deadline: Timestamp,
+    pub order_count: u256,
+    pub commit_count: u256,
+    pub settled: bool,
+}
+
+impl Copy for BatchMeta {}
