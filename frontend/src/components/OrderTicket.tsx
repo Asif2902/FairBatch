@@ -9,7 +9,6 @@ import {
   RefreshCw,
   Send,
   ShieldAlert,
-  Sparkles,
 } from 'lucide-react';
 import type {
   HealthResponse,
@@ -361,13 +360,41 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   return (
     <section
       aria-label="Order Entry Ticket"
-      className="flex flex-col rounded-2xl border border-slate-800/90 bg-[#0D1321]/95 shadow-xl"
+      className="ledger-panel relative flex flex-col overflow-hidden"
     >
-      {/* 3-Mode Tab Header */}
+      {/* Slip masthead */}
+      <div className="flex items-start justify-between gap-3 border-b border-rule px-4 py-3.5">
+        <div className="min-w-0">
+          <div className="eyebrow">Order slip · Batch No. {state.batch_id}</div>
+          <h2 className="mt-1 font-display text-2xl font-bold leading-none tracking-tight text-ink">
+            {side === 'SellBase' ? 'Sell WETH' : 'Buy WETH'}
+          </h2>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-muted">
+            Every order in this batch clears at one uniform price.
+          </p>
+        </div>
+        <span
+          className={`stamp shrink-0 ${
+            state.phase === 'Reveal'
+              ? 'stamp-brass'
+              : state.phase === 'Settled'
+                ? 'stamp-pine'
+                : ''
+          }`}
+        >
+          {state.phase === 'Open'
+            ? 'OPEN'
+            : state.phase === 'Reveal'
+              ? 'SEALED'
+              : 'CLEARED'}
+        </span>
+      </div>
+
+      {/* Three submission channels */}
       <div
         role="tablist"
         aria-label="Order Submission Modes"
-        className="grid grid-cols-3 border-b border-slate-800 bg-[#090D16]/70 p-1.5 rounded-t-2xl gap-1"
+        className="grid grid-cols-3 border-b border-rule bg-paper-soft/60"
       >
         <button
           type="button"
@@ -378,14 +405,20 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             setLocalError(null);
             setLocalFeedback(null);
           }}
-          className={`flex items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-bold transition ${
+          className={`relative flex flex-col items-start gap-0.5 px-2 py-2 text-left transition ${
             activeTab === 'direct'
-              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40'
-              : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              ? 'bg-paper-bright text-ink'
+              : 'text-ink-muted hover:bg-paper-bright/70 hover:text-ink'
           }`}
         >
-          <Send className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Direct Limit</span>
+          {activeTab === 'direct' && (
+            <span className="absolute inset-x-0 top-0 h-[2px] bg-vermilion-500" />
+          )}
+          <span className="flex items-center gap-1 whitespace-nowrap font-mono text-[9px] font-bold uppercase tracking-[0.02em]">
+            <Send className="h-3 w-3" aria-hidden="true" />
+            Direct
+          </span>
+          <span className="mt-0.5 font-mono text-[8px] tracking-[0.02em] text-ink-faint">01 · LIMIT</span>
         </button>
 
         <button
@@ -397,14 +430,20 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             setLocalError(null);
             setLocalFeedback(null);
           }}
-          className={`flex items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-bold transition ${
+          className={`relative flex flex-col items-start gap-0.5 border-x border-rule px-2 py-2 text-left transition ${
             activeTab === 'commit_reveal'
-              ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
-              : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              ? 'bg-paper-bright text-ink'
+              : 'text-ink-muted hover:bg-paper-bright/70 hover:text-ink'
           }`}
         >
-          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Commit-Reveal</span>
+          {activeTab === 'commit_reveal' && (
+            <span className="absolute inset-x-0 top-0 h-[2px] bg-brass-500" />
+          )}
+          <span className="flex items-center gap-1 whitespace-nowrap font-mono text-[9px] font-bold uppercase tracking-[0.02em]">
+            <Lock className="h-3 w-3" aria-hidden="true" />
+            Commit-Reveal
+          </span>
+          <span className="mt-0.5 font-mono text-[8px] tracking-[0.02em] text-ink-faint">02 · HASH</span>
         </button>
 
         <button
@@ -416,28 +455,34 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             setLocalError(null);
             setLocalFeedback(null);
           }}
-          className={`flex items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-bold transition ${
+          className={`relative flex flex-col items-start gap-0.5 px-2 py-2 text-left transition ${
             activeTab === 'eip712'
-              ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/40'
-              : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              ? 'bg-paper-bright text-ink'
+              : 'text-ink-muted hover:bg-paper-bright/70 hover:text-ink'
           }`}
         >
-          <FileSignature className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>EIP-712 Intent</span>
+          {activeTab === 'eip712' && (
+            <span className="absolute inset-x-0 top-0 h-[2px] bg-cobalt-600" />
+          )}
+          <span className="flex items-center gap-1 whitespace-nowrap font-mono text-[9px] font-bold uppercase tracking-[0.02em]">
+            <FileSignature className="h-3 w-3" aria-hidden="true" />
+            EIP-712 Intent
+          </span>
+          <span className="mt-0.5 font-mono text-[8px] tracking-[0.02em] text-ink-faint">03 · SIGNED</span>
         </button>
       </div>
 
       <div className="space-y-4 p-4">
-        {/* Direction Switch */}
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-[#090D16] p-1">
+        {/* Side switch */}
+        <div className="grid grid-cols-2 border border-rule-strong bg-paper-soft p-1">
           <button
             type="button"
             onClick={() => handleFlipSide('SellBase')}
             aria-pressed={side === 'SellBase'}
-            className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition ${
+            className={`flex items-center justify-center gap-1.5 py-2 text-[11px] font-bold transition ${
               side === 'SellBase'
-                ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-vermilion-500 text-paper'
+                : 'text-ink-muted hover:text-ink'
             }`}
           >
             <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -447,10 +492,10 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             type="button"
             onClick={() => handleFlipSide('BuyBase')}
             aria-pressed={side === 'BuyBase'}
-            className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition ${
+            className={`flex items-center justify-center gap-1.5 py-2 text-[11px] font-bold transition ${
               side === 'BuyBase'
-                ? 'bg-cyan-400 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-pine-600 text-paper'
+                : 'text-ink-muted hover:text-ink'
             }`}
           >
             <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -458,182 +503,189 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
           </button>
         </div>
 
-        {/* Shared Amount + Limit Price Inputs */}
-        <div className="space-y-3">
-          <div>
-            <div className="mb-1 flex items-center justify-between text-xs">
-              <label htmlFor="ticket-amount-input" className="font-medium text-slate-300">
-                Input Amount ({side === 'SellBase' ? 'WETH' : 'USDC'})
-              </label>
-              <div className="flex gap-1">
-                {(side === 'SellBase' ? ['1.0', '2.5', '5.0'] : ['3000', '7500', '15000']).map(
-                  (presetVal) => (
-                    <button
-                      key={presetVal}
-                      type="button"
-                      onClick={() => {
-                        setAmountInput(presetVal);
-                        setSignedArtifact(null);
-                      }}
-                      className="rounded border border-slate-700/80 bg-slate-800/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-300 hover:border-slate-600 hover:text-white"
-                    >
-                      {presetVal}
-                    </button>
-                  ),
-                )}
-              </div>
-            </div>
-            <div className="relative">
-              <input
-                id="ticket-amount-input"
-                type="number"
-                step="any"
-                min="0"
-                value={amountInput}
-                onChange={(e) => {
-                  setAmountInput(e.target.value);
-                  setSignedArtifact(null);
-                }}
-                className="w-full rounded-xl border border-slate-700/90 bg-[#090D16] px-3.5 py-2.5 pr-16 font-mono text-sm font-semibold text-white tabular-nums focus:border-emerald-400 focus:outline-none"
-              />
-              <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 font-mono text-xs font-bold text-slate-400">
-                {side === 'SellBase' ? 'WETH' : 'USDC'}
-              </span>
+        {/* Amount */}
+        <div>
+          <div className="flex items-baseline justify-between gap-2">
+            <label htmlFor="ticket-amount-input" className="eyebrow">
+              You pay
+            </label>
+            <div className="flex gap-1">
+              {(side === 'SellBase'
+                ? ['1.0', '2.5', '5.0']
+                : ['3000', '7500', '15000']
+              ).map((presetVal) => (
+                <button
+                  key={presetVal}
+                  type="button"
+                  onClick={() => {
+                    setAmountInput(presetVal);
+                    setSignedArtifact(null);
+                  }}
+                  className="border border-rule bg-paper-bright px-1.5 py-0.5 font-mono text-[10px] text-ink-muted transition hover:border-ink hover:text-ink"
+                >
+                  {presetVal}
+                </button>
+              ))}
             </div>
           </div>
-
-          <div>
-            <div className="mb-1 flex items-center justify-between text-xs">
-              <label htmlFor="ticket-limit-input" className="font-medium text-slate-300">
-                {side === 'SellBase'
-                  ? 'Min Execution Price (Limit USDC/WETH)'
-                  : 'Max Execution Price (Limit USDC/WETH)'}
-              </label>
-              <button
-                type="button"
-                onClick={() => {
-                  const factor = side === 'SellBase' ? 0.92 : 1.08;
-                  setLimitPriceInput(
-                    String(Math.round(state.reserves.spot_price * factor)),
-                  );
-                  setSignedArtifact(null);
-                }}
-                className="font-mono text-[10px] text-cyan-400 hover:underline"
-              >
-                ±8% of Spot (${formatPrice(state.reserves.spot_price, 0)})
-              </button>
-            </div>
-            <div className="relative">
-              <input
-                id="ticket-limit-input"
-                type="number"
-                step="any"
-                min="0"
-                value={limitPriceInput}
-                onChange={(e) => {
-                  setLimitPriceInput(e.target.value);
-                  setSignedArtifact(null);
-                }}
-                className="w-full rounded-xl border border-slate-700/90 bg-[#090D16] px-3.5 py-2.5 pr-24 font-mono text-sm font-semibold text-white tabular-nums focus:border-emerald-400 focus:outline-none"
-              />
-              <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 font-mono text-[11px] font-semibold text-slate-400">
-                USDC/WETH
-              </span>
-            </div>
+          <div className="mt-1.5 flex items-baseline gap-2 border-b-2 border-ink pb-1">
+            <input
+              id="ticket-amount-input"
+              type="number"
+              step="any"
+              min="0"
+              value={amountInput}
+              onChange={(e) => {
+                setAmountInput(e.target.value);
+                setSignedArtifact(null);
+              }}
+              className="w-full bg-transparent font-display text-[2.15rem] font-bold leading-none tracking-tight text-ink tabular-nums focus:outline-none"
+            />
+            <span className="shrink-0 font-mono text-[11px] font-bold uppercase tracking-label text-ink-muted">
+              {side === 'SellBase' ? 'WETH' : 'USDC'}
+            </span>
           </div>
         </div>
 
-        {/* Live Equilibrium Preview Box */}
+        {/* Limit price */}
+        <div className="ledger-inset px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <label htmlFor="ticket-limit-input" className="eyebrow">
+              {side === 'SellBase' ? 'Minimum price' : 'Maximum price'}
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                const factor = side === 'SellBase' ? 0.92 : 1.08;
+                setLimitPriceInput(
+                  String(Math.round(state.reserves.spot_price * factor)),
+                );
+                setSignedArtifact(null);
+              }}
+              className="font-mono text-[10px] text-vermilion-600 underline decoration-dotted underline-offset-2 transition hover:text-vermilion-700"
+            >
+              Spot ±8% · ${formatPrice(state.reserves.spot_price, 0)}
+            </button>
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <input
+              id="ticket-limit-input"
+              type="number"
+              step="any"
+              min="0"
+              value={limitPriceInput}
+              onChange={(e) => {
+                setLimitPriceInput(e.target.value);
+                setSignedArtifact(null);
+              }}
+              className="w-full bg-transparent font-mono text-lg font-bold text-ink tabular-nums focus:outline-none"
+            />
+            <span className="shrink-0 font-mono text-[10px] uppercase tracking-label text-ink-muted">
+              USDC / WETH
+            </span>
+          </div>
+        </div>
+
+        {/* Clearing preview */}
         {preview && (
-          <div className="rounded-xl border border-slate-800 bg-[#111827]/90 p-3 text-xs space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1 text-slate-400">
-                <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
-                <span>Projected Uniform Price p*:</span>
-              </span>
-              <span className="font-mono font-bold text-emerald-300 tabular-nums">
-                ${formatPrice(preview.projectedClearingPrice, 2)} USDC
+          <div className="border-t border-dashed border-rule-strong pt-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="eyebrow">Projected uniform price</span>
+              <span className="font-mono text-base font-bold text-vermilion-600 tabular-nums">
+                ${formatPrice(preview.projectedClearingPrice, 2)}
               </span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Estimated Fill Outcome:</span>
-              <span className="font-mono font-semibold text-slate-100 tabular-nums">
+            <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[11px]">
+              <span className="text-ink-muted">Estimated fill</span>
+              <span className="text-right font-mono font-semibold text-ink tabular-nums">
                 {preview.myFill?.status === 'Filled'
-                  ? `100% Fill → ${formatToken(preview.myFill.payout_out, 2)} ${
+                  ? `100% → ${formatToken(preview.myFill.payout_out, 2)} ${
                       side === 'SellBase' ? 'USDC' : 'WETH'
                     }`
                   : preview.myFill?.status === 'PartialFill'
-                    ? `Pro-Rata Partial → ${formatToken(preview.myFill.payout_out, 2)} ${
+                    ? `Pro-rata → ${formatToken(preview.myFill.payout_out, 2)} ${
                         side === 'SellBase' ? 'USDC' : 'WETH'
                       }`
-                    : 'Out-of-the-Money (100% Refunded)'}
+                    : 'Out-of-the-money · full refund'}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <div className="clearing-line flex-1" />
+              <span className="serial shrink-0">
+                p* = {formatPrice(preview.projectedClearingPrice, 2)}
               </span>
             </div>
           </div>
         )}
 
-        {/* TAB A: Direct Limit Order */}
+        {/* CHANNEL 01 — Direct limit */}
         {activeTab === 'direct' && (
-          <form onSubmit={handleDirectSubmit} className="space-y-3">
+          <form onSubmit={handleDirectSubmit}>
             <button
               type="submit"
               disabled={state.phase !== 'Open' || busyAction !== null}
-              className="w-full rounded-xl bg-emerald-500 py-2.5 text-xs font-bold text-slate-950 shadow-glow-emerald transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+              className="group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-paper shadow-glow-vermilion transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {state.phase !== 'Open'
-                ? 'Direct Orders Require Open Phase (Use Intent or Reveal)'
-                : `Submit Direct ${side === 'SellBase' ? 'Sell' : 'Buy'} Order`}
+              <span className="font-display text-sm font-bold tracking-tight">
+                {state.phase !== 'Open'
+                  ? 'Direct orders need the open window'
+                  : `Submit direct ${side === 'SellBase' ? 'sell' : 'buy'} order`}
+              </span>
+              <Send
+                className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+                aria-hidden="true"
+              />
             </button>
           </form>
         )}
 
-        {/* TAB B: Sealed Commit-Reveal */}
+        {/* CHANNEL 02 — Sealed commit-reveal */}
         {activeTab === 'commit_reveal' && (
           <div className="space-y-3">
             <form onSubmit={handleCommitSubmit} className="space-y-3">
-              <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-amber-300">
-                    Cryptographic Salt (32-byte secret)
+              <div className="border border-brass-500/50 bg-brass-50/60 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[10px] font-bold uppercase tracking-label text-brass-700">
+                    Salt · 32-byte secret
                   </span>
                   <button
                     type="button"
                     onClick={() => setSalt(generateRandomSaltHex())}
-                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-300 hover:underline"
+                    className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-brass-700 underline decoration-dotted underline-offset-2 hover:text-brass-800"
                   >
                     <RefreshCw className="h-3 w-3" />
-                    <span>New Salt</span>
+                    <span>New salt</span>
                   </button>
                 </div>
-                <div className="truncate rounded bg-[#090D16] px-2.5 py-1.5 font-mono text-[11px] text-slate-300">
+                <div className="mt-2 truncate border border-brass-500/30 bg-paper-bright px-2.5 py-1.5 font-mono text-[10px] text-ink-soft">
                   {salt}
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
-                  <label
-                    htmlFor="bond-eth-input"
-                    className="text-[11px] text-slate-400"
-                  >
-                    Anti-Free-Option Reveal Bond (ETH):
+                <div className="mt-2.5 flex items-center justify-between gap-2">
+                  <label htmlFor="bond-eth-input" className="text-[11px] text-ink-muted">
+                    Reveal bond
                   </label>
-                  <input
-                    id="bond-eth-input"
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    value={bondEthInput}
-                    onChange={(e) => setBondEthInput(e.target.value)}
-                    className="w-24 rounded border border-slate-700 bg-[#090D16] px-2 py-1 text-right font-mono text-xs text-amber-300"
-                  />
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      id="bond-eth-input"
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={bondEthInput}
+                      onChange={(e) => setBondEthInput(e.target.value)}
+                      className="w-20 border border-rule-strong bg-paper-bright px-2 py-1 text-right font-mono text-xs font-bold text-brass-700"
+                    />
+                    <span className="font-mono text-[10px] uppercase tracking-label text-ink-muted">
+                      ETH
+                    </span>
+                  </div>
                 </div>
 
-                <div className="pt-1">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                    keccak256 Commitment Hash
-                  </div>
+                <div className="mt-2.5">
+                  <div className="eyebrow">keccak256 commitment</div>
                   <div
                     data-testid="commitment-hash-preview"
-                    className="mt-0.5 truncate rounded bg-[#090D16] px-2.5 py-1.5 font-mono text-[11px] text-emerald-300"
+                    className="mt-1 truncate border border-rule bg-paper-bright px-2.5 py-1.5 font-mono text-[10px] text-pine-700"
                   >
                     {previewCommitHash}
                   </div>
@@ -643,104 +695,112 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               <button
                 type="submit"
                 disabled={state.phase !== 'Open' || busyAction !== null}
-                className="w-full rounded-xl border border-amber-400/50 bg-amber-500 py-2.5 text-xs font-bold text-slate-950 shadow-glow-amber transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex w-full items-center justify-between bg-brass-500 px-4 py-3 text-left text-paper shadow-glow-brass transition hover:bg-brass-600 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {state.phase === 'Open'
-                  ? `Seal & Lock Commitment (${bondEthNum} ETH Bond)`
-                  : 'Commit Window Closed (Reveal Phase Active)'}
+                <span className="font-display text-sm font-bold tracking-tight">
+                  {state.phase === 'Open'
+                    ? `Seal & lock commitment · ${bondEthNum} ETH`
+                    : 'Commit window closed'}
+                </span>
+                <Lock className="h-4 w-4" aria-hidden="true" />
               </button>
             </form>
 
-            {/* Local Unrevealed Secrets Vault */}
             {(batchSecrets.length > 0 || state.commitments.length > 0) && (
-              <div className="rounded-xl border border-slate-800 bg-[#090D16] p-3 space-y-2">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-200">
-                  <span className="flex items-center gap-1.5">
-                    <KeyRound className="h-3.5 w-3.5 text-amber-400" />
-                    <span>Sealed Commitments (Batch #{state.batch_id})</span>
+              <div className="border border-rule bg-paper-soft p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-label text-ink-soft">
+                    <KeyRound className="h-3.5 w-3.5 text-brass-600" />
+                    Sealed commitments · Batch #{state.batch_id}
                   </span>
-                  <span className="font-mono text-[10px] text-slate-400">
-                    Phase: {state.phase}
-                  </span>
+                  <span className="serial">PHASE {state.phase.toUpperCase()}</span>
                 </div>
 
-                {batchSecrets.map((sec) => {
-                  const chainCommit = state.commitments.find(
-                    (c) => c.commit_id === sec.commit_id,
-                  );
-                  const isRevealed = Boolean(chainCommit?.revealed || sec.revealed);
-                  return (
-                    <div
-                      key={sec.commit_id}
-                      className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-[#111827] px-2.5 py-2 text-xs"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-semibold text-white">
-                          #{sec.commit_id} ·{' '}
-                          {sec.side === 'SellBase'
-                            ? `Sell ${sec.amount_in} WETH`
-                            : `Buy ${sec.amount_in} USDC`}{' '}
-                          @ ${sec.limit_price}
+                <div className="mt-2 divide-y divide-rule/70">
+                  {batchSecrets.map((sec) => {
+                    const chainCommit = state.commitments.find(
+                      (c) => c.commit_id === sec.commit_id,
+                    );
+                    const isRevealed = Boolean(
+                      chainCommit?.revealed || sec.revealed,
+                    );
+                    return (
+                      <div
+                        key={sec.commit_id}
+                        className="flex items-center justify-between gap-2 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold text-ink">
+                            #{sec.commit_id} ·{' '}
+                            {sec.side === 'SellBase'
+                              ? `Sell ${sec.amount_in} WETH`
+                              : `Buy ${sec.amount_in} USDC`}{' '}
+                            @ ${sec.limit_price}
+                          </div>
+                          <div className="truncate font-mono text-[9px] text-ink-faint">
+                            {sec.commitment_hash.slice(0, 18)}… · bond {sec.bond_eth} ETH
+                          </div>
                         </div>
-                        <div className="truncate font-mono text-[10px] text-slate-400">
-                          {sec.commitment_hash.slice(0, 18)}… · Bond {sec.bond_eth} ETH
-                        </div>
+
+                        {isRevealed ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 border border-pine-600/40 bg-pine-50 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-label text-pine-700">
+                            <CheckCircle2 className="h-3 w-3" />
+                            <span>Revealed</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={
+                              state.phase !== 'Reveal' || busyAction !== null
+                            }
+                            onClick={() => onRevealCommit(sec)}
+                            title={
+                              state.phase !== 'Reveal'
+                                ? 'Advance to the reveal window first'
+                                : 'Reveal the secret and refund the bond'
+                            }
+                            className="inline-flex shrink-0 items-center gap-1 bg-brass-500 px-2.5 py-1.5 text-[10px] font-bold text-paper transition hover:bg-brass-600 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Eye className="h-3 w-3" />
+                            <span>Reveal Secret</span>
+                          </button>
+                        )}
                       </div>
+                    );
+                  })}
+                </div>
 
-                      {isRevealed ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/15 px-2 py-1 font-mono text-[10px] font-bold text-emerald-300">
-                          <CheckCircle2 className="h-3 w-3" />
-                          <span>Revealed</span>
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={state.phase !== 'Reveal' || busyAction !== null}
-                          onClick={() => onRevealCommit(sec)}
-                          title={
-                            state.phase !== 'Reveal'
-                              ? 'Click Advance to Reveal in top bar first'
-                              : 'Reveal secret & refund ETH bond'
-                          }
-                          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1.5 text-[11px] font-bold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <Eye className="h-3 w-3" />
-                          <span>Reveal Secret</span>
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {state.phase === 'Open' && batchSecrets.some((s) => !s.revealed) && (
-                  <p className="text-[11px] text-amber-300/90">
-                    Tip: Click <strong>&ldquo;Advance to Reveal&rdquo;</strong> in the top bar to open the reveal window (or settle directly to test unrevealed bond slashing!).
-                  </p>
-                )}
+                {state.phase === 'Open' &&
+                  batchSecrets.some((s) => !s.revealed) && (
+                    <p className="mt-1 border-t border-rule/70 pt-2 text-[10px] leading-relaxed text-brass-700">
+                      Advance to the reveal window to open the secret — or settle
+                      directly to test bond slashing.
+                    </p>
+                  )}
               </div>
             )}
           </div>
         )}
 
-        {/* TAB C: EIP-712 Signed Intent */}
+        {/* CHANNEL 03 — EIP-712 signed intent */}
         {activeTab === 'eip712' && (
           <div className="space-y-3">
-            <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.06] p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-cyan-300">
-                  EIP-712 `SignedOrder` TypedData
+            <div className="border border-cobalt-500/40 bg-cobalt-50/60 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[10px] font-bold uppercase tracking-label text-cobalt-700">
+                  SignedOrder typed data
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowTypedJson(!showTypedJson)}
-                  className="text-[11px] font-semibold text-cyan-300 hover:underline"
+                  className="font-mono text-[10px] font-semibold text-cobalt-700 underline decoration-dotted underline-offset-2 hover:text-cobalt-800"
                 >
                   {showTypedJson ? 'Hide JSON' : 'Inspect JSON'}
                 </button>
               </div>
 
               {showTypedJson && (
-                <pre className="max-h-40 overflow-auto rounded bg-[#090D16] p-2 font-mono text-[10px] text-slate-300">
+                <pre className="mt-2 max-h-40 overflow-auto border border-cobalt-500/30 bg-paper-bright p-2 font-mono text-[9px] leading-relaxed text-ink-soft">
                   {JSON.stringify(eip712Payload, null, 2)}
                 </pre>
               )}
@@ -748,16 +808,17 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               {signedArtifact && (
                 <div
                   data-testid="eip712-signature-box"
-                  className="space-y-1 rounded-lg border border-emerald-500/30 bg-[#090D16] p-2.5 font-mono text-[10px]"
+                  className="mt-2 space-y-1 border border-cobalt-500/30 bg-paper-bright p-2.5 font-mono text-[9px]"
                 >
-                  <div className="flex justify-between text-slate-400">
-                    <span>Recovered Signer:</span>
-                    <span className="text-emerald-300">
-                      {shortenAddress(signedArtifact.trader)} (nonce #{signedArtifact.nonce})
+                  <div className="flex justify-between gap-2 text-ink-muted">
+                    <span>Recovered signer</span>
+                    <span className="text-pine-700">
+                      {shortenAddress(signedArtifact.trader)} · nonce #
+                      {signedArtifact.nonce}
                     </span>
                   </div>
-                  <div className="truncate text-cyan-300">
-                    Sig: {signedArtifact.signature}
+                  <div className="truncate text-cobalt-700">
+                    Sig {signedArtifact.signature}
                   </div>
                 </div>
               )}
@@ -768,7 +829,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                 type="button"
                 disabled={busyAction !== null}
                 onClick={handleSignIntent}
-                className="rounded-xl border border-cyan-400/50 bg-cyan-500/15 py-2.5 text-xs font-bold text-cyan-200 transition hover:bg-cyan-500/25 disabled:opacity-40"
+                className="border border-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-cobalt-700 transition hover:bg-cobalt-50 disabled:opacity-40"
               >
                 1. Sign EIP-712 Intent
               </button>
@@ -776,7 +837,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                 type="button"
                 disabled={!signedArtifact || busyAction !== null}
                 onClick={handleSubmitIntent}
-                className="rounded-xl bg-cyan-400 py-2.5 text-xs font-bold text-slate-950 shadow-glow-cyan transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+                className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 2. Submit Signed Intent
               </button>
@@ -787,80 +848,81 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
         {localError && (
           <div
             role="alert"
-            className="flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300"
+            className="flex items-start gap-2 border-l-2 border-vermilion-500 bg-vermilion-50 px-3 py-2 text-[11px] text-vermilion-700"
           >
-            <ShieldAlert className="h-4 w-4 shrink-0" />
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{localError}</span>
           </div>
         )}
 
         {localFeedback && (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
+          <div className="flex items-start gap-2 border-l-2 border-pine-600 bg-pine-50 px-3 py-2 text-[11px] text-pine-700">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{localFeedback}</span>
           </div>
         )}
 
-        {/* Queued Batch Orders Summary */}
-        <div className="border-t border-slate-800 pt-3">
-          <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="font-bold uppercase tracking-wider text-slate-400">
-              Queued in Batch #{state.batch_id}
-            </span>
-            <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-[11px] text-slate-200 tabular-nums">
-              {state.orders.length} Orders · {state.commitments.filter((c) => !c.revealed).length} Sealed
+        {/* Queued ledger */}
+        <div className="border-t border-rule pt-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="eyebrow">Queued in Batch #{state.batch_id}</span>
+            <span className="font-mono text-[10px] text-ink-faint tabular-nums">
+              {state.orders.length} orders ·{' '}
+              {state.commitments.filter((c) => !c.revealed).length} sealed
             </span>
           </div>
 
-          <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
+          <div className="mt-2 max-h-48 overflow-y-auto">
             {state.orders.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-800 py-4 text-center text-xs text-slate-500">
-                No revealed orders in Batch #{state.batch_id} yet. Pick a preset or submit above.
+              <div className="border border-dashed border-rule-strong py-4 text-center text-[11px] text-ink-faint">
+                No revealed orders yet. Load a scenario or submit above.
               </div>
             ) : (
-              state.orders.map((ord, idx) => (
-                <div
-                  key={ord.order_id}
-                  className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-xs ${
-                    ord.is_attacker
-                      ? 'border-rose-500/40 bg-rose-500/10'
-                      : 'border-slate-800/90 bg-[#111827]/70'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-[10px] text-slate-500">
-                      #{idx + 1}
-                    </span>
-                    <span className="truncate font-medium text-slate-200">
-                      {ord.label}
-                    </span>
+              <div className="divide-y divide-rule/70">
+                {state.orders.map((ord, idx) => (
+                  <div
+                    key={ord.order_id}
+                    className={`flex items-center justify-between gap-2 py-1.5 ${
+                      ord.is_attacker ? 'bg-vermilion-50/70' : ''
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="w-5 shrink-0 font-mono text-[9px] text-ink-faint">
+                        {String(idx + 1).padStart(2, '0')}
+                      </span>
+                      <span className="truncate text-[11px] font-medium text-ink">
+                        {ord.label}
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2 font-mono text-[10px] tabular-nums">
+                      <span
+                        className={
+                          ord.side === 'SellBase'
+                            ? 'text-vermilion-600'
+                            : 'text-pine-700'
+                        }
+                      >
+                        {ord.side === 'SellBase'
+                          ? `−${formatToken(ord.amount_in, 2)} WETH`
+                          : `+${formatPrice(ord.amount_in, 0)} USDC`}
+                      </span>
+                      <span className="border border-rule px-1 py-0.5 text-[8px] uppercase tracking-label text-ink-faint">
+                        {ord.submission_type === 'Eip712Intent'
+                          ? '712'
+                          : ord.submission_type === 'CommitReveal'
+                            ? 'C-R'
+                            : 'DIR'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 font-mono text-[11px] tabular-nums">
-                    <span
-                      className={
-                        ord.side === 'SellBase'
-                          ? 'text-emerald-300'
-                          : 'text-cyan-300'
-                      }
-                    >
-                      {ord.side === 'SellBase'
-                        ? `-${formatToken(ord.amount_in, 2)} WETH`
-                        : `+Buy ${formatPrice(ord.amount_in, 0)} USDC`}
-                    </span>
-                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
-                      {ord.submission_type === 'Eip712Intent'
-                        ? '712'
-                        : ord.submission_type === 'CommitReveal'
-                          ? 'C-R'
-                          : 'DIR'}
-                    </span>
-                  </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
           </div>
         </div>
       </div>
+
+      <div className="perforation border-t border-rule bg-paper-soft" />
     </section>
   );
 };

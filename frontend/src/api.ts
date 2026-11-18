@@ -222,16 +222,24 @@ async function requestJson<T>(
     );
   }
 
-  // Vite dev proxy returns 502/503/504 or 500 with empty/proxy text when target 127.0.0.1:3001 is down
+  // Vite dev proxy returns 502/503/504, or 500/404 with empty or HTML proxy text,
+  // when the Rust backend at 127.0.0.1:3001 is down. Treat those as unreachable
+  // so the browser fallback engine can take over without surfacing a raw status.
   if (response.status === 502 || response.status === 503 || response.status === 504) {
     throw new BackendUnreachableError(`Gateway status ${response.status}`);
   }
 
   const text = await response.text();
   if (!response.ok) {
+    const proxyFailureText =
+      text.trim() === '' ||
+      text.includes('<!DOCTYPE') ||
+      text.includes('Cannot ') ||
+      text.includes('ECONNREFUSED') ||
+      text.toLowerCase().includes('proxy');
     if (
-      response.status === 404 &&
-      (text.includes('Cannot ') || text.trim() === '' || text.includes('<!DOCTYPE'))
+      (response.status === 404 || response.status === 500) &&
+      proxyFailureText
     ) {
       throw new BackendUnreachableError('API route not mounted');
     }

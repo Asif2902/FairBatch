@@ -153,21 +153,24 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="contract-config-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/65 p-4 backdrop-blur-sm"
     >
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700/80 bg-[#0D1321] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <Globe className="h-5 w-5 text-cyan-400" aria-hidden="true" />
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto border border-ink bg-paper-bright shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b-2 border-ink bg-paper px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-ink bg-ink text-paper">
+              <Globe className="h-4 w-4" aria-hidden="true" />
+            </div>
             <div>
+              <div className="eyebrow">Runtime configuration</div>
               <h2
                 id="contract-config-modal-title"
-                className="text-base font-bold text-white"
+                className="mt-1 font-display text-xl font-bold leading-tight tracking-tight text-ink"
               >
-                Contract &amp; Network Readiness Configuration
+                Contract &amp; network readiness
               </h2>
-              <p className="text-xs text-slate-400">
-                Plug in deployed Sepolia, Hoodi, Anvil, or Mainnet contract addresses at runtime
+              <p className="mt-0.5 text-[11px] text-ink-muted">
+                Plug in deployed Sepolia, Hoodi, Anvil, or Mainnet addresses at runtime.
               </p>
             </div>
           </div>
@@ -175,21 +178,21 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close Contract Configuration Modal"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+            className="border border-rule-strong p-1.5 text-ink-muted transition hover:border-ink hover:text-ink"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="space-y-5 p-6">
-          {/* Fe 26.5 Artifacts & Wallet Bar */}
+        <div className="space-y-4 p-5">
+          {/* Build artifacts & injected wallet */}
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-slate-800 bg-[#111827] p-3.5">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-                <FileCode2 className="h-4 w-4 text-emerald-400" />
-                <span>Compiled Fe 26.5.0 Artifacts (`out/`)</span>
+            <div className="border border-rule bg-paper-soft p-3">
+              <div className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-ink-soft">
+                <FileCode2 className="h-3.5 w-3.5 text-pine-700" />
+                <span>Fe 26.5.0 artifacts (out/)</span>
               </div>
-              <p className="mt-1 font-mono text-[11px] text-slate-400">
+              <p className="mt-1 font-mono text-[10px] text-ink-muted">
                 {health.fe_artifacts_present
                   ? `Detected (${health.fe_artifacts.length || 2} artifacts)`
                   : 'Pending `fe build` output'}
@@ -199,7 +202,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   {health.fe_artifacts.slice(0, 4).map((art) => (
                     <span
                       key={art}
-                      className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300"
+                      className="border border-pine-600/30 bg-pine-50 px-1.5 py-0.5 font-mono text-[9px] text-pine-700"
                     >
                       {art}
                     </span>
@@ -208,27 +211,27 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
               )}
             </div>
 
-            <div className="rounded-xl border border-slate-800 bg-[#111827] p-3.5">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
-                  <Wallet className="h-4 w-4 text-cyan-400" />
-                  <span>EIP-1193 Browser Wallet</span>
+            <div className="border border-rule bg-paper-soft p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-ink-soft">
+                  <Wallet className="h-3.5 w-3.5 text-cobalt-700" />
+                  <span>EIP-1193 browser wallet</span>
                 </span>
                 {browserWalletAddress && (
-                  <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300">
+                  <span className="border border-pine-600/30 bg-pine-50 px-1.5 py-0.5 font-mono text-[9px] text-pine-700">
                     {shortenAddress(browserWalletAddress)}
                   </span>
                 )}
               </div>
-              <p className="mt-1 text-[11px] text-slate-400">
-                Sign real `eth_signTypedData_v4` intents via MetaMask/Rabby or use Demo Wallets.
+              <p className="mt-1 text-[10px] leading-snug text-ink-muted">
+                Sign real `eth_signTypedData_v4` intents via MetaMask/Rabby, or use demo wallets.
               </p>
               <button
                 type="button"
                 onClick={handleConnectWallet}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-3 py-1 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/25"
+                className="mt-2 inline-flex items-center gap-1.5 border border-cobalt-600/40 bg-cobalt-50 px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-cobalt-700 transition hover:bg-cobalt-100"
               >
-                <Link2 className="h-3.5 w-3.5" />
+                <Link2 className="h-3 w-3" />
                 <span>
                   {browserWalletAddress ? 'Reconnect Wallet' : 'Connect Injected Wallet'}
                 </span>
@@ -236,22 +239,22 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
             </div>
           </div>
 
-          {/* Cancun / EIP-1153 Notice */}
-          <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+          {/* Cancun / EIP-1153 notice */}
+          <div className="flex items-start gap-2.5 border-l-2 border-brass-500 bg-brass-50 px-3 py-2.5 text-[10.5px] leading-relaxed text-brass-900">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brass-700" />
             <div>
-              <span className="font-semibold">EVM Cancun Opcode Compatibility:</span>{' '}
-              FairBatch uses Fe 26.5 `std::evm::mutex::Mutex` (`TLOAD`/`TSTORE`, EIP-1153) and `PUSH0` (EIP-3855).{' '}
-              <strong>Mainnet, Sepolia, Hoodi, and Anvil</strong> support Cancun natively; deprecated Goerli/Holesky testnets are sunset.
+              <span className="font-bold">EVM Cancun opcode compatibility:</span>{' '}
+              FairBatch uses Fe 26.5 <code>std::evm::mutex::Mutex</code> (`TLOAD`/`TSTORE`,
+              EIP-1153) and `PUSH0` (EIP-3855).{' '}
+              <strong>Mainnet, Sepolia, Hoodi, and Anvil</strong> support Cancun natively;
+              deprecated Goerli/Holesky testnets are sunset.
             </div>
           </div>
 
-          {/* Quick Network Presets */}
+          {/* Network templates */}
           <div>
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Quick Network Templates
-            </span>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <span className="eyebrow mb-1.5 block">Quick network templates</span>
+            <div className="grid grid-cols-2 gap-px border border-rule bg-rule sm:grid-cols-4">
               {NETWORK_PRESETS.map((preset) => (
                 <button
                   key={preset.chainId}
@@ -263,10 +266,12 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                     setBaseTokenAddr(preset.baseToken);
                     setQuoteTokenAddr(preset.quoteToken);
                   }}
-                  className="rounded-lg border border-slate-700/80 bg-[#111827] px-2.5 py-2 text-left text-[11px] font-medium text-slate-200 transition hover:border-cyan-500/50 hover:bg-slate-800"
+                  className="bg-paper-bright px-2.5 py-2 text-left transition hover:bg-paper-soft"
                 >
-                  <div className="font-semibold text-white">{preset.label.split(' (')[0]}</div>
-                  <div className="font-mono text-[10px] text-slate-400">
+                  <div className="font-display text-[11px] font-bold text-ink">
+                    {preset.label.split(' (')[0]}
+                  </div>
+                  <div className="mt-0.5 font-mono text-[9px] text-ink-muted">
                     Chain ID: {preset.chainId}
                   </div>
                 </button>
@@ -274,14 +279,14 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-3.5">
+          <form onSubmit={handleSubmit} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="sm:col-span-2">
                 <label
                   htmlFor="cfg-rpc-url"
-                  className="mb-1 block text-xs font-medium text-slate-300"
+                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  JSON-RPC Endpoint (`RPC_URL`)
+                  JSON-RPC endpoint (`RPC_URL`)
                 </label>
                 <input
                   id="cfg-rpc-url"
@@ -289,13 +294,13 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   value={rpcUrl}
                   onChange={(e) => setRpcUrl(e.target.value)}
                   placeholder="https://ethereum-sepolia-rpc.publicnode.com"
-                  className="w-full rounded-lg border border-slate-700 bg-[#090D16] px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
                 />
               </div>
               <div>
                 <label
                   htmlFor="cfg-chain-id"
-                  className="mb-1 block text-xs font-medium text-slate-300"
+                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
                   Chain ID (`CHAIN_ID`)
                 </label>
@@ -304,7 +309,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   type="number"
                   value={chainId}
                   onChange={(e) => setChainId(e.target.value)}
-                  className="w-full rounded-lg border border-slate-700 bg-[#090D16] px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
                 />
               </div>
             </div>
@@ -312,7 +317,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
             <div>
               <label
                 htmlFor="cfg-fairbatch-addr"
-                className="mb-1 block text-xs font-medium text-slate-300"
+                className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
               >
                 FairBatch Contract Address (`FAIRBATCH_ADDRESS`)
               </label>
@@ -322,7 +327,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                 value={fairBatchAddr}
                 onChange={(e) => setFairBatchAddr(e.target.value)}
                 placeholder="0x0000000000000000000000000000000000000000"
-                className="w-full rounded-lg border border-slate-700 bg-[#090D16] px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
               />
             </div>
 
@@ -330,60 +335,60 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
               <div>
                 <label
                   htmlFor="cfg-base-addr"
-                  className="mb-1 block text-xs font-medium text-slate-300"
+                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  Base Token WETH (18 decimals)
+                  Base token WETH (18 decimals)
                 </label>
                 <input
                   id="cfg-base-addr"
                   type="text"
                   value={baseTokenAddr}
                   onChange={(e) => setBaseTokenAddr(e.target.value)}
-                  className="w-full rounded-lg border border-slate-700 bg-[#090D16] px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
                 />
               </div>
               <div>
                 <label
                   htmlFor="cfg-quote-addr"
-                  className="mb-1 block text-xs font-medium text-slate-300"
+                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  Quote Token USDC (6 decimals)
+                  Quote token USDC (6 decimals)
                 </label>
                 <input
                   id="cfg-quote-addr"
                   type="text"
                   value={quoteTokenAddr}
                   onChange={(e) => setQuoteTokenAddr(e.target.value)}
-                  className="w-full rounded-lg border border-slate-700 bg-[#090D16] px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
                 />
               </div>
             </div>
 
             {statusMsg && (
-              <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <div className="flex items-center gap-2 border-l-2 border-pine-600 bg-pine-50 px-3 py-2 text-[10.5px] text-pine-800">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                 <span>{statusMsg}</span>
               </div>
             )}
 
             {walletErr && (
-              <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <div className="border-l-2 border-vermilion-500 bg-vermilion-50 px-3 py-2 text-[10.5px] text-vermilion-800">
                 {walletErr}
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex items-center justify-end gap-2 border-t border-rule pt-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                className="border border-rule-strong px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
               >
                 Close
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-50"
+                className="border border-pine-700 bg-pine-600 px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-paper transition hover:bg-pine-700 disabled:opacity-50"
               >
                 {saving ? 'Applying…' : 'Save Contract Config'}
               </button>

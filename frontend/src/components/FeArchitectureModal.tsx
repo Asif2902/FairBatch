@@ -155,23 +155,25 @@ export const FeArchitectureModal: React.FC<FeArchitectureModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="fe-arch-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/65 p-4 backdrop-blur-sm"
     >
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-cyan-500/30 bg-[#0D1321] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-2">
-              <Code2 className="h-5 w-5 text-cyan-400" aria-hidden="true" />
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto border border-ink bg-paper-bright shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b-2 border-ink bg-paper px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-ink bg-ink text-paper">
+              <Code2 className="h-4 w-4" aria-hidden="true" />
             </div>
             <div>
+              <div className="eyebrow">Architecture inspector</div>
               <h2
                 id="fe-arch-modal-title"
-                className="text-base font-bold text-white"
+                className="mt-1 font-display text-xl font-bold leading-tight tracking-tight text-ink"
               >
-                Why Fe 26.5.0? — Compiler-Verified FairBatch Architecture
+                Why Fe 26.5.0?
               </h2>
-              <p className="text-xs text-slate-400">
-                Capability-based `uses` effects, `Wad` fixed-point math, EIP-1153 `Mutex`, and `EIP-712` intents
+              <p className="mt-0.5 text-[11px] text-ink-muted">
+                Capability-based <code>uses</code> effects, <code>Wad</code> fixed-point
+                math, EIP-1153 <code>Mutex</code>, and EIP-712 intents.
               </p>
             </div>
           </div>
@@ -179,15 +181,15 @@ export const FeArchitectureModal: React.FC<FeArchitectureModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close Fe Architecture Inspector"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+            className="border border-rule-strong p-1.5 text-ink-muted transition hover:border-ink hover:text-ink"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="p-6">
-          {/* Tab Strip */}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="p-5">
+          {/* Proof tabs */}
+          <div className="grid grid-cols-2 gap-px border border-rule bg-rule sm:grid-cols-4">
             {ARCH_TABS.map((tab) => {
               const selected = tab.id === activeTabId;
               return (
@@ -195,14 +197,23 @@ export const FeArchitectureModal: React.FC<FeArchitectureModalProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTabId(tab.id)}
-                  className={`rounded-xl border p-2.5 text-left transition ${
+                  className={`relative px-2.5 py-2 text-left transition ${
                     selected
-                      ? 'border-cyan-400/60 bg-cyan-500/15 text-white'
-                      : 'border-slate-800 bg-[#111827] text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                      ? 'bg-ink text-paper'
+                      : 'bg-paper-bright text-ink-muted hover:bg-paper-soft hover:text-ink'
                   }`}
                 >
-                  <div className="text-xs font-bold">{tab.label}</div>
-                  <div className="mt-0.5 font-mono text-[10px] text-cyan-300">
+                  {selected && (
+                    <span className="absolute inset-x-0 top-0 h-[2px] bg-vermilion-500" />
+                  )}
+                  <div className="font-display text-[11px] font-bold leading-tight">
+                    {tab.label}
+                  </div>
+                  <div
+                    className={`mt-1 font-mono text-[8.5px] uppercase tracking-[0.06em] ${
+                      selected ? 'text-paper/55' : 'text-ink-faint'
+                    }`}
+                  >
                     {tab.badge}
                   </div>
                 </button>
@@ -211,47 +222,69 @@ export const FeArchitectureModal: React.FC<FeArchitectureModalProps> = ({
           </div>
 
           <div className="mt-4 space-y-4">
-            <p className="text-xs leading-relaxed text-slate-300">
+            <p className="border-l-2 border-vermilion-500 pl-3 text-[11.5px] leading-relaxed text-ink-soft">
               {currentTab.summary}
             </p>
 
-            <pre className="overflow-x-auto rounded-xl border border-slate-800 bg-[#070A12] p-4 font-mono text-xs leading-relaxed text-emerald-300">
-              <code>{currentTab.code}</code>
-            </pre>
-
-            <div className="rounded-xl border border-slate-800 bg-[#111827]/80 p-4">
-              <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300">
-                <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                <span>Security &amp; Mechanism Guarantees</span>
+            <div className="border border-ink bg-ink">
+              <div className="flex items-center justify-between gap-2 border-b border-paper/15 px-3 py-1.5">
+                <span className="font-mono text-[8.5px] font-bold uppercase tracking-label text-paper/60">
+                  {currentTab.label}
+                </span>
+                <span className="font-mono text-[8.5px] uppercase tracking-[0.08em] text-paper/40">
+                  {currentTab.badge}
+                </span>
               </div>
-              <ul className="space-y-2">
+              <pre className="overflow-x-auto p-4 font-mono text-[10.5px] leading-relaxed text-pine-200">
+                <code>{currentTab.code}</code>
+              </pre>
+            </div>
+
+            <div className="border border-rule bg-paper-soft p-3.5">
+              <div className="mb-2 flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-ink-soft">
+                <ShieldCheck className="h-3.5 w-3.5 text-pine-700" />
+                <span>Security &amp; mechanism guarantees</span>
+              </div>
+              <ul className="space-y-1.5">
                 {currentTab.highlights.map((item) => (
                   <li
                     key={item}
-                    className="flex items-start gap-2 text-xs text-slate-300"
+                    className="flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-soft"
                   >
-                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-pine-700" />
                     <span>{item}</span>
                   </li>
                 ))}
               </ul>
             </div>
 
-            <div className="grid grid-cols-3 gap-2.5 text-center text-[11px]">
-              <div className="rounded-lg border border-slate-800 bg-[#090D16] p-2.5">
-                <Cpu className="mx-auto mb-1 h-4 w-4 text-emerald-400" />
-                <div className="font-bold text-white">Pure Pricing</div>
-                <div className="text-slate-400">Zero `uses` side effects</div>
+            <div className="grid grid-cols-3 gap-px border border-rule bg-rule text-center">
+              <div className="bg-paper-bright p-2.5">
+                <Cpu className="mx-auto mb-1 h-3.5 w-3.5 text-pine-700" />
+                <div className="font-display text-[11px] font-bold text-ink">
+                  Pure Pricing
+                </div>
+                <div className="mt-0.5 font-mono text-[8.5px] text-ink-muted">
+                  Zero `uses` side effects
+                </div>
               </div>
-              <div className="rounded-lg border border-slate-800 bg-[#090D16] p-2.5">
-                <Scale className="mx-auto mb-1 h-4 w-4 text-cyan-400" />
-                <div className="font-bold text-white">Floor Solvency</div>
-                <div className="text-slate-400">512-bit `mul_div`</div>
+              <div className="bg-paper-bright p-2.5">
+                <Scale className="mx-auto mb-1 h-3.5 w-3.5 text-cobalt-700" />
+                <div className="font-display text-[11px] font-bold text-ink">
+                  Floor Solvency
+                </div>
+                <div className="mt-0.5 font-mono text-[8.5px] text-ink-muted">
+                  512-bit `mul_div`
+                </div>
               </div>
-              <div className="rounded-lg border border-slate-800 bg-[#090D16] p-2.5">
-                <Lock className="mx-auto mb-1 h-4 w-4 text-amber-400" />
-                <div className="font-bold text-white">Cancun Ready</div>
-                <div className="text-slate-400">EIP-1153 `TSTORE`</div>
+              <div className="bg-paper-bright p-2.5">
+                <Lock className="mx-auto mb-1 h-3.5 w-3.5 text-brass-700" />
+                <div className="font-display text-[11px] font-bold text-ink">
+                  Cancun Ready
+                </div>
+                <div className="mt-0.5 font-mono text-[8.5px] text-ink-muted">
+                  EIP-1153 `TSTORE`
+                </div>
               </div>
             </div>
           </div>

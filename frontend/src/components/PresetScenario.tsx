@@ -35,7 +35,7 @@ const PRESETS: PresetMeta[] = [
     badge: 'Flagship Proof',
     callout:
       'Order-Permutation Invariance: All 5 sellers clear at the identical uniform price p* = 2,727.27 USDC/WETH regardless of tx arrival position (#1 through #5).',
-    icon: <Users className="h-4 w-4 text-emerald-400" aria-hidden="true" />,
+    icon: <Users className="h-3.5 w-3.5" aria-hidden="true" />,
   },
   {
     id: 'cow_balanced',
@@ -44,7 +44,7 @@ const PRESETS: PresetMeta[] = [
     badge: '100% P2P Match',
     callout:
       'Zero Pool Impact: Opposing flow crosses 100% peer-to-peer at spot p* = 3,000.00 USDC/WETH with 0% price impact, $0 AMM fee, and untouched reserves.',
-    icon: <GitMerge className="h-4 w-4 text-cyan-400" aria-hidden="true" />,
+    icon: <GitMerge className="h-3.5 w-3.5" aria-hidden="true" />,
   },
   {
     id: 'marginal_pro_rata',
@@ -53,7 +53,7 @@ const PRESETS: PresetMeta[] = [
     badge: 'Limit Pinning',
     callout:
       'Exact Limit Equilibrium: Clearing pins p* = 2,800.00 USDC/WETH — strict ITM orders fill 100%, marginal $2,800 sellers fill pro-rata (floor-rounded), OTM Dave gets 100% refund.',
-    icon: <Layers className="h-4 w-4 text-amber-400" aria-hidden="true" />,
+    icon: <Layers className="h-3.5 w-3.5" aria-hidden="true" />,
   },
   {
     id: 'whale_imbalance',
@@ -62,7 +62,7 @@ const PRESETS: PresetMeta[] = [
     badge: 'LP Protection',
     callout:
       'Liquidity-Nondecreasing (LND) Invariant: FM-AMM clears net imbalance at post-trade marginal price so R_x′ · R_y′ > R_x · R_y, capturing surplus for LPs instead of LVR arbitrageurs.',
-    icon: <TrendingUp className="h-4 w-4 text-violet-400" aria-hidden="true" />,
+    icon: <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />,
   },
 ];
 
@@ -79,65 +79,19 @@ export const PresetScenario: React.FC<PresetScenarioProps> = ({
   return (
     <section
       aria-label="Judge Scenario Presets and MEV Attack Simulator"
-      className="rounded-2xl border border-slate-800/90 bg-[#0D1321]/90 p-4 shadow-xl"
+      className="ledger-panel overflow-hidden"
     >
-      <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            1-Click Interactive Judge Scenarios
-          </h2>
-        </div>
-
-        {/* MEV Sandwich Bot Toggle */}
-        <div
-          className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2 transition ${
-            includeSandwichBot
-              ? 'border-rose-500/50 bg-rose-500/15 shadow-glow-rose'
-              : 'border-slate-700/80 bg-[#111827]'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {includeSandwichBot ? (
-              <Flame className="h-4 w-4 text-rose-400" aria-hidden="true" />
-            ) : (
-              <ShieldAlert className="h-4 w-4 text-slate-400" aria-hidden="true" />
-            )}
-            <div>
-              <div className="text-xs font-bold text-white">
-                Inject MEV Sandwich Bot
-              </div>
-              <div className="text-[11px] text-slate-400">
-                {includeSandwichBot
-                  ? 'Attacker Front-Run + Back-Run Active ($0.00 profit on FairBatch!)'
-                  : 'Toggle to inject attacker front-run + back-run into batch'}
-              </div>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            role="switch"
-            aria-checked={includeSandwichBot}
-            aria-label="Inject MEV Sandwich Bot"
-            disabled={busy}
-            onClick={() => onToggleSandwichBot(!includeSandwichBot)}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-rose-400/60 disabled:opacity-50 ${
-              includeSandwichBot ? 'bg-rose-500' : 'bg-slate-700'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                includeSandwichBot ? 'translate-x-6' : 'translate-x-1'
-              }`}
-            />
-          </button>
-        </div>
+      <div className="flex items-center justify-between gap-2 border-b border-rule px-3 py-2">
+        <h2 className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-label text-ink-soft">
+          <Sparkles className="h-3.5 w-3.5 text-vermilion-600" aria-hidden="true" />
+          Scenario book
+        </h2>
+        <span className="serial">04 proofs</span>
       </div>
 
-      {/* 4 Scenario Buttons */}
-      <div className="mt-3.5 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-        {PRESETS.map((preset) => {
+      {/* Four indexed proofs, set as a ruled table */}
+      <div className="grid grid-cols-2 gap-px bg-rule">
+        {PRESETS.map((preset, idx) => {
           const isSelected = preset.id === activePreset;
           return (
             <button
@@ -146,55 +100,127 @@ export const PresetScenario: React.FC<PresetScenarioProps> = ({
               disabled={busy}
               onClick={() => onSelectPreset(preset.id)}
               aria-pressed={isSelected}
-              className={`group flex flex-col justify-between rounded-xl border p-3 text-left transition ${
+              className={`group relative flex min-h-[92px] flex-col justify-between gap-2 p-2.5 text-left transition disabled:opacity-50 ${
                 isSelected
-                  ? 'border-emerald-500/60 bg-gradient-to-br from-emerald-500/15 via-[#111827] to-[#111827] shadow-glow-emerald'
-                  : 'border-slate-800 bg-[#111827]/80 hover:border-slate-700 hover:bg-[#151E31]'
+                  ? 'bg-ink text-paper'
+                  : 'bg-paper-bright text-ink hover:bg-paper-soft'
               }`}
             >
-              <div className="flex w-full items-start justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg border border-slate-700/80 bg-[#090D16] p-1.5">
+              {isSelected && (
+                <span className="absolute inset-x-0 top-0 h-[2px] bg-vermilion-500" />
+              )}
+              <div className="flex w-full items-start justify-between gap-1.5">
+                <span
+                  className={`flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label ${
+                    isSelected ? 'text-paper/60' : 'text-ink-faint'
+                  }`}
+                >
+                  <span
+                    className={`flex h-5 w-5 items-center justify-center border ${
+                      isSelected
+                        ? 'border-paper/30 text-paper'
+                        : 'border-rule text-ink-muted'
+                    }`}
+                  >
                     {preset.icon}
                   </span>
-                  <span className="text-xs font-bold text-white group-hover:text-emerald-200">
-                    {preset.title}
-                  </span>
-                </div>
+                  {String(idx + 1).padStart(2, '0')}
+                </span>
                 <span
-                  className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                  className={`shrink-0 border px-1 py-0.5 font-mono text-[8px] font-bold uppercase tracking-[0.08em] ${
                     isSelected
-                      ? 'bg-emerald-500/20 text-emerald-300'
-                      : 'bg-slate-800 text-slate-400'
+                      ? 'border-vermilion-400/60 bg-vermilion-500/20 text-vermilion-200'
+                      : 'border-rule bg-paper-soft text-ink-muted'
                   }`}
                 >
                   {preset.badge}
                 </span>
               </div>
-              <p className="mt-2 font-mono text-[11px] text-slate-400">
-                {preset.subtitle}
-              </p>
+
+              <div>
+                <span className="block text-[11.5px] font-bold leading-[1.25]">
+                  {preset.title}
+                </span>
+                <span
+                  className={`mt-1 block font-mono text-[9px] leading-snug ${
+                    isSelected ? 'text-paper/55' : 'text-ink-faint'
+                  }`}
+                >
+                  {preset.subtitle}
+                </span>
+              </div>
             </button>
           );
         })}
       </div>
 
-      {/* Interactive Judge Walkthrough Callout */}
+      {/* Mechanism proof footnote for the loaded scenario */}
       <div
         data-testid="scenario-walkthrough-callout"
-        className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] px-3.5 py-2 text-xs text-slate-200"
+        className="border-t border-rule bg-paper-soft px-3 py-2 text-[10.5px] leading-relaxed text-ink-soft"
       >
-        <div>
-          <span className="mr-2 rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase text-emerald-300">
-            Mechanism Proof
-          </span>
-          <span>{currentMeta.callout}</span>
-        </div>
+        <span className="mr-1.5 border border-pine-600/40 bg-pine-50 px-1 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-label text-pine-700">
+          Mechanism proof
+        </span>
+        <span>{currentMeta.callout}</span>
         {includeSandwichBot && (
-          <span className="rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 font-mono text-[11px] font-semibold text-rose-300">
-            Sandwich Attack Active: Compare Sequential AMM vs FairBatch below
+          <span className="mt-1.5 block border-l-2 border-vermilion-500 bg-vermilion-50 px-2 py-1 font-mono text-[9px] font-semibold text-vermilion-700">
+            Sandwich attack active — compare sequential AMM vs FairBatch below.
           </span>
         )}
+      </div>
+
+      {/* MEV attacker injection */}
+      <div
+        className={`flex items-center justify-between gap-3 border-t px-3 py-2.5 transition ${
+          includeSandwichBot
+            ? 'border-vermilion-500/50 bg-vermilion-50/70'
+            : 'border-rule bg-paper-bright'
+        }`}
+      >
+        <div className="flex min-w-0 items-start gap-2">
+          {includeSandwichBot ? (
+            <Flame
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-vermilion-600"
+              aria-hidden="true"
+            />
+          ) : (
+            <ShieldAlert
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-faint"
+              aria-hidden="true"
+            />
+          )}
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold leading-tight text-ink">
+              Inject MEV Sandwich Bot
+            </div>
+            <div className="mt-0.5 text-[9.5px] leading-snug text-ink-muted">
+              {includeSandwichBot
+                ? 'Attacker front-run + back-run active — $0.00 profit on FairBatch.'
+                : 'Inject an attacker front-run + back-run into the batch.'}
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          role="switch"
+          aria-checked={includeSandwichBot}
+          aria-label="Inject MEV Sandwich Bot"
+          disabled={busy}
+          onClick={() => onToggleSandwichBot(!includeSandwichBot)}
+          className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer items-center border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-vermilion-500 disabled:opacity-50 ${
+            includeSandwichBot
+              ? 'border-vermilion-600 bg-vermilion-500'
+              : 'border-rule-strong bg-paper-deep'
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform bg-paper-bright shadow-sm transition-transform ${
+              includeSandwichBot ? 'translate-x-[22px]' : 'translate-x-[3px]'
+            }`}
+          />
+        </button>
       </div>
     </section>
   );

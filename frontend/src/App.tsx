@@ -465,7 +465,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col text-slate-100">
+    <div className="flex min-h-screen flex-col text-ink">
       <TopCommandBar
         state={state}
         health={health}
@@ -481,49 +481,47 @@ export const App: React.FC = () => {
         onOpenFeModal={() => setIsFeModalOpen(true)}
       />
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 space-y-4 px-4 py-4 lg:px-6">
+      <main className="mx-auto w-full max-w-[1560px] flex-1 px-4 py-5 lg:px-8">
         {bannerMsg && (
           <div
             role="status"
-            className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs font-medium ${
+            className={`mb-4 flex items-center justify-between gap-3 border-l-2 px-3 py-2 text-[11px] font-medium ${
               bannerMsg.kind === 'error'
-                ? 'border-rose-500/40 bg-rose-500/15 text-rose-200'
-                : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200'
+                ? 'border-vermilion-500 bg-vermilion-50 text-vermilion-800'
+                : 'border-pine-600 bg-pine-50 text-pine-800'
             }`}
           >
             <div className="flex items-center gap-2">
               {bannerMsg.kind === 'error' ? (
-                <ShieldAlert className="h-4 w-4 text-rose-400 shrink-0" />
+                <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-vermilion-600" />
               ) : (
-                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-pine-700" />
               )}
               <span>{bannerMsg.text}</span>
             </div>
             <button
               type="button"
               onClick={() => setBannerMsg(null)}
-              className="text-[11px] opacity-75 hover:opacity-100"
+              className="shrink-0 border border-current px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-label opacity-60 transition hover:opacity-100"
             >
               Dismiss
             </button>
           </div>
         )}
 
-        {/* 1-Click Scenario Bar + MEV Sandwich Toggle */}
-        <PresetScenario
-          activePreset={activePreset}
-          includeSandwichBot={includeSandwichBot}
-          busy={busyAction !== null}
-          onSelectPreset={(preset) => void handleLoadPreset(preset)}
-          onToggleSandwichBot={(enabled) =>
-            void handleLoadPreset(activePreset, enabled)
-          }
-        />
+        {/* Swap desk: the scenario book and order slip sit together in the left column */}
+        <div className="grid items-start gap-5 lg:grid-cols-12">
+          <div className="min-w-0 space-y-4 lg:col-span-4">
+            <PresetScenario
+              activePreset={activePreset}
+              includeSandwichBot={includeSandwichBot}
+              busy={busyAction !== null}
+              onSelectPreset={(preset) => void handleLoadPreset(preset)}
+              onToggleSandwichBot={(enabled) =>
+                void handleLoadPreset(activePreset, enabled)
+              }
+            />
 
-        {/* Core 12-Column Exchange Terminal Grid */}
-        <div className="grid gap-4 lg:grid-cols-12 items-start">
-          {/* Left 4 Columns: 3-Mode Order Entry Ticket & Active Batch Queue */}
-          <div className="lg:col-span-4 space-y-4">
             <OrderTicket
               state={state}
               health={health}
@@ -538,8 +536,8 @@ export const App: React.FC = () => {
             />
           </div>
 
-          {/* Right 8 Columns: Supply/Demand Visualizer, MEV Receipt Audit, Pull Claims */}
-          <div className="lg:col-span-8 space-y-4">
+          {/* The public record: clearing chart, execution audit, claims ledger */}
+          <div className="min-w-0 space-y-5 lg:col-span-8">
             <PriceChart
               settlement={displayedSettlement}
               isLivePreview={selectedViewBatchId === 'live'}
@@ -552,26 +550,35 @@ export const App: React.FC = () => {
               activeBatchId={state.batch_id}
               onSelectViewBatch={setSelectedViewBatchId}
             />
-
-            <ClaimsPanel
-              claimable={state.claimable}
-              selectedTraderAddress={selectedTraderAddress}
-              busyAction={busyAction}
-              onClaimSingle={handleClaimSingle}
-              onMulticallClaimAll={handleMulticallClaimAll}
-            />
           </div>
+        </div>
+
+        <div className="mt-5">
+          <ClaimsPanel
+            claimable={state.claimable}
+            selectedTraderAddress={selectedTraderAddress}
+            busyAction={busyAction}
+            onClaimSingle={handleClaimSingle}
+            onMulticallClaimAll={handleMulticallClaimAll}
+          />
         </div>
       </main>
 
-      <footer className="mt-8 border-t border-slate-800/80 bg-[#070A12] py-3 text-center text-[11px] text-slate-500">
-        FairBatch Exchange · Built natively in{' '}
-        <span className="font-mono text-cyan-400">Fe 26.5.0</span> (Zero-effect{' '}
-        <code className="text-emerald-400">clearing::solve_batch</code>,{' '}
-        <code className="text-slate-300">core::fixed::Wad</code>, EIP-1153{' '}
-        <code className="text-slate-300">Mutex</code>,{' '}
-        <code className="text-slate-300">std::evm::eip712</code>) · Ready for
-        Ethereum Mainnet, Sepolia &amp; Hoodi
+      <footer className="mt-10 border-t border-ink bg-paper-deep">
+        <div className="mx-auto flex max-w-[1560px] flex-col items-center justify-between gap-2 px-4 py-4 text-center font-mono text-[9px] uppercase tracking-[0.12em] text-ink-muted xl:flex-row xl:text-left lg:px-8">
+          <span className="text-ink-soft">
+            FairBatch Exchange · One price, every order
+          </span>
+          <span className="normal-case tracking-normal">
+            Built natively in{' '}
+            <span className="font-bold text-cobalt-700">Fe 26.5.0</span> —{' '}
+            <code className="text-ink-soft">clearing::solve_batch</code>,{' '}
+            <code className="text-ink-soft">core::fixed::Wad</code>, EIP-1153{' '}
+            <code className="text-ink-soft">Mutex</code>,{' '}
+            <code className="text-ink-soft">std::evm::eip712</code>
+          </span>
+          <span>Sepolia · Hoodi · Mainnet-ready</span>
+        </div>
       </footer>
 
       <ContractConfigModal
