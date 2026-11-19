@@ -6,6 +6,8 @@ import { formatPrice, formatToken } from '../lib/format';
 interface PriceChartProps {
   settlement: BatchSettlementDto;
   isLivePreview: boolean;
+  baseSymbol: string;
+  quoteSymbol: string;
 }
 
 interface HoverNode {
@@ -41,6 +43,8 @@ function dedupeTiers(points: CurvePointDto[]): CurvePointDto[] {
 export const PriceChart: React.FC<PriceChartProps> = ({
   settlement,
   isLivePreview,
+  baseSymbol,
+  quoteSymbol,
 }) => {
   const [hovered, setHovered] = useState<HoverNode | null>(null);
 
@@ -325,7 +329,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({
                   textAnchor="middle"
                   className="fill-ink-muted font-mono text-[10px]"
                 >
-                  {formatToken(xTick, 1, 1)} WETH
+                  {formatToken(xTick, 1, 1)} {baseSymbol}
                 </text>
               </g>
             );
@@ -539,7 +543,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({
               fill="#FBF8F0"
               className="font-mono text-[11px] font-bold"
             >
-              p* = ${formatPrice(chartData.pStar, 2)} USDC
+              p* = ${formatPrice(chartData.pStar, 2)} {quoteSymbol}
             </text>
           </g>
         </svg>
@@ -549,11 +553,11 @@ export const PriceChart: React.FC<PriceChartProps> = ({
         {hovered && (
           <div className="pointer-events-none absolute right-3 top-3 max-w-[260px] border border-ink border-l-2 border-l-vermilion-500 bg-paper-bright px-3 py-2 shadow-slip">
             <div className="font-display text-[12px] font-bold text-ink">
-              {hovered.kind} tier · ${formatPrice(hovered.price, 2)} USDC/WETH
+              {hovered.kind} tier · ${formatPrice(hovered.price, 2)} {quoteSymbol}/{baseSymbol}
             </div>
             <div className="mt-0.5 font-mono text-[10px] text-ink-muted tabular-nums">
-              Cum. volume: {formatToken(hovered.baseVol, 3)} WETH ($
-              {formatPrice(hovered.quoteVol, 0)} USDC)
+              Cum. volume: {formatToken(hovered.baseVol, 3)} {baseSymbol} ($
+              {formatPrice(hovered.quoteVol, 0)} {quoteSymbol})
             </div>
             <div className="mt-0.5 font-mono text-[9px] text-vermilion-700">
               {hovered.note}
@@ -580,7 +584,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({
               data-testid="uniform-clearing-price-readout"
               className="border border-vermilion-600 bg-vermilion-500 px-2 py-0.5 font-bold text-paper"
             >
-              ${formatPrice(settlement.clearing_price, 2)} USDC/WETH
+              ${formatPrice(settlement.clearing_price, 2)} {quoteSymbol}/{baseSymbol}
             </span>
           </div>
 
@@ -588,7 +592,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({
             <span className="inline-flex items-center gap-1 border border-cobalt-600/30 bg-cobalt-50 px-1.5 py-0.5 text-cobalt-700">
               <GitMerge className="h-3 w-3" />
               <span>
-                CoW P2P {formatToken(settlement.cow_matched_base, 2)} WETH ·{' '}
+                CoW P2P {formatToken(settlement.cow_matched_base, 2)} {baseSymbol} ·{' '}
                 {formatPrice(settlement.cow_ratio_pct, 1)}%
               </span>
             </span>

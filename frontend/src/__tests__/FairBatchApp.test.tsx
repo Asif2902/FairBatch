@@ -1,276 +1,409 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { getAddress } from 'viem';
+import type { BatchPhase, ClaimableDto, OrderDto, StateResponse } from '../types';
+import type { FairBatchController } from '../onchain/useFairBatch';
+import type { OnchainSnapshot } from '../onchain/state';
+import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
+import { computeBatchSettlement } from '../lib/fallbackEngine';
+import { formatPrice } from '../lib/format';
 import App from '../App';
-import { fallbackStore } from '../lib/fallbackEngine';
 
-describe('FairBatch Institutional Exchange UI & End-to-End Flows', () => {
+const ALICE = '0x9AFe5CeF11fC10756faef213f7A30D9873B5d372';
+const BOB = '0x1234567890123456789012345678901234567890';
+const BATCH_ID = 8;
+
+const ORDERS: OrderDto[] = [
+  {
+    order_id: 0,
+    trader: ALICE,
+    label: '0x9AFe…d372 · direct',
+    side: 'SellBase',
+    amount_in: 2,
+    limit_price: 2650,
+    submission_type: 'Direct',
+    is_attacker: false,
+  },
+  {
+    order_id: 1,
+    trader: BOB,
+    label: '0x1234…7890 · signed',
+    side: 'BuyBase',
+    amount_in: 6000,
+    limit_price: 3200,
+    submission_type: 'Eip712Intent',
+    is_attacker: false,
+  },
+];
+
+const CLAIMS: ClaimableDto[] = [
+  {
+    batch_id: 7,
+    order_id: 0,
+    trader: ALICE,
+    label: '0x9AFe…d372 · sealed',
+    side: 'SellBase',
+    status: 'Filled',
+    amount_in: 1.5,
+    amount_filled: 1.5,
+    payout_out: 4500,
+    refund_in: 0,
+    effective_price: 3000,
+    claimed: false,
+  },
+  {
+    batch_id: 7,
+    order_id: 1,
+    trader: BOB,
+    label: '0x1234…7890 · signed',
+    side: 'BuyBase',
+    status: 'PartialFill',
+    amount_in: 6000,
+    amount_filled: 3000,
+    payout_out: 1,
+    refund_in: 3000,
+    effective_price: 3000,
+    claimed: false,
+  },
+];
+
+let controller: FairBatchController;
+
+function makeSnapshot(
+  phase: BatchPhase,
+  account: string | null = null,
+): OnchainSnapshot {
+  const settlement = computeBatchSettlement(BATCH_ID, 100, 300_000, ORDERS);
+  const state: StateResponse = {
+    batch_id: BATCH_ID,
+    phase,
+    commit_duration_secs: 60,
+    reveal_duration_secs: 60,
+    phase_remaining_secs: 30,
+    reserves: {
+      rx: 100,
+      ry: 300_000,
+      spot_price: 3000,
+      k_invariant: 30_000_000,
+      base_symbol: 'fWETH',
+      quote_symbol: 'fUSDC',
+      base_decimals: 18,
+      quote_decimals: 6,
+    },
+    demo_wallets: account
+      ? [{ index: 0, name: 'Connected wallet', address: account }]
+      : [],
+    commitments: [
+      {
+        commit_id: 4,
+        trader: ALICE,
+        commitment_hash: `0x${'11'.repeat(32)}`,
+        bond_eth: 0.001,
+        revealed: false,
+        slashed: false,
+      },
+    ],
+    orders: ORDERS,
+    claimable: CLAIMS,
+    settled_history: [],
+  };
+
+  return {
+    config: DEFAULT_RUNTIME_CONFIG,
+    health: {
+      status: 'ok',
+      execution_mode: 'rpc_connected',
+      rpc_url: DEFAULT_RUNTIME_CONFIG.rpcUrl,
+      chain_id: DEFAULT_RUNTIME_CONFIG.chainId,
+      contracts: {
+        fair_batch: DEFAULT_RUNTIME_CONFIG.fairBatch,
+        base_token: DEFAULT_RUNTIME_CONFIG.baseToken,
+        quote_token: DEFAULT_RUNTIME_CONFIG.quoteToken,
+        deployed: true,
+      },
+      fe_artifacts_present: false,
+      fe_artifacts: [],
+    },
+    state,
+    batch: {
+      batchId: BigInt(BATCH_ID),
+      startTime: 1_000n,
+      commitDeadline: 1_060n,
+      revealDeadline: 1_120n,
+      orderCount: 2n,
+      commitCount: 1n,
+      phase: phase === 'Reveal' ? 1 : phase === 'Ready' ? 2 : phase === 'Settled' ? 3 : 0,
+    },
+    reserves: {
+      reserveBase: 100_000_000_000_000_000_000n,
+      reserveQuote: 300_000_000_000n,
+      totalShares: 5_477_225_575_051_661_134_569n,
+      spotPriceWad: 3_000n * 10n ** 18n,
+    },
+    balances: {
+      eth: 10n ** 18n,
+      base: 5n * 10n ** 18n,
+      quote: 20_000n * 10n ** 6n,
+      lpShares: 100n * 10n ** 18n,
+    },
+    allowances: { base: 10n ** 24n, quote: 10n ** 24n },
+    nonce: 3n,
+    domainSeparator: `0x${'22'.repeat(32)}`,
+    minBondWei: 100_000_000_000_000n,
+    orders: ORDERS.map((order) => ({
+      ...order,
+      batch_id: BATCH_ID,
+      amount_in_raw: 0n,
+      limit_price_raw: 0n,
+      mode: 0,
+    })),
+    commitments: [
+      {
+        batch_id: BATCH_ID,
+        commit_id: 4,
+        trader: ALICE,
+        commitment_hash: `0x${'11'.repeat(32)}`,
+        bond_eth: 0.001,
+        bond_wei: 100_000_000_000_000n,
+        revealed: false,
+        slashed: false,
+      },
+    ],
+    allCommitments: [],
+    batchSettled: false,
+    claimable: CLAIMS,
+    settledHistory: [],
+    activeSettlement: settlement,
+    lastUpdated: Date.now(),
+  };
+}
+
+function makeController(
+  overrides: Partial<FairBatchController> = {},
+): FairBatchController {
+  const account = overrides.account ?? null;
+  return {
+    config: DEFAULT_RUNTIME_CONFIG,
+    account,
+    walletChainId: DEFAULT_RUNTIME_CONFIG.chainId,
+    snapshot: makeSnapshot('Open', account),
+    loading: false,
+    refreshing: false,
+    busyAction: null,
+    error: null,
+    notice: null,
+    secretVault: [],
+    configured: true,
+    wrongNetwork: false,
+    connect: vi.fn(async () => undefined),
+    disconnect: vi.fn(),
+    refresh: vi.fn(),
+    updateConfig: vi.fn(),
+    resetConfig: vi.fn(),
+    clearNotice: vi.fn(),
+    submitDirect: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    sealCommit: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    revealCommit: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    signIntent: vi.fn(async () => ({
+      trader: ALICE,
+      label: 'Signed',
+      side: 'SellBase' as const,
+      amount_in: 2,
+      limit_price: 2650,
+      amount_in_raw: '2000000000000000000',
+      limit_price_raw: '2650000000000000000000',
+      batch_id: BATCH_ID,
+      nonce: 0,
+      deadline: 1,
+      signature: `0x${'33'.repeat(65)}`,
+      digest: `0x${'44'.repeat(32)}`,
+    })),
+    submitIntent: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    settle: vi.fn(async () => ({ hash: '0x', batchId: BATCH_ID })),
+    slash: vi.fn(async () => ({ hash: '0x', forfeitedBond: 0n })),
+    claim: vi.fn(async () => ({ hash: '0x', payoutBase: 0n, payoutQuote: 0n })),
+    claimMany: vi.fn(async () => ({ hash: '0x', claimed: 1 })),
+    addLiquidity: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    removeLiquidity: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    faucet: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    approve: vi.fn(async () => null),
+    ...overrides,
+  } as unknown as FairBatchController;
+}
+
+vi.mock('../onchain/useFairBatch', () => ({
+  useFairBatch: () => controller,
+}));
+
+describe('FairBatch on-chain terminal', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
-    fallbackStore.reset(100, 300_000);
+    vi.clearAllMocks();
+    controller = makeController();
   });
 
-  it('renders initial Batch #1 KPIs, SVG depth chart, and flagship 5-sellers p* = $2,727.27', async () => {
+  it('renders the live batch, reserves and clearing preview from chain snapshot', () => {
     render(<App />);
+    const settlement = computeBatchSettlement(BATCH_ID, 100, 300_000, ORDERS);
 
-    expect(screen.getByTestId('batch-id-badge')).toHaveTextContent('BATCH #1');
-    expect(screen.getByTestId('reserve-rx')).toHaveTextContent('100.00 WETH');
-    expect(screen.getByTestId('reserve-ry')).toHaveTextContent('300,000 USDC');
+    expect(screen.getByTestId('batch-id-badge')).toHaveTextContent(
+      `BATCH #${BATCH_ID}`,
+    );
+    expect(screen.getByTestId('reserve-rx')).toHaveTextContent('100.00 fWETH');
+    expect(screen.getByTestId('reserve-ry')).toHaveTextContent('300,000 fUSDC');
     expect(screen.getByTestId('pool-spot-price')).toHaveTextContent('$3,000.00');
-
-    // Accessibility landmarks & SVG visualizer
+    expect(screen.getByTestId('connection-status-badge')).toHaveTextContent(
+      'Read-only · live RPC',
+    );
     expect(
       screen.getByRole('navigation', { name: /Batch Lifecycle Stepper/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('img', { name: /Batch Supply and Demand Depth Chart/i }),
     ).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId('uniform-clearing-price-readout'),
-      ).toHaveTextContent('$2,727.27 USDC/WETH');
-    });
-    expect(screen.getByTestId('fairbatch-mev-profit')).toHaveTextContent('$0.00');
+    expect(screen.getByTestId('uniform-clearing-price-readout')).toHaveTextContent(
+      `$${formatPrice(settlement.clearing_price, 2)} fUSDC/fWETH`,
+    );
+    expect(screen.getByTestId('account-connect-button')).toBeInTheDocument();
   });
 
-  it('switches presets (Balanced CoW & Marginal Pro-Rata) and toggles MEV Sandwich Bot', async () => {
+  it('enables permissionless settlement only for a connected wallet in the ready phase', async () => {
+    controller = makeController({
+      account: ALICE,
+      snapshot: makeSnapshot('Ready', ALICE),
+    });
     render(<App />);
 
-    // Switch to Balanced CoW Crossing
-    const cowBtn = screen.getByRole('button', {
-      name: /Balanced CoW Crossing/i,
-    });
-    fireEvent.click(cowBtn);
+    const settleButton = screen.getByTestId('settle-batch-button');
+    expect(settleButton).not.toBeDisabled();
 
+    fireEvent.click(settleButton);
     await waitFor(() => {
-      expect(
-        screen.getByTestId('uniform-clearing-price-readout'),
-      ).toHaveTextContent('$3,000.00 USDC/WETH');
-      expect(screen.getByTestId('cow-ratio-kpi')).toHaveTextContent('100.0%');
+      expect(controller.settle).toHaveBeenCalledTimes(1);
     });
+  });
 
-    // Switch to Marginal Limit Tier (Pro-Rata Partial Fill)
-    const margBtn = screen.getByRole('button', {
-      name: /Marginal Limit Tier/i,
-    });
-    fireEvent.click(margBtn);
+  it('keeps settlement locked while the commit window is still open', () => {
+    render(<App />);
+    expect(screen.queryByTestId('settle-batch-button')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Settlement Locked/i }),
+    ).toBeDisabled();
+  });
 
-    await waitFor(() => {
-      expect(
-        screen.getByTestId('uniform-clearing-price-readout'),
-      ).toHaveTextContent('$2,800.00 USDC/WETH');
-    });
-    expect(screen.getAllByText('Pro-Rata Partial').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Refunded (OTM)').length).toBeGreaterThan(0);
+  it('submits a sealed commitment through the connected wallet', async () => {
+    controller = makeController({ account: ALICE });
+    render(<App />);
 
-    // Switch back to 5 Sellers and wait for async load before toggling MEV Sandwich Bot
+    fireEvent.click(screen.getByRole('tab', { name: /Commit-Reveal/i }));
     fireEvent.click(
-      screen.getByRole('button', { name: /5 Users Swap ETH/i }),
+      screen.getByRole('button', { name: /Seal & lock commitment/i }),
     );
-    const mevSwitch = screen.getByRole('switch', {
-      name: /Inject MEV Sandwich Bot/i,
-    });
-    await waitFor(() => {
-      expect(
-        screen.getByTestId('uniform-clearing-price-readout'),
-      ).toHaveTextContent('$2,727.27 USDC/WETH');
-      expect(mevSwitch).not.toBeDisabled();
-    });
-    expect(mevSwitch).toHaveAttribute('aria-checked', 'false');
-    fireEvent.click(mevSwitch);
 
     await waitFor(() => {
-      expect(mevSwitch).toHaveAttribute('aria-checked', 'true');
-      const ammProfitText = screen.getByTestId('amm-mev-profit').textContent ?? '';
-      expect(ammProfitText).not.toBe('$0.00');
-      expect(screen.getByTestId('fairbatch-mev-profit')).toHaveTextContent(
-        '$0.00',
+      expect(controller.sealCommit).toHaveBeenCalledTimes(1);
+    });
+    expect(controller.sealCommit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        side: 'SellBase',
+        amountIn: '2.0',
+        limitPrice: '2650',
+        bondEth: '0.001',
+      }),
+    );
+    expect(
+      await screen.findByText(/Sealed commitment confirmed/i),
+    ).toBeInTheDocument();
+  });
+
+  it('lets only the connected owner claim settled receipts', async () => {
+    controller = makeController({ account: ALICE });
+    render(<App />);
+
+    expect(screen.getByText('Other wallet')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Multicall My Claims \(1\)/i }),
+    ).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Claim Payout/i }));
+    await waitFor(() => {
+      expect(controller.claim).toHaveBeenCalledWith(
+        expect.objectContaining({ batch_id: 7, order_id: 0, trader: ALICE }),
       );
     });
-  });
 
-  it('completes full Commit -> Advance Phase -> Reveal -> Settle -> Multicall Claim user journey', async () => {
-    render(<App />);
-
-    // Select Commit-Reveal tab
-    const commitTab = screen.getByRole('tab', { name: /Commit-Reveal/i });
-    fireEvent.click(commitTab);
-
-    expect(screen.getByTestId('commitment-hash-preview').textContent).toMatch(
-      /^0x[0-9a-f]{64}$/,
-    );
-
-    // Seal & Lock Commitment
-    const sealBtn = screen.getByRole('button', {
-      name: /Seal & Lock Commitment/i,
-    });
-    fireEvent.click(sealBtn);
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /Reveal Secret/i }),
-      ).toBeDisabled();
-    });
-
-    // Advance Batch Phase from Open -> Reveal
-    const advanceBtn = screen.getByRole('button', {
-      name: /Advance to Reveal/i,
-    });
-    fireEvent.click(advanceBtn);
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /Reveal Secret/i }),
-      ).not.toBeDisabled();
-    });
-
-    // Reveal the secret commitment
-    fireEvent.click(screen.getByRole('button', { name: /Reveal Secret/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Revealed')).toBeInTheDocument();
-    });
-
-    // Settle Batch Now
-    const settleBtn = screen.getByRole('button', {
-      name: /Settle Batch Now/i,
-    });
-    fireEvent.click(settleBtn);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('batch-id-badge')).toHaveTextContent('BATCH #2');
-    });
-
-    // Execute Multicall Batch Claim across Alice's settled orders
-    const multicallBtn = screen.getByRole('button', {
-      name: /Multicall Batch Claim/i,
-    });
-    expect(multicallBtn).not.toBeDisabled();
-    fireEvent.click(multicallBtn);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Executed Multicall claim/i),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it('signs and submits an EIP-712 Signed Intent and updates Contract & Network Config', async () => {
-    render(<App />);
-
-    // Switch to EIP-712 Intent tab
-    fireEvent.click(screen.getByRole('tab', { name: /EIP-712 Intent/i }));
-
-    const signBtn = screen.getByRole('button', {
-      name: /1\. Sign EIP-712 Intent/i,
-    });
-    fireEvent.click(signBtn);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('eip712-signature-box')).toBeInTheDocument();
-    });
-
-    const submitIntentBtn = screen.getByRole('button', {
-      name: /2\. Submit Signed Intent/i,
-    });
-    expect(submitIntentBtn).not.toBeDisabled();
-    fireEvent.click(submitIntentBtn);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Verified secp256k1 signer & queued EIP-712 intent/i),
-      ).toBeInTheDocument();
-    });
-
-    // Open Why Fe 26.5? Architecture Inspector
-    fireEvent.click(screen.getByRole('button', { name: /Why Fe 26\.5\?/i }));
-    expect(
-      screen.getByRole('dialog', { name: /Why Fe 26\.5\.0\?/i }),
-    ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole('button', { name: /Close Fe Architecture Inspector/i }),
+      screen.getByRole('button', { name: /Multicall My Claims \(1\)/i }),
     );
+    await waitFor(() => {
+      expect(controller.claimMany).toHaveBeenCalledWith([
+        expect.objectContaining({ batch_id: 7, order_id: 0, trader: ALICE }),
+      ]);
+    });
+  });
 
-    // Open Contract & Network Config Modal and save Sepolia deployment address
+  it('saves a validated runtime contract configuration', async () => {
+    render(<App />);
+
     fireEvent.click(
       screen.getByRole('button', { name: /Contract & Network Config/i }),
     );
-    const addrInput = screen.getByLabelText(/FairBatch Contract Address/i);
-    fireEvent.change(addrInput, {
+
+    fireEvent.change(screen.getByLabelText(/Chain ID/i), {
+      target: { value: '11155111' },
+    });
+    fireEvent.change(screen.getByLabelText(/FairBatch contract address/i), {
       target: { value: '0x1234567890123456789012345678901234567890' },
     });
     fireEvent.click(
-      screen.getByRole('button', { name: /Save Contract Config/i }),
+      screen.getByRole('button', { name: /Save contract config/i }),
     );
 
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Runtime contract & RPC bridge configuration updated/i),
-      ).toBeInTheDocument();
-    });
+    expect(controller.updateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chainId: 11155111,
+        fairBatch: getAddress('0x1234567890123456789012345678901234567890'),
+      }),
+    );
+    expect(
+      screen.queryByRole('dialog', { name: /Contract & network readiness/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it('displays Connected: Rust Solver + Fe Artifacts badge when /api/health & /api/state respond HTTP 200', async () => {
-    const liveState = fallbackStore.getState();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith('/api/health')) {
-          return new Response(
-            JSON.stringify({
-              status: 'ok',
-              execution_mode: 'local_engine',
-              rpc_url: null,
-              chain_id: 31337,
-              contracts: {
-                fair_batch: '0x0000000000000000000000000000000000000000',
-                base_token: '0x0000000000000000000000000000000000000000',
-                quote_token: '0x0000000000000000000000000000000000000000',
-                deployed: false,
-              },
-              fe_artifacts_present: true,
-              fe_artifacts: ['out/FairBatch.bin', 'out/FairBatch.abi.json'],
-            }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        if (url.endsWith('/api/state')) {
-          return new Response(JSON.stringify(liveState), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        if (url.endsWith('/api/compare')) {
-          const { settlement } = fallbackStore.settleBatch();
-          fallbackStore.reset(100, 300_000);
-          return new Response(JSON.stringify({ settlement }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        return new Response(JSON.stringify(liveState), { status: 200 });
-      },
-    );
-
+  it('rejects an invalid contract address before saving', () => {
     render(<App />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('connection-status-badge')).toHaveTextContent(
-        'Connected: Rust Solver + Fe Artifacts',
-      );
-    });
-
-    // Verify ContractConfigModal syncs live /api/health chain_id (31337) when opened
     fireEvent.click(
       screen.getByRole('button', { name: /Contract & Network Config/i }),
     );
-    expect(screen.getByLabelText(/Chain ID/i)).toHaveValue(31337);
+    fireEvent.change(screen.getByLabelText(/FairBatch contract address/i), {
+      target: { value: '0xnot-an-address' },
+    });
     fireEvent.click(
-      screen.getByRole('button', {
-        name: /Close Contract Configuration Modal/i,
-      }),
+      screen.getByRole('button', { name: /Save contract config/i }),
     );
 
-    expect(fetchSpy).toHaveBeenCalled();
+    expect(controller.updateConfig).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/valid FairBatch contract address|deployed FairBatch contract address/i),
+    ).toBeInTheDocument();
+  });
+
+  it('renders transaction notices with an explorer link', () => {
+    controller = makeController({
+      notice: {
+        kind: 'success',
+        text: 'Direct order #12 confirmed on-chain.',
+        hash: `0x${'ab'.repeat(32)}`,
+      },
+    });
+    render(<App />);
+
+    expect(
+      screen.getByText('Direct order #12 confirmed on-chain.'),
+    ).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /Tx 0xababab/i });
+    expect(link).toHaveAttribute(
+      'href',
+      `https://sepolia.etherscan.io/tx/0x${'ab'.repeat(32)}`,
+    );
   });
 });

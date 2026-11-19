@@ -14,6 +14,8 @@ interface MevComparisonProps {
   settledHistory: BatchSettlementDto[];
   selectedViewBatchId: number | 'live';
   activeBatchId: number;
+  baseSymbol: string;
+  quoteSymbol: string;
   onSelectViewBatch: (batchId: number | 'live') => void;
 }
 
@@ -44,6 +46,8 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
   settledHistory,
   selectedViewBatchId,
   activeBatchId,
+  baseSymbol,
+  quoteSymbol,
   onSelectViewBatch,
 }) => {
   const { comparison } = settlement;
@@ -169,7 +173,7 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
             {formatPrice(settlement.cow_ratio_pct, 1)}%
           </div>
           <div className="mt-1 font-mono text-[9px] leading-snug text-ink-muted tabular-nums">
-            {formatToken(settlement.cow_matched_base, 2)} WETH (
+            {formatToken(settlement.cow_matched_base, 2)} {baseSymbol} (
             {formatUsd(settlement.cow_matched_quote, 0)}) · 0 fee
           </div>
         </div>
@@ -232,7 +236,8 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                   colSpan={9}
                   className="px-4 py-8 text-center font-sans text-[11px] text-ink-faint"
                 >
-                  No orders in selected view. Load a scenario from the scenario book to inspect execution receipts.
+                  No orders in the selected view. Execution receipts appear once this
+                  batch has on-chain orders or has been settled.
                 </td>
               </tr>
             ) : (
@@ -240,8 +245,8 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                 const amm =
                   ammByOrderId.get(fb.order_id) ?? comparison.amm_receipts[idx];
                 const badge = formatStatusBadge(fb.status);
-                const inUnit = fb.side === 'SellBase' ? 'WETH' : 'USDC';
-                const outUnit = fb.side === 'SellBase' ? 'USDC' : 'WETH';
+                const inUnit = fb.side === 'SellBase' ? baseSymbol : quoteSymbol;
+                const outUnit = fb.side === 'SellBase' ? quoteSymbol : baseSymbol;
 
                 return (
                   <tr
@@ -273,8 +278,8 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                     </td>
                     <td className="px-2.5 py-2.5 text-ink-soft">
                       {fb.side === 'SellBase'
-                        ? `Sell ${formatToken(fb.amount_in, 2)} WETH`
-                        : `Buy ${formatPrice(fb.amount_in, 0)} USDC`}
+                        ? `Sell ${formatToken(fb.amount_in, 2)} ${baseSymbol}`
+                        : `Buy ${formatPrice(fb.amount_in, 0)} ${quoteSymbol}`}
                     </td>
                     <td className="px-2.5 py-2.5 text-right text-ink-muted">
                       {amm && amm.effective_price > 0

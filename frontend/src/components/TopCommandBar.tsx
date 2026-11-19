@@ -6,17 +6,15 @@ import {
   Code2,
   Cpu,
   ExternalLink,
-  Play,
-  RotateCcw,
+  RefreshCw,
   Settings2,
   ShieldCheck,
   Wallet,
 } from 'lucide-react';
-import type {
-  DemoWalletDto,
-  HealthResponse,
-  StateResponse,
-} from '../types';
+import type { BatchPhase, StateResponse } from '../types';
+import type { RawBatchInfo } from '../onchain/state';
+import { phaseLabel } from '../onchain/state';
+import type { RuntimeConfig } from '../onchain/config';
 import {
   formatInvariant,
   formatPrice,
@@ -26,92 +24,80 @@ import {
 } from '../lib/format';
 
 interface TopCommandBarProps {
-  state: StateResponse;
-  health: HealthResponse;
-  isLiveBackend: boolean;
-  selectedTraderAddress: string;
-  browserWalletAddress: string | null;
+  config: RuntimeConfig;
+  state: StateResponse | null;
+  batch: RawBatchInfo | null;
+  account: string | null;
+  walletChainId: number | null;
+  wrongNetwork: boolean;
+  loading: boolean;
+  refreshing: boolean;
   busyAction: string | null;
-  onSelectTrader: (address: string) => void;
-  onAdvancePhase: () => void;
+  onRefresh: () => void;
   onSettleBatch: () => void;
-  onResetPool: () => void;
   onOpenContractModal: () => void;
   onOpenFeModal: () => void;
 }
 
+function stageDone(phase: BatchPhase, stage: 'Open' | 'Reveal' | 'Ready'): boolean {
+  if (stage === 'Open') return phase !== 'Open';
+  if (stage === 'Reveal') return phase === 'Ready' || phase === 'Settled';
+  return phase === 'Settled';
+}
+
 export const TopCommandBar: React.FC<TopCommandBarProps> = ({
+  config,
   state,
-  health,
-  isLiveBackend,
-  selectedTraderAddress,
-  browserWalletAddress,
+  batch,
+  account,
+  walletChainId,
+  wrongNetwork,
+  loading,
+  refreshing,
   busyAction,
-  onSelectTrader,
-  onAdvancePhase,
+  onRefresh,
   onSettleBatch,
-  onResetPool,
   onOpenContractModal,
   onOpenFeModal,
 }) => {
+  const phase: BatchPhase = state?.phase ?? 'Open';
   const connectionBadge = (() => {
-    if (!isLiveBackend || health.execution_mode === 'browser_fallback') {
+    if (loading) {
       return {
-        label: 'Standalone Browser Engine',
-        dotClass: 'bg-brass-500',
+        label: 'Syncing on-chain ledger',
+        dotClass: 'bg-brass-500 animate-pulse',
         pillClass: 'border-brass-600/50 bg-brass-50 text-brass-700',
       };
     }
-    if (health.execution_mode === 'rpc_connected') {
+    if (wrongNetwork) {
       return {
-        label: 'Connected: RPC Chain',
-        dotClass: 'bg-cobalt-500 animate-pulse',
-        pillClass: 'border-cobalt-600/40 bg-cobalt-50 text-cobalt-700',
+        label: `Wrong network · wallet ${walletChainId ?? '?'}`,
+        dotClass: 'bg-vermilion-500',
+        pillClass: 'border-vermilion-500/50 bg-vermilion-50 text-vermilion-700',
+      };
+    }
+    if (account) {
+      return {
+        label: `Wallet ${shortenAddress(account)}`,
+        dotClass: 'bg-pine-500 animate-pulse',
+        pillClass: 'border-pine-600/40 bg-pine-50 text-pine-700',
       };
     }
     return {
-      label: health.fe_artifacts_present
-        ? 'Connected: Rust Solver + Fe Artifacts'
-        : 'Connected: Rust Solver Engine',
-      dotClass: 'bg-pine-500 animate-pulse',
-      pillClass: 'border-pine-600/40 bg-pine-50 text-pine-700',
+      label: 'Read-only · live RPC',
+      dotClass: 'bg-cobalt-500 animate-pulse',
+      pillClass: 'border-cobalt-600/40 bg-cobalt-50 text-cobalt-700',
     };
   })();
 
-  const stages = [
-    {
-      id: 'Open',
-      step: '1',
-      title: 'Open / Collect',
-      active: state.phase === 'Open',
-      done: state.phase === 'Reveal' || state.phase === 'Settled',
-    },
-    {
-      id: 'Reveal',
-      step: '2',
-      title: 'Reveal / Intent',
-      active: state.phase === 'Reveal',
-      done: state.phase === 'Settled',
-    },
-    {
-      id: 'Settled',
-      step: '3',
-      title: 'Settled → Next Batch',
-      active: state.phase === 'Settled',
-      done: state.settled_history.length > 0,
-    },
+  const stages: Array<{ id: 'Open' | 'Reveal' | 'Ready'; step: string; title: string }> = [
+    { id: 'Open', step: '1', title: 'Open / Collect' },
+    { id: 'Reveal', step: '2', title: 'Reveal / Intent' },
+    { id: 'Ready', step: '3', title: 'Ready / Settle' },
   ];
 
-  const walletOptions: DemoWalletDto[] = browserWalletAddress
-    ? [
-        {
-          index: -1,
-          name: `Browser Wallet (${shortenAddress(browserWalletAddress)})`,
-          address: browserWalletAddress,
-        },
-        ...state.demo_wallets,
-      ]
-    : state.demo_wallets;
+  const canSettle =
+    phase === 'Ready' && Boolean(account) && !busyAction && !wrongNetwork;
 
   return (
     <header className="relative z-30 border-b-2 border-ink bg-paper/95 backdrop-blur-sm lg:sticky lg:top-0">
@@ -132,29 +118,23 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
             </div>
 
             <span className="hidden border border-rule bg-paper-soft px-2 py-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-ink-muted lg:inline-flex">
-              {getChainLabel(health.chain_id)}
+              {getChainLabel(config.chainId)}
             </span>
 
-            {health.contracts.deployed && (
-              <a
-                href={
-                  health.chain_id === 11155111
-                    ? `https://sepolia.etherscan.io/address/${health.contracts.fair_batch}`
-                    : health.chain_id === 1
-                      ? `https://etherscan.io/address/${health.contracts.fair_batch}`
-                      : health.chain_id === 560048
-                        ? `https://hoodi.etherscan.io/address/${health.contracts.fair_batch}`
-                        : `#${health.contracts.fair_batch}`
-                }
-                target="_blank"
-                rel="noreferrer"
-                data-testid="deployed-contract-badge"
-                className="hidden items-center gap-1 border border-pine-600/40 bg-pine-50 px-2 py-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.08em] text-pine-700 transition hover:bg-pine-100 xl:inline-flex"
-              >
-                <span>Contract {shortenAddress(health.contracts.fair_batch)}</span>
-                <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
-              </a>
-            )}
+            <a
+              href={
+                config.explorerUrl
+                  ? `${config.explorerUrl}/address/${config.fairBatch}`
+                  : undefined
+              }
+              target="_blank"
+              rel="noreferrer"
+              data-testid="deployed-contract-badge"
+              className="hidden items-center gap-1 border border-pine-600/40 bg-pine-50 px-2 py-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.08em] text-pine-700 transition hover:bg-pine-100 xl:inline-flex"
+            >
+              <span>Contract {shortenAddress(config.fairBatch)}</span>
+              <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+            </a>
           </div>
         </div>
       </div>
@@ -196,26 +176,13 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1.5 border border-rule-strong bg-paper-bright px-2 py-1">
               <Wallet className="h-3 w-3 text-ink-faint" aria-hidden="true" />
-              <label htmlFor="active-trader-select" className="sr-only">
-                Active Trader Account
-              </label>
-              <select
-                id="active-trader-select"
-                aria-label="Active Trader Account"
-                value={selectedTraderAddress}
-                onChange={(e) => onSelectTrader(e.target.value)}
-                className="max-w-[190px] bg-transparent font-mono text-[10px] font-medium text-ink focus:outline-none"
-              >
-                {walletOptions.map((w) => (
-                  <option
-                    key={w.address}
-                    value={w.address}
-                    className="bg-paper-bright text-ink"
-                  >
-                    {w.name} · {shortenAddress(w.address)}
-                  </option>
-                ))}
-              </select>
+              <span className="font-mono text-[10px] font-medium text-ink">
+                {account
+                  ? shortenAddress(account)
+                  : wrongNetwork
+                    ? 'Switch network'
+                    : 'No wallet connected'}
+              </span>
             </div>
 
             <button
@@ -244,147 +211,159 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
         <div className="mx-auto max-w-[1560px] px-4 py-2.5 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
             <div className="flex flex-wrap items-center gap-3">
-            <div
-              data-testid="batch-id-badge"
-              className="flex items-center gap-2 border-r border-rule-strong pr-3"
-            >
-              <Cpu className="h-3.5 w-3.5 text-vermilion-600" aria-hidden="true" />
-              <span className="font-display text-lg font-bold leading-none tracking-tight text-ink tabular-nums">
-                BATCH #{state.batch_id}
-              </span>
-            </div>
+              <div
+                data-testid="batch-id-badge"
+                className="flex items-center gap-2 border-r border-rule-strong pr-3"
+              >
+                <Cpu className="h-3.5 w-3.5 text-vermilion-600" aria-hidden="true" />
+                <span className="font-display text-lg font-bold leading-none tracking-tight text-ink tabular-nums">
+                  BATCH #{state ? state.batch_id : '—'}
+                </span>
+                <span className="font-mono text-[8.5px] uppercase tracking-label text-ink-faint">
+                  {loading ? 'syncing' : phaseLabel(phase)}
+                </span>
+              </div>
 
-            <nav
-              aria-label="Batch Lifecycle Stepper"
-              className="flex flex-wrap items-center gap-1"
-            >
-              {stages.map((st, idx) => (
-                <React.Fragment key={st.id}>
-                  <div
-                    className={`flex items-center gap-1.5 border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.08em] transition ${
-                      st.active
-                        ? st.id === 'Reveal'
-                          ? 'border-brass-600 bg-brass-500 text-paper'
-                          : st.id === 'Settled'
-                            ? 'border-pine-700 bg-pine-600 text-paper'
-                            : 'border-ink bg-ink text-paper'
-                        : st.done
-                          ? 'border-pine-600/40 bg-pine-50 text-pine-700'
-                          : 'border-rule bg-paper-bright text-ink-faint'
-                    }`}
-                  >
-                    {st.done && !st.active ? (
-                      <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-                    ) : (
-                      <span
-                        className={`flex h-3.5 w-3.5 items-center justify-center border text-[8px] ${
-                          st.active
-                            ? 'border-paper/40 text-paper'
-                            : 'border-current text-ink-faint'
+              <nav
+                aria-label="Batch Lifecycle Stepper"
+                className="flex flex-wrap items-center gap-1"
+              >
+                {stages.map((st, idx) => {
+                  const active = phase === st.id;
+                  const done = stageDone(phase, st.id);
+                  return (
+                    <React.Fragment key={st.id}>
+                      <div
+                        className={`flex items-center gap-1.5 border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.08em] transition ${
+                          active
+                            ? st.id === 'Reveal'
+                              ? 'border-brass-600 bg-brass-500 text-paper'
+                              : st.id === 'Ready'
+                                ? 'border-vermilion-700 bg-vermilion-500 text-paper'
+                                : 'border-ink bg-ink text-paper'
+                            : done
+                              ? 'border-pine-600/40 bg-pine-50 text-pine-700'
+                              : 'border-rule bg-paper-bright text-ink-faint'
                         }`}
                       >
-                        {st.step}
-                      </span>
-                    )}
-                    <span>{st.title}</span>
-                  </div>
-                  {idx < stages.length - 1 && (
-                    <ArrowRight
-                      className="h-2.5 w-2.5 text-ink-faint"
-                      aria-hidden="true"
-                    />
-                  )}
-                </React.Fragment>
-              ))}
-            </nav>
-          </div>
+                        {done && !active ? (
+                          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                        ) : (
+                          <span
+                            className={`flex h-3.5 w-3.5 items-center justify-center border text-[8px] ${
+                              active
+                                ? 'border-paper/40 text-paper'
+                                : 'border-current text-ink-faint'
+                            }`}
+                          >
+                            {st.step}
+                          </span>
+                        )}
+                        <span>{st.title}</span>
+                      </div>
+                      {idx < stages.length - 1 && (
+                        <ArrowRight
+                          className="h-2.5 w-2.5 text-ink-faint"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </nav>
+            </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <div className="flex flex-col">
-              <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                Reserve R_x
-              </span>
-              <span
-                data-testid="reserve-rx"
-                className="font-mono text-[11px] font-bold text-ink tabular-nums"
-              >
-                {formatToken(state.reserves.rx, 2)} {state.reserves.base_symbol}
-              </span>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex flex-col">
+                <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+                  Reserve R_x
+                </span>
+                <span
+                  data-testid="reserve-rx"
+                  className="font-mono text-[11px] font-bold text-ink tabular-nums"
+                >
+                  {state ? formatToken(state.reserves.rx, 2) : '—'} {config.baseSymbol}
+                </span>
+              </div>
+              <div className="hidden h-7 w-px bg-rule sm:block" />
+              <div className="flex flex-col">
+                <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+                  Reserve R_y
+                </span>
+                <span
+                  data-testid="reserve-ry"
+                  className="font-mono text-[11px] font-bold text-ink tabular-nums"
+                >
+                  {state ? formatPrice(state.reserves.ry, 0) : '—'} {config.quoteSymbol}
+                </span>
+              </div>
+              <div className="hidden h-7 w-px bg-rule sm:block" />
+              <div className="flex flex-col">
+                <span className="flex items-center gap-1 font-mono text-[8px] uppercase tracking-label text-ink-faint">
+                  <Activity className="h-2.5 w-2.5 text-vermilion-600" aria-hidden="true" />
+                  Pool spot
+                </span>
+                <span
+                  data-testid="pool-spot-price"
+                  className="font-mono text-[11px] font-bold text-vermilion-700 tabular-nums"
+                >
+                  {state ? `$${formatPrice(state.reserves.spot_price, 2)}` : '—'}
+                </span>
+              </div>
+              <div className="hidden h-7 w-px bg-rule sm:block" />
+              <div className="flex flex-col">
+                <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+                  LP invariant k
+                </span>
+                <span
+                  data-testid="pool-k-invariant"
+                  className="font-mono text-[11px] font-bold text-pine-700 tabular-nums"
+                >
+                  {state ? formatInvariant(state.reserves.k_invariant) : '—'}
+                </span>
+              </div>
             </div>
-            <div className="hidden h-7 w-px bg-rule sm:block" />
-            <div className="flex flex-col">
-              <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                Reserve R_y
-              </span>
-              <span
-                data-testid="reserve-ry"
-                className="font-mono text-[11px] font-bold text-ink tabular-nums"
-              >
-                {formatPrice(state.reserves.ry, 0)} {state.reserves.quote_symbol}
-              </span>
-            </div>
-            <div className="hidden h-7 w-px bg-rule sm:block" />
-            <div className="flex flex-col">
-              <span className="flex items-center gap-1 font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                <Activity className="h-2.5 w-2.5 text-vermilion-600" aria-hidden="true" />
-                Pool spot
-              </span>
-              <span
-                data-testid="pool-spot-price"
-                className="font-mono text-[11px] font-bold text-vermilion-700 tabular-nums"
-              >
-                ${formatPrice(state.reserves.spot_price, 2)}
-              </span>
-            </div>
-            <div className="hidden h-7 w-px bg-rule sm:block" />
-            <div className="flex flex-col">
-              <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                LND invariant k
-              </span>
-              <span
-                data-testid="pool-k-invariant"
-                className="font-mono text-[11px] font-bold text-pine-700 tabular-nums"
-              >
-                {formatInvariant(state.reserves.k_invariant)}
-              </span>
-            </div>
-          </div>
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-rule pt-2 sm:justify-end">
             <button
               type="button"
-              onClick={onAdvancePhase}
-              disabled={state.phase !== 'Open' || busyAction !== null}
-              className="inline-flex items-center gap-1.5 border border-brass-600 bg-brass-50 px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-brass-800 transition hover:bg-brass-100 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={onRefresh}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-ink-muted transition hover:border-ink hover:text-ink disabled:opacity-40"
             >
-              <Play className="h-3 w-3" aria-hidden="true" />
-              <span>Advance to Reveal</span>
+              <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
+              <span>{refreshing ? 'Syncing' : 'Refresh Ledger'}</span>
             </button>
 
             <button
               type="button"
               onClick={onSettleBatch}
-              disabled={
-                (state.orders.length === 0 && state.commitments.length === 0) ||
-                busyAction !== null
+              disabled={!canSettle}
+              title={
+                !account
+                  ? 'Connect a wallet to settle permissionlessly'
+                  : phase !== 'Ready'
+                    ? `Settlement opens when the reveal window closes for batch ${state ? `#${state.batch_id}` : ''}`
+                    : 'Compute the uniform clearing price and open the next batch'
               }
               className="inline-flex items-center gap-1.5 border border-pine-700 bg-pine-600 px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-paper transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-              <span>Settle Batch Now</span>
+              <span>
+                {busyAction === 'settle'
+                  ? 'Settling…'
+                  : phase === 'Ready'
+                    ? 'Settle Batch'
+                    : 'Settlement Locked'}
+              </span>
             </button>
 
-            <button
-              type="button"
-              onClick={onResetPool}
-              disabled={busyAction !== null}
-              aria-label="Reset Pool"
-              className="inline-flex items-center gap-1 border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-ink-muted transition hover:border-ink hover:text-ink disabled:opacity-40"
-            >
-              <RotateCcw className="h-3 w-3" aria-hidden="true" />
-              <span>Reset Pool</span>
-            </button>
+            {batch && Number(batch.orderCount) > 0 && (
+              <span className="font-mono text-[8.5px] uppercase tracking-label text-ink-faint tabular-nums">
+                {Number(batch.orderCount)} orders · {Number(batch.commitCount)} commitments
+              </span>
+            )}
           </div>
         </div>
       </div>

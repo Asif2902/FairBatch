@@ -2,150 +2,144 @@ import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
-  FileCode2,
   Globe,
   Link2,
+  LogOut,
+  RefreshCw,
   Wallet,
   X,
 } from 'lucide-react';
-import type {
-  ContractConfigUpdatePayload,
-  HealthResponse,
-} from '../types';
-import { shortenAddress } from '../lib/format';
-
-interface EthereumProvider {
-  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
-}
-
-declare global {
-  interface Window {
-    ethereum?: EthereumProvider;
-  }
-}
+import { getAddress, isAddress, zeroAddress } from 'viem';
+import type { RuntimeConfig } from '../onchain/config';
+import { getChainLabel, shortenAddress } from '../lib/format';
 
 interface ContractConfigModalProps {
   isOpen: boolean;
-  health: HealthResponse;
-  browserWalletAddress: string | null;
+  config: RuntimeConfig;
+  account: string | null;
+  walletChainId: number | null;
+  wrongNetwork: boolean;
+  busyAction: string | null;
   onClose: () => void;
-  onSaveConfig: (payload: ContractConfigUpdatePayload) => Promise<void>;
-  onConnectBrowserWallet: (address: string) => void;
+  onSaveConfig: (partial: Partial<RuntimeConfig>) => void;
+  onResetConfig: () => void;
+  onConnect: () => Promise<void>;
+  onDisconnect: () => void;
 }
 
-const NETWORK_PRESETS = [
+const NETWORK_PRESETS: Array<{
+  label: string;
+  hint: string;
+  chainId: number;
+  rpcUrl: string;
+  explorerUrl: string;
+  fairBatch: string;
+  baseToken: string;
+  quoteToken: string;
+}> = [
   {
-    label: 'Ethereum Sepolia (Live Deployed)',
+    label: 'Ethereum Sepolia',
+    hint: 'Live deployment',
     chainId: 11155111,
     rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
+    explorerUrl: 'https://sepolia.etherscan.io',
     fairBatch: '0x60122518eccbeeb247cd42b0201f244432c7600d',
     baseToken: '0xe72678fb21267fbb5c02c59496f04a86a7d8d56b',
     quoteToken: '0x0384fb6158fb2e5ea021af6f8fa3e81daeb075f0',
   },
   {
-    label: 'Ethereum Hoodi (Cancun/Prague)',
-    chainId: 560048,
-    rpcUrl: 'https://rpc.hoodi.ethpandaops.io',
-    fairBatch: '0x0000000000000000000000000000000000000000',
-    baseToken: '0x0000000000000000000000000000000000000000',
-    quoteToken: '0x0000000000000000000000000000000000000000',
-  },
-  {
-    label: 'Local Anvil EVM (31337)',
+    label: 'Local Anvil',
+    hint: 'Developer chain',
     chainId: 31337,
     rpcUrl: 'http://127.0.0.1:8545',
+    explorerUrl: '',
     fairBatch: '0x0000000000000000000000000000000000000000',
     baseToken: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     quoteToken: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512',
   },
-  {
-    label: 'Ethereum Mainnet (1)',
-    chainId: 1,
-    rpcUrl: 'https://ethereum-rpc.publicnode.com',
-    fairBatch: '0x0000000000000000000000000000000000000000',
-    baseToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-    quoteToken: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  },
 ];
+
+function validAddress(value: string): boolean {
+  return isAddress(value.trim()) && getAddress(value.trim()) !== zeroAddress;
+}
 
 export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
   isOpen,
-  health,
-  browserWalletAddress,
+  config,
+  account,
+  walletChainId,
+  wrongNetwork,
+  busyAction,
   onClose,
   onSaveConfig,
-  onConnectBrowserWallet,
+  onResetConfig,
+  onConnect,
+  onDisconnect,
 }) => {
-  const [rpcUrl, setRpcUrl] = useState<string>(health.rpc_url ?? '');
-  const [chainId, setChainId] = useState<string>(String(health.chain_id || 11155111));
-  const [fairBatchAddr, setFairBatchAddr] = useState<string>(
-    health.contracts.fair_batch,
-  );
-  const [baseTokenAddr, setBaseTokenAddr] = useState<string>(
-    health.contracts.base_token,
-  );
-  const [quoteTokenAddr, setQuoteTokenAddr] = useState<string>(
-    health.contracts.quote_token,
-  );
-  const [saving, setSaving] = useState(false);
+  const [rpcUrl, setRpcUrl] = useState<string>(config.rpcUrl);
+  const [chainId, setChainId] = useState<string>(String(config.chainId));
+  const [fairBatchAddr, setFairBatchAddr] = useState<string>(config.fairBatch);
+  const [baseTokenAddr, setBaseTokenAddr] = useState<string>(config.baseToken);
+  const [quoteTokenAddr, setQuoteTokenAddr] = useState<string>(config.quoteToken);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
-  const [walletErr, setWalletErr] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      setRpcUrl(health.rpc_url ?? '');
-      setChainId(String(health.chain_id || 11155111));
-      setFairBatchAddr(health.contracts.fair_batch);
-      setBaseTokenAddr(health.contracts.base_token);
-      setQuoteTokenAddr(health.contracts.quote_token);
-      setStatusMsg(null);
-      setWalletErr(null);
-    }
-  }, [isOpen, health]);
+    if (!isOpen) return;
+    setRpcUrl(config.rpcUrl);
+    setChainId(String(config.chainId));
+    setFairBatchAddr(config.fairBatch);
+    setBaseTokenAddr(config.baseToken);
+    setQuoteTokenAddr(config.quoteToken);
+    setStatusMsg(null);
+    setFormError(null);
+  }, [isOpen, config]);
 
   if (!isOpen) return null;
 
-  const handleConnectWallet = async () => {
-    setWalletErr(null);
-    if (!window.ethereum) {
-      setWalletErr(
-        'No EIP-1193 wallet extension detected. Use the 5 pre-funded secp256k1 Demo Wallets in the top bar!',
-      );
-      return;
-    }
+  const busy = busyAction !== null;
+
+  const handleConnect = async () => {
+    setFormError(null);
     try {
-      const accounts = (await window.ethereum.request({
-        method: 'eth_requestAccounts',
-      })) as string[];
-      if (Array.isArray(accounts) && accounts[0]) {
-        onConnectBrowserWallet(accounts[0]);
-        setStatusMsg(`Connected EIP-1193 wallet ${shortenAddress(accounts[0])}`);
-      }
+      await onConnect();
+      setStatusMsg('Wallet authorised for on-chain transactions.');
     } catch (err) {
-      setWalletErr(
-        err instanceof Error ? err.message : 'Failed to connect browser wallet',
-      );
+      setFormError(err instanceof Error ? err.message : 'Failed to connect wallet');
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setSaving(true);
+    setFormError(null);
     setStatusMsg(null);
-    try {
-      await onSaveConfig({
-        rpc_url: rpcUrl.trim(),
-        chain_id: Number.parseInt(chainId, 10) || 11155111,
-        fair_batch: fairBatchAddr.trim(),
-        base_token: baseTokenAddr.trim(),
-        quote_token: quoteTokenAddr.trim(),
-      });
-      setStatusMsg('Runtime contract & RPC bridge configuration updated.');
-    } catch (err) {
-      setWalletErr(err instanceof Error ? err.message : 'Failed to update config');
-    } finally {
-      setSaving(false);
+    const parsedChainId = Number.parseInt(chainId, 10);
+    if (!Number.isFinite(parsedChainId) || parsedChainId <= 0) {
+      setFormError('Chain ID must be a positive integer.');
+      return;
     }
+    if (!/^https?:\/\//i.test(rpcUrl.trim())) {
+      setFormError('JSON-RPC endpoint must be an http(s) URL.');
+      return;
+    }
+    if (!validAddress(fairBatchAddr)) {
+      setFormError('Enter the deployed FairBatch contract address (not the zero address).');
+      return;
+    }
+    if (!validAddress(baseTokenAddr) || !validAddress(quoteTokenAddr)) {
+      setFormError('Enter valid base and quote token contract addresses.');
+      return;
+    }
+    onSaveConfig({
+      chainId: parsedChainId,
+      rpcUrl: rpcUrl.trim(),
+      explorerUrl: NETWORK_PRESETS.find((p) => p.chainId === parsedChainId)?.explorerUrl ??
+        (parsedChainId === 11155111 ? 'https://sepolia.etherscan.io' : ''),
+      fairBatch: getAddress(fairBatchAddr.trim()),
+      baseToken: getAddress(baseTokenAddr.trim()),
+      quoteToken: getAddress(quoteTokenAddr.trim()),
+    });
+    onClose();
   };
 
   return (
@@ -170,7 +164,8 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                 Contract &amp; network readiness
               </h2>
               <p className="mt-0.5 text-[11px] text-ink-muted">
-                Plug in deployed Sepolia, Hoodi, Anvil, or Mainnet addresses at runtime.
+                Point this terminal at any EVM deployment of FairBatch. Values are
+                stored locally in this browser.
               </p>
             </div>
           </div>
@@ -185,73 +180,82 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
         </div>
 
         <div className="space-y-4 p-5">
-          {/* Build artifacts & injected wallet */}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="border border-rule bg-paper-soft p-3">
               <div className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-ink-soft">
-                <FileCode2 className="h-3.5 w-3.5 text-pine-700" />
-                <span>Fe 26.5.0 artifacts (out/)</span>
+                <Link2 className="h-3.5 w-3.5 text-cobalt-700" />
+                <span>Live deployment</span>
               </div>
               <p className="mt-1 font-mono text-[10px] text-ink-muted">
-                {health.fe_artifacts_present
-                  ? `Detected (${health.fe_artifacts.length || 2} artifacts)`
-                  : 'Pending `fe build` output'}
+                {getChainLabel(config.chainId)}
               </p>
-              {health.fe_artifacts.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {health.fe_artifacts.slice(0, 4).map((art) => (
-                    <span
-                      key={art}
-                      className="border border-pine-600/30 bg-pine-50 px-1.5 py-0.5 font-mono text-[9px] text-pine-700"
-                    >
-                      {art}
-                    </span>
-                  ))}
-                </div>
-              )}
+              <p className="mt-0.5 break-all font-mono text-[10px] text-ink-soft">
+                {config.fairBatch}
+              </p>
             </div>
 
             <div className="border border-rule bg-paper-soft p-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-ink-soft">
                   <Wallet className="h-3.5 w-3.5 text-cobalt-700" />
-                  <span>EIP-1193 browser wallet</span>
+                  <span>Injected wallet</span>
                 </span>
-                {browserWalletAddress && (
+                {account && (
                   <span className="border border-pine-600/30 bg-pine-50 px-1.5 py-0.5 font-mono text-[9px] text-pine-700">
-                    {shortenAddress(browserWalletAddress)}
+                    {shortenAddress(account)}
                   </span>
                 )}
               </div>
               <p className="mt-1 text-[10px] leading-snug text-ink-muted">
-                Sign real `eth_signTypedData_v4` intents via MetaMask/Rabby, or use demo wallets.
+                {account
+                  ? wrongNetwork
+                    ? `Wallet is on chain ${walletChainId ?? '?'}; FairBatch expects ${config.chainId}. Reconnect to switch.`
+                    : 'Signing orders, commitments, settlements and claims with this wallet.'
+                  : 'Connect MetaMask, Rabby, or another EIP-1193 wallet to submit transactions.'}
               </p>
-              <button
-                type="button"
-                onClick={handleConnectWallet}
-                className="mt-2 inline-flex items-center gap-1.5 border border-cobalt-600/40 bg-cobalt-50 px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-cobalt-700 transition hover:bg-cobalt-100"
-              >
-                <Link2 className="h-3 w-3" />
-                <span>
-                  {browserWalletAddress ? 'Reconnect Wallet' : 'Connect Injected Wallet'}
-                </span>
-              </button>
+              {account ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void handleConnect()}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1.5 border border-cobalt-600/40 bg-cobalt-50 px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-cobalt-700 transition hover:bg-cobalt-100 disabled:opacity-40"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    <span>Switch / reconnect</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDisconnect}
+                    className="inline-flex items-center gap-1.5 border border-rule-strong px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
+                  >
+                    <LogOut className="h-3 w-3" />
+                    <span>Disconnect</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleConnect()}
+                  disabled={busy}
+                  className="mt-2 inline-flex items-center gap-1.5 border border-cobalt-600/40 bg-cobalt-50 px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-cobalt-700 transition hover:bg-cobalt-100 disabled:opacity-40"
+                >
+                  <Link2 className="h-3 w-3" />
+                  <span>Connect injected wallet</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Cancun / EIP-1153 notice */}
           <div className="flex items-start gap-2.5 border-l-2 border-brass-500 bg-brass-50 px-3 py-2.5 text-[10.5px] leading-relaxed text-brass-900">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brass-700" />
             <div>
               <span className="font-bold">EVM Cancun opcode compatibility:</span>{' '}
               FairBatch uses Fe 26.5 <code>std::evm::mutex::Mutex</code> (`TLOAD`/`TSTORE`,
-              EIP-1153) and `PUSH0` (EIP-3855).{' '}
-              <strong>Mainnet, Sepolia, Hoodi, and Anvil</strong> support Cancun natively;
-              deprecated Goerli/Holesky testnets are sunset.
+              EIP-1153) and `PUSH0` (EIP-3855). The target chain must support Cancun.
             </div>
           </div>
 
-          {/* Network templates */}
           <div>
             <span className="eyebrow mb-1.5 block">Quick network templates</span>
             <div className="grid grid-cols-2 gap-px border border-rule bg-rule sm:grid-cols-4">
@@ -265,17 +269,21 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                     setFairBatchAddr(preset.fairBatch);
                     setBaseTokenAddr(preset.baseToken);
                     setQuoteTokenAddr(preset.quoteToken);
+                    setFormError(null);
                   }}
                   className="bg-paper-bright px-2.5 py-2 text-left transition hover:bg-paper-soft"
                 >
                   <div className="font-display text-[11px] font-bold text-ink">
-                    {preset.label.split(' (')[0]}
+                    {preset.label}
                   </div>
                   <div className="mt-0.5 font-mono text-[9px] text-ink-muted">
-                    Chain ID: {preset.chainId}
+                    {preset.hint} · chain {preset.chainId}
                   </div>
                 </button>
               ))}
+              <div className="flex items-center bg-paper-bright px-2.5 py-2 font-mono text-[9px] leading-snug text-ink-faint">
+                Or edit the fields below for a custom deployment.
+              </div>
             </div>
           </div>
 
@@ -286,7 +294,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   htmlFor="cfg-rpc-url"
                   className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  JSON-RPC endpoint (`RPC_URL`)
+                  JSON-RPC endpoint
                 </label>
                 <input
                   id="cfg-rpc-url"
@@ -302,7 +310,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   htmlFor="cfg-chain-id"
                   className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  Chain ID (`CHAIN_ID`)
+                  Chain ID
                 </label>
                 <input
                   id="cfg-chain-id"
@@ -319,7 +327,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                 htmlFor="cfg-fairbatch-addr"
                 className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
               >
-                FairBatch Contract Address (`FAIRBATCH_ADDRESS`)
+                FairBatch contract address
               </label>
               <input
                 id="cfg-fairbatch-addr"
@@ -337,7 +345,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   htmlFor="cfg-base-addr"
                   className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  Base token WETH (18 decimals)
+                  Base token · {config.baseSymbol} ({config.baseDecimals} decimals)
                 </label>
                 <input
                   id="cfg-base-addr"
@@ -352,7 +360,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                   htmlFor="cfg-quote-addr"
                   className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
                 >
-                  Quote token USDC (6 decimals)
+                  Quote token · {config.quoteSymbol} ({config.quoteDecimals} decimals)
                 </label>
                 <input
                   id="cfg-quote-addr"
@@ -371,27 +379,40 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
               </div>
             )}
 
-            {walletErr && (
+            {formError && (
               <div className="border-l-2 border-vermilion-500 bg-vermilion-50 px-3 py-2 text-[10.5px] text-vermilion-800">
-                {walletErr}
+                {formError}
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2 border-t border-rule pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
               <button
                 type="button"
-                onClick={onClose}
-                className="border border-rule-strong px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
+                onClick={() => {
+                  onResetConfig();
+                  onClose();
+                }}
+                className="inline-flex items-center gap-1.5 border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
               >
-                Close
+                <RefreshCw className="h-3 w-3" />
+                <span>Reset to Sepolia defaults</span>
               </button>
-              <button
-                type="submit"
-                disabled={saving}
-                className="border border-pine-700 bg-pine-600 px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-paper transition hover:bg-pine-700 disabled:opacity-50"
-              >
-                {saving ? 'Applying…' : 'Save Contract Config'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="border border-rule-strong px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="border border-pine-700 bg-pine-600 px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-paper transition hover:bg-pine-700 disabled:opacity-50"
+                >
+                  Save contract config
+                </button>
+              </div>
             </div>
           </form>
         </div>

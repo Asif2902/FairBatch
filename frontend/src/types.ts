@@ -1,6 +1,6 @@
 export type ExecutionMode = 'local_engine' | 'rpc_connected' | 'browser_fallback';
 
-export type BatchPhase = 'Open' | 'Reveal' | 'Settled';
+export type BatchPhase = 'Open' | 'Reveal' | 'Ready' | 'Settled';
 
 export type OrderSide = 'SellBase' | 'BuyBase';
 
@@ -188,6 +188,27 @@ export interface LocalSecretVaultEntry {
   commitment_hash: string;
   bond_eth: number;
   revealed: boolean;
+  /** Exact raw input units, stored so a reveal never depends on float rounding. */
+  amount_in_raw?: string;
+  /** Exact WAD limit price, stored so a reveal never depends on float rounding. */
+  limit_price_raw?: string;
+  /** Exact wei bond posted with the commitment. */
+  bond_wei?: string;
+}
+
+export interface SignedIntentArtifact {
+  trader: string;
+  label: string;
+  side: OrderSide;
+  amount_in: number;
+  limit_price: number;
+  amount_in_raw: string;
+  limit_price_raw: string;
+  batch_id: number;
+  nonce: number;
+  deadline: number;
+  signature: string;
+  digest: string;
 }
 
 export interface SignedDemoIntentResponse {

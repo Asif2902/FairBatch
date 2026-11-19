@@ -11,15 +11,14 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import type {
-  HealthResponse,
   LocalSecretVaultEntry,
   OrderSide,
-  SignedDemoIntentResponse,
+  SignedIntentArtifact,
   StateResponse,
 } from '../types';
+import type { RuntimeConfig } from '../onchain/config';
 import { computeBatchSettlement } from '../lib/fallbackEngine';
 import {
-  buildEip712TypedData,
   computeLocalCommitmentHash,
   generateRandomSaltHex,
 } from '../lib/keccak';
@@ -29,59 +28,46 @@ type TicketTab = 'direct' | 'commit_reveal' | 'eip712';
 
 interface OrderTicketProps {
   state: StateResponse;
-  health: HealthResponse;
-  selectedTraderAddress: string;
+  config: RuntimeConfig;
+  account: string | null;
   localSecrets: LocalSecretVaultEntry[];
   busyAction: string | null;
+  minBondWei: bigint;
+  onConnect: () => Promise<void>;
   onSubmitDirect: (params: {
-    trader: string;
-    label?: string;
     side: OrderSide;
-    amount_in: number;
-    limit_price: number;
+    amountIn: string;
+    limitPrice: string;
   }) => Promise<void>;
   onSealCommit: (params: {
-    trader: string;
-    label: string;
     side: OrderSide;
-    amount_in: number;
-    limit_price: number;
+    amountIn: string;
+    limitPrice: string;
     salt: string;
-    bond_eth: number;
+    bondEth: string;
   }) => Promise<void>;
   onRevealCommit: (secret: LocalSecretVaultEntry) => Promise<void>;
-  onSignDemoIntent: (params: {
-    demo_account_index: number;
+  onSignIntent: (params: {
     side: OrderSide;
-    amount_in: number;
-    limit_price: number;
-    batch_id: number;
-    deadline: number;
-  }) => Promise<SignedDemoIntentResponse>;
-  onSubmitSignedIntent: (params: {
-    trader: string;
-    label?: string;
-    side: OrderSide;
-    amount_in: number;
-    limit_price: number;
-    batch_id: number;
-    nonce: number;
-    deadline: number;
-    signature: string;
-  }) => Promise<void>;
+    amountIn: string;
+    limitPrice: string;
+  }) => Promise<SignedIntentArtifact>;
+  onSubmitIntent: (artifact: SignedIntentArtifact) => Promise<void>;
 }
 
 export const OrderTicket: React.FC<OrderTicketProps> = ({
   state,
-  health,
-  selectedTraderAddress,
+  config,
+  account,
   localSecrets,
   busyAction,
+  minBondWei,
+  onConnect,
   onSubmitDirect,
   onSealCommit,
   onRevealCommit,
-  onSignDemoIntent,
-  onSubmitSignedIntent,
+  onSignIntent,
+  onSubmitIntent,
 }) => {
   const [activeTab, setActiveTab] = useState<TicketTab>('direct');
   const [side, setSide] = useState<OrderSide>('SellBase');
@@ -90,30 +76,22 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
 
   // Commit-Reveal specific state
   const [salt, setSalt] = useState<string>(() => generateRandomSaltHex());
-  const [bondEthInput, setBondEthInput] = useState<string>('0.05');
+  const [bondEthInput, setBondEthInput] = useState<string>(() => {
+    const minimum = Number(minBondWei) / 1e18;
+    return String(Math.max(minimum, 0.001));
+  });
 
   // EIP-712 Intent specific state
   const [signedArtifact, setSignedArtifact] =
-    useState<SignedDemoIntentResponse | null>(null);
-  const [showTypedJson, setShowTypedJson] = useState<boolean>(false);
+    useState<SignedIntentArtifact | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<string | null>(null);
 
   const amountNum = Number.parseFloat(amountInput) || 0;
   const limitPriceNum = Number.parseFloat(limitPriceInput) || 0;
-  const bondEthNum = Number.parseFloat(bondEthInput) || 0.05;
+  const bondEthNum = Number.parseFloat(bondEthInput) || 0.001;
 
-  const activeWallet = useMemo(
-    () =>
-      state.demo_wallets.find(
-        (w) => w.address.toLowerCase() === selectedTraderAddress.toLowerCase(),
-      ),
-    [state.demo_wallets, selectedTraderAddress],
-  );
-
-  const traderLabel = activeWallet
-    ? activeWallet.name.split(' ')[0]
-    : shortenAddress(selectedTraderAddress);
+  const traderLabel = account ? shortenAddress(account) : 'Wallet not connected';
 
   const handleFlipSide = (nextSide: OrderSide) => {
     setSide(nextSide);
@@ -139,7 +117,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     if (amountNum <= 0 || isLimitInvalid) return null;
     const hypotheticalOrder = {
       order_id: 999_999,
-      trader: selectedTraderAddress,
+      trader: account ?? '0x0000000000000000000000000000000000000000',
       label: traderLabel,
       side,
       amount_in: amountNum,
@@ -163,7 +141,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     amountNum,
     isLimitInvalid,
     limitPriceNum,
-    selectedTraderAddress,
+    account,
     traderLabel,
     side,
     state.batch_id,
@@ -176,53 +154,37 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     () =>
       computeLocalCommitmentHash({
         batch_id: state.batch_id,
-        trader: selectedTraderAddress,
+        trader: account ?? '0x0000000000000000000000000000000000000000',
         side,
         amount_in: amountNum,
         limit_price: limitPriceNum,
         salt,
-      }),
-    [state.batch_id, selectedTraderAddress, side, amountNum, limitPriceNum, salt],
-  );
-
-  const intentDeadline = useMemo(
-    () => Math.floor(Date.now() / 1000) + 3600,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state.batch_id, side, amountNum, limitPriceNum],
-  );
-
-  const eip712Payload = useMemo(
-    () =>
-      buildEip712TypedData({
-        chain_id: health.chain_id || 11155111,
-        verifying_contract:
-          health.contracts.fair_batch ||
-          '0x0000000000000000000000000000000000000000',
-        trader: selectedTraderAddress,
-        side,
-        amount_in: amountNum,
-        limit_price: limitPriceNum,
-        batch_id: state.batch_id,
-        nonce: signedArtifact?.nonce ?? 0,
-        deadline: signedArtifact?.deadline ?? intentDeadline,
+        base_decimals: config.baseDecimals,
+        quote_decimals: config.quoteDecimals,
       }),
     [
-      health.chain_id,
-      health.contracts.fair_batch,
-      selectedTraderAddress,
+      state.batch_id,
+      account,
       side,
       amountNum,
       limitPriceNum,
-      state.batch_id,
-      signedArtifact,
-      intentDeadline,
+      salt,
+      config.baseDecimals,
+      config.quoteDecimals,
     ],
   );
+
+  const requireWallet = (): boolean => {
+    if (account) return true;
+    setLocalError('Connect an injected wallet to sign this transaction.');
+    return false;
+  };
 
   const handleDirectSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
     setLocalFeedback(null);
+    if (!requireWallet()) return;
     if (amountNum <= 0 || isLimitInvalid) {
       setLocalError(
         side === 'BuyBase'
@@ -233,13 +195,11 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     }
     try {
       await onSubmitDirect({
-        trader: selectedTraderAddress,
-        label: `${traderLabel} (Direct)`,
         side,
-        amount_in: amountNum,
-        limit_price: limitPriceNum,
+        amountIn: amountInput,
+        limitPrice: limitPriceInput,
       });
-      setLocalFeedback('Direct limit order queued in current batch.');
+      setLocalFeedback('Direct limit order confirmed on-chain.');
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Order failed');
     }
@@ -249,6 +209,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     e.preventDefault();
     setLocalError(null);
     setLocalFeedback(null);
+    if (!requireWallet()) return;
     if (amountNum <= 0 || isLimitInvalid) {
       setLocalError(
         side === 'BuyBase'
@@ -257,19 +218,23 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
       );
       return;
     }
+    if (bondEthNum <= 0 || bondEthNum * 1e18 < Number(minBondWei)) {
+      setLocalError(
+        `Reveal bond must be at least ${(Number(minBondWei) / 1e18).toFixed(4)} ETH.`,
+      );
+      return;
+    }
     try {
       await onSealCommit({
-        trader: selectedTraderAddress,
-        label: `${traderLabel} (Sealed)`,
         side,
-        amount_in: amountNum,
-        limit_price: limitPriceNum,
+        amountIn: amountInput,
+        limitPrice: limitPriceInput,
         salt,
-        bond_eth: bondEthNum,
+        bondEth: bondEthInput,
       });
       setSalt(generateRandomSaltHex());
       setLocalFeedback(
-        'Sealed commitment locked! Advance to Reveal phase to reveal secret.',
+        'Sealed commitment confirmed. Reveal it in the reveal window to refund the bond.',
       );
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Commit failed');
@@ -279,6 +244,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const handleSignIntent = async () => {
     setLocalError(null);
     setLocalFeedback(null);
+    if (!requireWallet()) return;
     if (amountNum <= 0 || isLimitInvalid) {
       setLocalError(
         side === 'BuyBase'
@@ -288,41 +254,13 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
       return;
     }
     try {
-      if (activeWallet) {
-        const res = await onSignDemoIntent({
-          demo_account_index: activeWallet.index,
-          side,
-          amount_in: amountNum,
-          limit_price: limitPriceNum,
-          batch_id: state.batch_id,
-          deadline: intentDeadline,
-        });
-        setSignedArtifact(res);
-        setLocalFeedback('Signed secp256k1 EIP-712 digest with Demo Wallet.');
-      } else if (window.ethereum) {
-        const sig = (await window.ethereum.request({
-          method: 'eth_signTypedData_v4',
-          params: [selectedTraderAddress, JSON.stringify(eip712Payload)],
-        })) as string;
-        setSignedArtifact({
-          trader: selectedTraderAddress,
-          nonce: 0,
-          deadline: intentDeadline,
-          signature: sig,
-          digest: '0x' + 'e712'.repeat(16),
-        });
-        setLocalFeedback('Signed EIP-712 TypedData via Browser Wallet.');
-      } else {
-        const res = await onSignDemoIntent({
-          demo_account_index: 0,
-          side,
-          amount_in: amountNum,
-          limit_price: limitPriceNum,
-          batch_id: state.batch_id,
-          deadline: intentDeadline,
-        });
-        setSignedArtifact(res);
-      }
+      const artifact = await onSignIntent({
+        side,
+        amountIn: amountInput,
+        limitPrice: limitPriceInput,
+      });
+      setSignedArtifact(artifact);
+      setLocalFeedback('Signed EIP-712 SignedOrder typed data with the connected wallet.');
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'EIP-712 signing failed');
     }
@@ -333,19 +271,9 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     setLocalError(null);
     setLocalFeedback(null);
     try {
-      await onSubmitSignedIntent({
-        trader: signedArtifact.trader,
-        label: `${traderLabel} (EIP-712)`,
-        side,
-        amount_in: amountNum,
-        limit_price: limitPriceNum,
-        batch_id: signedArtifact.batch_id ?? state.batch_id,
-        nonce: signedArtifact.nonce,
-        deadline: signedArtifact.deadline,
-        signature: signedArtifact.signature,
-      });
+      await onSubmitIntent(signedArtifact);
       setSignedArtifact(null);
-      setLocalFeedback('Verified secp256k1 signer & queued EIP-712 intent!');
+      setLocalFeedback('Verified signer and accepted the EIP-712 intent on-chain.');
     } catch (err) {
       setLocalError(
         err instanceof Error ? err.message : 'Intent submission failed',
@@ -356,6 +284,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const batchSecrets = localSecrets.filter(
     (s) => s.batch_id === state.batch_id,
   );
+  const intentOpen = state.phase === 'Open' || state.phase === 'Reveal';
 
   return (
     <section
@@ -367,7 +296,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
         <div className="min-w-0">
           <div className="eyebrow">Order slip · Batch No. {state.batch_id}</div>
           <h2 className="mt-1 font-display text-2xl font-bold leading-none tracking-tight text-ink">
-            {side === 'SellBase' ? 'Sell WETH' : 'Buy WETH'}
+            {side === 'SellBase' ? `Sell ${config.baseSymbol}` : `Buy ${config.baseSymbol}`}
           </h2>
           <p className="mt-1.5 text-[11px] leading-relaxed text-ink-muted">
             Every order in this batch clears at one uniform price.
@@ -385,8 +314,10 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
           {state.phase === 'Open'
             ? 'OPEN'
             : state.phase === 'Reveal'
-              ? 'SEALED'
-              : 'CLEARED'}
+              ? 'REVEAL'
+              : state.phase === 'Ready'
+                ? 'READY'
+                : 'CLEARED'}
         </span>
       </div>
 
@@ -473,6 +404,21 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
       </div>
 
       <div className="space-y-4 p-4">
+        {!account && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border border-brass-500/50 bg-brass-50/70 px-3 py-2">
+            <p className="text-[10.5px] leading-snug text-brass-900">
+              Read-only preview. Connect a wallet to sign real orders and commitments.
+            </p>
+            <button
+              type="button"
+              onClick={() => void onConnect()}
+              disabled={busyAction !== null}
+              className="border border-brass-600 bg-paper-bright px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-brass-800 transition hover:bg-brass-100 disabled:opacity-40"
+            >
+              Connect
+            </button>
+          </div>
+        )}
         {/* Side switch */}
         <div className="grid grid-cols-2 border border-rule-strong bg-paper-soft p-1">
           <button
@@ -486,7 +432,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             }`}
           >
             <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Sell WETH → USDC</span>
+            <span>Sell {config.baseSymbol} → {config.quoteSymbol}</span>
           </button>
           <button
             type="button"
@@ -499,7 +445,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             }`}
           >
             <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Buy WETH ← USDC</span>
+            <span>Buy {config.baseSymbol} ← {config.quoteSymbol}</span>
           </button>
         </div>
 
@@ -542,7 +488,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               className="w-full bg-transparent font-display text-[2.15rem] font-bold leading-none tracking-tight text-ink tabular-nums focus:outline-none"
             />
             <span className="shrink-0 font-mono text-[11px] font-bold uppercase tracking-label text-ink-muted">
-              {side === 'SellBase' ? 'WETH' : 'USDC'}
+              {side === 'SellBase' ? config.baseSymbol : config.quoteSymbol}
             </span>
           </div>
         </div>
@@ -581,7 +527,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               className="w-full bg-transparent font-mono text-lg font-bold text-ink tabular-nums focus:outline-none"
             />
             <span className="shrink-0 font-mono text-[10px] uppercase tracking-label text-ink-muted">
-              USDC / WETH
+              {config.quoteSymbol} / {config.baseSymbol}
             </span>
           </div>
         </div>
@@ -600,11 +546,11 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               <span className="text-right font-mono font-semibold text-ink tabular-nums">
                 {preview.myFill?.status === 'Filled'
                   ? `100% → ${formatToken(preview.myFill.payout_out, 2)} ${
-                      side === 'SellBase' ? 'USDC' : 'WETH'
+                      side === 'SellBase' ? config.quoteSymbol : config.baseSymbol
                     }`
                   : preview.myFill?.status === 'PartialFill'
                     ? `Pro-rata → ${formatToken(preview.myFill.payout_out, 2)} ${
-                        side === 'SellBase' ? 'USDC' : 'WETH'
+                        side === 'SellBase' ? config.quoteSymbol : config.baseSymbol
                       }`
                     : 'Out-of-the-money · full refund'}
               </span>
@@ -669,8 +615,8 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                     <input
                       id="bond-eth-input"
                       type="number"
-                      step="0.01"
-                      min="0.01"
+                      step="any"
+                      min={0}
                       value={bondEthInput}
                       onChange={(e) => setBondEthInput(e.target.value)}
                       className="w-20 border border-rule-strong bg-paper-bright px-2 py-1 text-right font-mono text-xs font-bold text-brass-700"
@@ -687,7 +633,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                     data-testid="commitment-hash-preview"
                     className="mt-1 truncate border border-rule bg-paper-bright px-2.5 py-1.5 font-mono text-[10px] text-pine-700"
                   >
-                    {previewCommitHash}
+                    {account ? previewCommitHash : 'Connect wallet to derive hash'}
                   </div>
                 </div>
               </div>
@@ -733,8 +679,8 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                           <div className="text-[11px] font-semibold text-ink">
                             #{sec.commit_id} ·{' '}
                             {sec.side === 'SellBase'
-                              ? `Sell ${sec.amount_in} WETH`
-                              : `Buy ${sec.amount_in} USDC`}{' '}
+                              ? `Sell ${sec.amount_in} ${config.baseSymbol}`
+                              : `Buy ${sec.amount_in} ${config.quoteSymbol}`}{' '}
                             @ ${sec.limit_price}
                           </div>
                           <div className="truncate font-mono text-[9px] text-ink-faint">
@@ -756,7 +702,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                             onClick={() => onRevealCommit(sec)}
                             title={
                               state.phase !== 'Reveal'
-                                ? 'Advance to the reveal window first'
+                                ? 'The reveal window is not open'
                                 : 'Reveal the secret and refund the bond'
                             }
                             className="inline-flex shrink-0 items-center gap-1 bg-brass-500 px-2.5 py-1.5 text-[10px] font-bold text-paper transition hover:bg-brass-600 disabled:cursor-not-allowed disabled:opacity-40"
@@ -770,11 +716,11 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   })}
                 </div>
 
-                {state.phase === 'Open' &&
+                {(state.phase === 'Open' || state.phase === 'Reveal') &&
                   batchSecrets.some((s) => !s.revealed) && (
                     <p className="mt-1 border-t border-rule/70 pt-2 text-[10px] leading-relaxed text-brass-700">
-                      Advance to the reveal window to open the secret — or settle
-                      directly to test bond slashing.
+                      Reveal the secret during the reveal window to refund the bond.
+                      Unrevealed commitments can be slashed after the deadline.
                     </p>
                   )}
               </div>
@@ -790,20 +736,29 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                 <span className="font-mono text-[10px] font-bold uppercase tracking-label text-cobalt-700">
                   SignedOrder typed data
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setShowTypedJson(!showTypedJson)}
-                  className="font-mono text-[10px] font-semibold text-cobalt-700 underline decoration-dotted underline-offset-2 hover:text-cobalt-800"
-                >
-                  {showTypedJson ? 'Hide JSON' : 'Inspect JSON'}
-                </button>
+                <span className="border border-cobalt-600/40 bg-paper-bright px-1.5 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-[0.06em] text-cobalt-700">
+                  EIP-712 · v1
+                </span>
               </div>
 
-              {showTypedJson && (
-                <pre className="mt-2 max-h-40 overflow-auto border border-cobalt-500/30 bg-paper-bright p-2 font-mono text-[9px] leading-relaxed text-ink-soft">
-                  {JSON.stringify(eip712Payload, null, 2)}
-                </pre>
-              )}
+              <div className="mt-2 space-y-1 border border-cobalt-500/30 bg-paper-bright p-2.5 font-mono text-[9px] text-ink-muted">
+                <div className="flex justify-between gap-2">
+                  <span>Domain</span>
+                  <span className="text-ink">FairBatch · chain {config.chainId}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span>Verifying contract</span>
+                  <span className="text-ink">{shortenAddress(config.fairBatch)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span>Batch</span>
+                  <span className="text-ink">#{state.batch_id}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span>Deadline</span>
+                  <span className="text-ink">1 hour after signing</span>
+                </div>
+              </div>
 
               {signedArtifact && (
                 <div
@@ -827,7 +782,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                disabled={busyAction !== null}
+                disabled={!intentOpen || busyAction !== null}
                 onClick={handleSignIntent}
                 className="border border-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-cobalt-700 transition hover:bg-cobalt-50 disabled:opacity-40"
               >
@@ -835,13 +790,19 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               </button>
               <button
                 type="button"
-                disabled={!signedArtifact || busyAction !== null}
+                disabled={!signedArtifact || !intentOpen || busyAction !== null}
                 onClick={handleSubmitIntent}
                 className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 2. Submit Signed Intent
               </button>
             </div>
+
+            <p className="font-mono text-[8.5px] leading-relaxed text-ink-faint">
+              {intentOpen
+                ? 'Signed intents are accepted through the reveal deadline. The contract verifies the signer, batch id, nonce and deadline.'
+                : 'The intent window is closed for this batch. Wait for the next batch after settlement.'}
+            </p>
           </div>
         )}
 
@@ -875,7 +836,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
           <div className="mt-2 max-h-48 overflow-y-auto">
             {state.orders.length === 0 ? (
               <div className="border border-dashed border-rule-strong py-4 text-center text-[11px] text-ink-faint">
-                No revealed orders yet. Load a scenario or submit above.
+                No revealed or signed orders in Batch #{state.batch_id} yet.
               </div>
             ) : (
               <div className="divide-y divide-rule/70">
@@ -903,8 +864,8 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                         }
                       >
                         {ord.side === 'SellBase'
-                          ? `−${formatToken(ord.amount_in, 2)} WETH`
-                          : `+${formatPrice(ord.amount_in, 0)} USDC`}
+                          ? `−${formatToken(ord.amount_in, 2)} ${config.baseSymbol}`
+                          : `+${formatPrice(ord.amount_in, 0)} ${config.quoteSymbol}`}
                       </span>
                       <span className="border border-rule px-1 py-0.5 text-[8px] uppercase tracking-label text-ink-faint">
                         {ord.submission_type === 'Eip712Intent'
