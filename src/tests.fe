@@ -104,6 +104,9 @@ msg TraderActorMsg {
     #[selector = sol("claimOnExchange(address,uint256,uint256)")]
     ClaimOnExchange { exchange: Address, batch_id: u256, order_id: u256 } -> (u256, u256),
 
+    #[selector = sol("slashOnExchange(address,uint256,uint256)")]
+    SlashOnExchange { exchange: Address, batch_id: u256, commit_id: u256 } -> Wei,
+
     #[selector = sol(
         "relaySignedIntent(address,(address,uint8,uint256,uint256,uint256,uint256,uint256),bytes)",
     )]
@@ -190,6 +193,17 @@ contract TraderActor uses (call: mut Call) {
                 gas: 800_000,
                 value: Wei::zero(),
                 message: FairBatchMsg::Claim { batch_id, order_id },
+            )
+        }
+
+        SlashOnExchange { exchange, batch_id, commit_id } -> Wei
+        uses (mut call)
+        {
+            call.call(
+                addr: exchange,
+                gas: 800_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SlashUnrevealed { batch_id, commit_id },
             )
         }
 
@@ -1955,7 +1969,7 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
         )
     assert!(c1 == 1)
 
-    // Settle Batch #1, then slash Mallory's unrevealed commitment!
+    // Settle Batch #1, then slash Mallory's unrevealed commitment via a permissionless slasher!
     let _: BatchSummary = evm
         .call(
             addr: fb,
@@ -1963,14 +1977,19 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
             value: Wei::zero(),
             message: FairBatchMsg::SettleBatch {},
         )
+    let slasher = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 26)
+    assert!(evm.balance(fb) == bond_req)
+    assert!(evm.balance(slasher) == Wei::zero())
     let forfeited: Wei = evm
         .call(
-            addr: fb,
-            gas: 500_000,
+            addr: slasher,
+            gas: 1_000_000,
             value: Wei::zero(),
-            message: FairBatchMsg::SlashUnrevealed { batch_id: 1, commit_id: c1 },
+            message: TraderActorMsg::SlashOnExchange { exchange: fb, batch_id: 1, commit_id: c1 },
         )
     assert!(forfeited == bond_req)
+    assert!(evm.balance(slasher) == bond_req)
+    assert!(evm.balance(fb) == Wei::zero())
 
     let comm_state: Commitment = evm
         .call(
@@ -1981,12 +2000,13 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
         )
     assert!(comm_state.slashed)
     assert!(!comm_state.revealed)
+    assert!(comm_state.bond == Wei::zero())
 }
 
 #[test(balance = 100_000_000_000_000_000_000)]
 fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
     // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
-    // `0xfC89Ff14f67bb4A67bd861b3261ff79b60Cc68d0` on chain_id = 1.
+    // `0x9e9B48DD637425CF1B1b26bE46dbc72a3a819D8d` on chain_id = 1.
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
     let fb = evm
@@ -2055,12 +2075,12 @@ fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
             message: FairBatchMsg::ComputeIntentDigest { order: intent },
         )
     assert!(
-        onchain_digest == 0x3cb7691f888c9bf77b1af40a18d134c3da52f5f24131394abbfbab972b6b0440,
+        onchain_digest == 0x11480450ba7e9c2b6d6662fcf1820e95f179cd8195a1316c7f3792150d4d8bff,
     )
 
-    let r: u256 = 0x3ffe1e4df0e519ace7e4a67c32d5ad631b677f1f64160b21d0222559896bf680
-    let s: u256 = 0x2f424d331109d5e5f2ee47091178867decbc5905dd6aac536961e819336aa991
-    let v: u8 = 0x1b
+    let r: u256 = 0xc8160a0d0e9be6dc31790100d0d0fea3a7744f100a0b378ba5bc6271bb2432fc
+    let s: u256 = 0x4eac7fcc68a9d1d1b8fe4a48edfabd4c743708bc344040be3daf3ff9f7192523
+    let v: u8 = 0x1c
     let sig = encode_packed((r, s, v)).as_bytes()
 
     // Separate relayer contract submits the gasless EIP-712 intent on behalf of `signer`!
@@ -2776,9 +2796,9 @@ fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
         nonce: 0,
         deadline: Timestamp::from_seconds(1_000_000_000),
     }
-    let r: u256 = 0x3ffe1e4df0e519ace7e4a67c32d5ad631b677f1f64160b21d0222559896bf680
-    let s: u256 = 0x2f424d331109d5e5f2ee47091178867decbc5905dd6aac536961e819336aa991
-    let v: u8 = 0x1b
+    let r: u256 = 0xc8160a0d0e9be6dc31790100d0d0fea3a7744f100a0b378ba5bc6271bb2432fc
+    let s: u256 = 0x4eac7fcc68a9d1d1b8fe4a48edfabd4c743708bc344040be3daf3ff9f7192523
+    let v: u8 = 0x1c
 
     let first_id: u256 = evm
         .call(

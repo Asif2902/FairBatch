@@ -139,6 +139,19 @@ uses (clock: BatchClock)
     }
 }
 
+/// Enforces that an unrevealed commitment in `meta` is eligible for slashing.
+pub fn assert_slashable_window(meta: BatchMeta, cfg: MarketConfig)
+uses (clock: BatchClock)
+{
+    let can_slash = if cfg.commit_window == Duration::zero()
+        && cfg.reveal_window == Duration::zero() {
+        meta.settled
+    } else {
+        clock.now() > meta.reveal_deadline
+    }
+    assert!(can_slash, "Reveal window not expired")
+}
+
 /// Pure validation of order side, minimum anti-dust size, and positive buyer limit price.
 pub const fn validate_order_params(side: u8, amount_in: u256, limit_price: u256) {
     match Side::from_u8(side) {
@@ -384,12 +397,7 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             name_hash: EIP712_NAME_HASH,
             version_hash: EIP712_VERSION_HASH,
         )
-        pool = PoolState {
-            reserve_base: 0,
-            reserve_quote: 0,
-            total_shares: 0,
-            slashed_bonds: Wei::zero(),
-        }
+        pool = PoolState { reserve_base: 0, reserve_quote: 0, total_shares: 0 }
 
         let start = ctx.timestamp()
         let commit_dl = start + commit_window
@@ -816,36 +824,39 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
         }
 
         SlashUnrevealed { batch_id, commit_id } -> Wei
-        uses (ctx, mut log, config, mut pool, batches, mut commitments, mut guard)
+        uses (ctx, mut call, mut log, config, batches, mut commitments, mut guard)
         {
             guard.lock()
             let meta = batches.get(key: batch_id)
             assert!(commit_id < meta.commit_count, "Invalid commit id")
 
-            let can_slash = if config.commit_window == Duration::zero()
-                && config.reveal_window == Duration::zero() {
-                meta.settled
-            } else {
-                ctx.timestamp() > meta.reveal_deadline
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_slashable_window(meta, cfg: config)
             }
-            assert!(can_slash, "Reveal window not expired")
 
             var comm = commitments.get(key: (batch_id, commit_id))
             assert!(!comm.revealed, "Commitment was revealed")
             assert!(!comm.slashed, "Already slashed")
 
+            let slasher = ctx.caller()
             let forfeited = comm.bond
             comm.slashed = true
             comm.bond = Wei::zero()
             commitments.set(key: (batch_id, commit_id), value: comm)
 
-            pool.slashed_bonds = pool.slashed_bonds + forfeited
+            if forfeited > Wei::zero() {
+                assert!(
+                    call.send_value(addr: slasher, gas: 200_000, value: forfeited).success(),
+                    "Slash payout failed",
+                )
+            }
 
             log.emit(
                 CommitmentSlashed {
                     batch_id,
                     commit_id,
                     trader: comm.trader,
+                    slasher,
                     forfeited_bond: forfeited,
                 },
             )

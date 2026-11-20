@@ -15,13 +15,8 @@ pub struct MarketConfig {
 
 impl Copy for MarketConfig {}
 
-/// Embedded FM-AMM passive reserve pool state & accumulated forfeited reveal bonds.
-pub struct PoolState {
-    pub reserve_base: u256,
-    pub reserve_quote: u256,
-    pub total_shares: u256,
-    pub slashed_bonds: Wei,
-}
+/// Embedded FM-AMM passive reserve pool state.
+pub struct PoolState { pub reserve_base: u256, pub reserve_quote: u256, pub total_shares: u256 }
 
 impl Copy for PoolState {}
 

@@ -243,6 +243,7 @@ pub struct CommitmentSlashed {
     pub commit_id: u256,
     #[indexed]
     pub trader: Address,
+    pub slasher: Address,
     pub forfeited_bond: Wei,
 }
 
