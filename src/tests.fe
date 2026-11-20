@@ -15,7 +15,14 @@ use std::evm::packed::encode_packed
 use std::evm::{ether, gwei, seconds}
 
 use ingot::clearing::solve_batch
-use ingot::faucet::{Faucet, FaucetConfigInfo, FaucetMsg, FaucetUserStatus}
+use ingot::faucet::{
+    Faucet,
+    FaucetConfigInfo,
+    FaucetMsg,
+    FaucetUserStatus,
+    assert_faucet_claimable,
+    evaluate_faucet_status,
+}
 use ingot::intent::{
     EIP712_NAME_HASH,
     EIP712_VERSION_HASH,
@@ -33,13 +40,15 @@ use ingot::math::{
     verify_lnd_invariant,
 }
 use ingot::mock_erc20::{MockERC20, MockErc20Msg}
-use ingot::storage::{BatchMeta, MarketConfig}
+use ingot::storage::{BatchMeta, LiquidityLock, MarketConfig}
 use ingot::types::{
     BUY_BASE,
     BatchInfo,
     BatchSummary,
     Commitment,
     LiquidityLockInfo,
+    MAX_ORDERS_PER_BATCH,
+    MINIMUM_LIQUIDITY,
     MODE_DIRECT,
     Order,
     OrderReceipt,
@@ -59,9 +68,13 @@ use ingot::{
     FairBatchMsg,
     assert_intent_window,
     assert_open_window,
+    assert_removable_shares,
     assert_reveal_window,
     assert_settlement_window,
+    assert_slashable_window,
+    compute_updated_lock,
     evaluate_batch_phase,
+    evaluate_liquidity_lock,
 }
 
 // ============================================================================
@@ -120,6 +133,12 @@ msg TraderActorMsg {
 
     #[selector = sol("refundCount()")]
     RefundCount -> u256,
+
+    #[selector = sol("mintToken(address,address,uint256)")]
+    MintToken { token: Address, to: Address, amount: u256 } -> bool,
+
+    #[selector = sol("setTokenBlacklisted(address,address,bool)")]
+    SetTokenBlacklisted { token: Address, account: Address, blocked: bool } -> bool,
 }
 
 contract TraderActor uses (call: mut Call) {
@@ -237,6 +256,24 @@ contract TraderActor uses (call: mut Call) {
 
         RefundCount -> u256 uses (refund_count) {
             refund_count
+        }
+
+        MintToken { token, to, amount } -> bool uses (mut call) {
+            call.call(
+                addr: token,
+                gas: 300_000,
+                value: Wei::zero(),
+                message: MockErc20Msg::Mint { to, amount },
+            )
+        }
+
+        SetTokenBlacklisted { token, account, blocked } -> bool uses (mut call) {
+            call.call(
+                addr: token,
+                gas: 300_000,
+                value: Wei::zero(),
+                message: MockErc20Msg::SetBlacklisted { account, blocked },
+            )
         }
     }
 
@@ -3451,4 +3488,1280 @@ fn evm_revert_faucet_double_claim_during_cooldown() uses (evm: mut Evm) {
             value: Wei::zero(),
             message: FaucetMsg::Claim {},
         )
+}
+
+// ============================================================================
+// Group F: Phase 2 Comprehensive Coverage — Effects, Caps, Slippage & Security
+// ============================================================================
+
+#[test]
+fn effect_lp_lock_expiry_before_and_after_unlock() {
+    let empty_lock = LiquidityLock {
+        locked_shares: 0,
+        unlock_time: Timestamp::from_seconds(0),
+    }
+
+    // Lock 400 shares for 1 hour starting at t = 1,000 -> unlock_time = 4,600
+    let lock1 = with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_000) }) {
+        compute_updated_lock(cur: empty_lock, minted: 400, lock_duration: seconds(3_600))
+    }
+    assert!(lock1.locked_shares == 400)
+    assert!(lock1.unlock_time == Timestamp::from_seconds(4_600))
+
+    // Owned = 1,000 total (600 unlocked + 400 locked). Before unlock (t = 4,599):
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(4_599) }) {
+        let info = evaluate_liquidity_lock(owned: 1_000, lock: lock1)
+        assert!(info.locked_shares == 400)
+        assert!(info.unlocked_shares == 600)
+        assert!(info.unlock_time == Timestamp::from_seconds(4_600))
+        // Partial withdrawal of unlocked shares succeeds and does not clear active lock
+        let clear = assert_removable_shares(owned: 1_000, shares: 600, lock: lock1)
+        assert!(!clear)
+    }
+
+    // At exact unlock boundary (t = 4,600): all 1,000 shares become unlocked and lock clears
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(4_600) }) {
+        let info_after = evaluate_liquidity_lock(owned: 1_000, lock: lock1)
+        assert!(info_after.locked_shares == 0)
+        assert!(info_after.unlocked_shares == 1_000)
+        let clear_after = assert_removable_shares(owned: 1_000, shares: 1_000, lock: lock1)
+        assert!(clear_after)
+    }
+}
+
+#[test(should_revert)]
+fn effect_revert_lp_lock_rejects_locked_shares_before_unlock() {
+    let lock = LiquidityLock {
+        locked_shares: 400,
+        unlock_time: Timestamp::from_seconds(4_600),
+    }
+    // Owned = 1,000 -> only 600 unlocked; withdrawing 601 before t = 4,600 reverts!
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(4_599) }) {
+        let _ = assert_removable_shares(owned: 1_000, shares: 601, lock)
+    }
+}
+
+#[test]
+fn effect_faucet_cooldown_before_and_after_with_mock_clock() {
+    let cooldown = seconds(43_200) // 12 hours
+
+    // Never claimed before: immediately eligible at t = 10,000
+    let (claimed_at, next_at) = with (BatchClock = MockClock { ts: Timestamp::from_seconds(10_000) }) {
+        let st = evaluate_faucet_status(prev: Timestamp::from_seconds(0), cooldown)
+        assert!(st.can_claim)
+        assert_faucet_claimable(prev: Timestamp::from_seconds(0), cooldown)
+    }
+    assert!(claimed_at == Timestamp::from_seconds(10_000))
+    assert!(next_at == Timestamp::from_seconds(53_200))
+
+    // 1 second before cooldown expires (t = 53,199): blocked
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(53_199) }) {
+        let st = evaluate_faucet_status(prev: claimed_at, cooldown)
+        assert!(!st.can_claim)
+        assert!(st.next_claim_at == Timestamp::from_seconds(53_200))
+    }
+
+    // At exact cooldown expiry (t = 53,200): eligible again!
+    let (second_at, second_next) = with (BatchClock = MockClock { ts: Timestamp::from_seconds(53_200) }) {
+        let st = evaluate_faucet_status(prev: claimed_at, cooldown)
+        assert!(st.can_claim)
+        assert_faucet_claimable(prev: claimed_at, cooldown)
+    }
+    assert!(second_at == Timestamp::from_seconds(53_200))
+    assert!(second_next == Timestamp::from_seconds(96_400))
+}
+
+#[test(should_revert)]
+fn effect_revert_faucet_cooldown_active_with_mock_clock() {
+    let cooldown = seconds(43_200)
+    let prev = Timestamp::from_seconds(10_000)
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(53_199) }) {
+        let _ = assert_faucet_claimable(prev, cooldown)
+    }
+}
+
+#[test]
+fn effect_slashable_window_mock_clock() {
+    let cfg = MarketConfig {
+        base_token: Address::new(1),
+        quote_token: Address::new(2),
+        base_decimals: 18,
+        quote_decimals: 6,
+        commit_window: seconds(60),
+        reveal_window: seconds(60),
+        min_bond: gwei(100_000),
+    }
+    let meta = BatchMeta {
+        start_time: Timestamp::from_seconds(1_000),
+        commit_deadline: Timestamp::from_seconds(1_060),
+        reveal_deadline: Timestamp::from_seconds(1_120),
+        order_count: 0,
+        commit_count: 1,
+        revealed_count: 0,
+        settled: false,
+    }
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_121) }) {
+        assert_slashable_window(meta, cfg)
+    }
+}
+
+#[test(should_revert)]
+fn effect_revert_open_window_blocked_when_ready_to_settle() {
+    let meta = BatchMeta {
+        start_time: Timestamp::from_seconds(1_000),
+        commit_deadline: Timestamp::from_seconds(1_060),
+        reveal_deadline: Timestamp::from_seconds(1_120),
+        order_count: 0,
+        commit_count: 0,
+        revealed_count: 0,
+        settled: false,
+    }
+    // Stale/Ready batch after reveal_deadline blocks new direct orders & commits until settle
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_121) }) {
+        assert_open_window(meta)
+    }
+}
+
+#[test(should_revert)]
+fn effect_revert_reveal_window_blocked_when_ready_to_settle() {
+    let cfg = MarketConfig {
+        base_token: Address::new(1),
+        quote_token: Address::new(2),
+        base_decimals: 18,
+        quote_decimals: 6,
+        commit_window: seconds(60),
+        reveal_window: seconds(60),
+        min_bond: Wei::zero(),
+    }
+    let meta = BatchMeta {
+        start_time: Timestamp::from_seconds(1_000),
+        commit_deadline: Timestamp::from_seconds(1_060),
+        reveal_deadline: Timestamp::from_seconds(1_120),
+        order_count: 0,
+        commit_count: 1,
+        revealed_count: 0,
+        settled: false,
+    }
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_121) }) {
+        assert_reveal_window(meta, cfg)
+    }
+}
+
+#[test(should_revert)]
+fn effect_revert_intent_window_blocked_when_ready_to_settle() {
+    let meta = BatchMeta {
+        start_time: Timestamp::from_seconds(1_000),
+        commit_deadline: Timestamp::from_seconds(1_060),
+        reveal_deadline: Timestamp::from_seconds(1_120),
+        order_count: 0,
+        commit_count: 0,
+        revealed_count: 0,
+        settled: false,
+    }
+    with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_121) }) {
+        assert_intent_window(meta)
+    }
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_slash_before_reveal_expiry() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 201)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 202)
+    let bond = gwei(100_000)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, seconds(60), seconds(60), bond),
+            salt: 203,
+        )
+
+    let cid: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: bond,
+            message: FairBatchMsg::CommitOrder { commitment_hash: 0xABCD },
+        )
+    // Reveal window has not expired yet -> must revert "Reveal window not expired"
+    let _: Wei = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SlashUnrevealed { batch_id: 1, commit_id: cid },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_slash_already_slashed() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 211)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 212)
+    let bond = gwei(100_000)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), bond),
+            salt: 213,
+        )
+
+    let cid: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: bond,
+            message: FairBatchMsg::CommitOrder { commitment_hash: 0xDEAD01 },
+        )
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 3_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    let slasher = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 214)
+    let first: Wei = evm
+        .call(
+            addr: slasher,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::SlashOnExchange { exchange: fb, batch_id: 1, commit_id: cid },
+        )
+    assert!(first == bond)
+    // Second slash on the same commitment must revert "Already slashed"!
+    let _: Wei = evm
+        .call(
+            addr: slasher,
+            gas: 800_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::SlashOnExchange { exchange: fb, batch_id: 1, commit_id: cid },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_slash_revealed_commit() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 221)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 222)
+    let bond = gwei(100_000)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), bond),
+            salt: 223,
+        )
+
+    let alice = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 224)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: alice, amount: WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: alice,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: WAD },
+        )
+    let h = compute_commitment_hash(
+        batch_id: 1,
+        trader: alice,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 2_000 * WAD,
+        salt: 0x9999,
+    )
+    let cid: u256 = evm
+        .call(
+            addr: alice,
+            gas: 800_000,
+            value: bond,
+            message: TraderActorMsg::CommitOnExchange {
+                exchange: fb,
+                commitment_hash: h,
+                bond_wei: bond,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: alice,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::RevealOnExchange {
+                exchange: fb,
+                commit_id: cid,
+                side: SELL_BASE,
+                amount_in: WAD,
+                limit_price: 2_000 * WAD,
+                salt: 0x9999,
+            },
+        )
+    let _: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 3_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    // Slashing a revealed commitment must revert "Commitment was revealed"!
+    let _: Wei = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SlashUnrevealed { batch_id: 1, commit_id: cid },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_order_cap_at_65th_order() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 231)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 232)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 233,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 100 * WAD },
+        )
+
+    var i: u256 = 0
+    while i < MAX_ORDERS_PER_BATCH {
+        let oid: u256 = evm
+            .call(
+                addr: fb,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SubmitDirectOrder {
+                    side: SELL_BASE,
+                    amount_in: WAD / 10,
+                    limit_price: 2_000 * WAD,
+                },
+            )
+        assert!(oid == i)
+        i = i + 1
+    }
+
+    // 65th order must revert "Batch order cap reached"!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: WAD / 10,
+                limit_price: 2_000 * WAD,
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_commit_cap_at_65th_commit() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 241)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 242)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 243,
+        )
+
+    var i: u256 = 0
+    while i < MAX_ORDERS_PER_BATCH {
+        let cid: u256 = evm
+            .call(
+                addr: fb,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::CommitOrder { commitment_hash: i + 1 },
+            )
+        assert!(cid == i)
+        i = i + 1
+    }
+
+    // 65th commit must revert "Batch commit cap reached"!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::CommitOrder { commitment_hash: 999 },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_direct_order_blocked_by_reserved_commit_slot() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 251)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 252)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 253,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 100 * WAD },
+        )
+
+    // 1 unrevealed commitment reserves 1 slot out of 64
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::CommitOrder { commitment_hash: 0xCAFE01 },
+        )
+
+    var i: u256 = 0
+    while i < MAX_ORDERS_PER_BATCH - 1 {
+        let _: u256 = evm
+            .call(
+                addr: fb,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SubmitDirectOrder {
+                    side: SELL_BASE,
+                    amount_in: WAD / 10,
+                    limit_price: 2_000 * WAD,
+                },
+            )
+        i = i + 1
+    }
+
+    // 64th direct order cannot steal the reserved reveal slot!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitDirectOrder {
+                side: SELL_BASE,
+                amount_in: WAD / 10,
+                limit_price: 2_000 * WAD,
+            },
+        )
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn evm_settle_full_64_order_batch() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 261)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 262)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 263,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 200 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 600_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+
+    // Submit 32 sell orders + 32 buy orders = full 64-order batch
+    var i: u256 = 0
+    while i < 32 {
+        let _: u256 = evm
+            .call(
+                addr: fb,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SubmitDirectOrder {
+                    side: SELL_BASE,
+                    amount_in: WAD / 2,
+                    limit_price: (2_000 + i * 25) * WAD,
+                },
+            )
+        let _: u256 = evm
+            .call(
+                addr: fb,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: FairBatchMsg::SubmitDirectOrder {
+                    side: BUY_BASE,
+                    amount_in: 1_500_000_000,
+                    limit_price: (3_100 + i * 25) * WAD,
+                },
+            )
+        i = i + 1
+    }
+
+    let summary: BatchSummary = evm
+        .call(
+            addr: fb,
+            gas: 25_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SettleBatch {},
+        )
+    assert!(summary.settled)
+    assert!(summary.order_count == MAX_ORDERS_PER_BATCH)
+    assert!(summary.cow_matched_base > 0)
+    assert!(summary.clearing_price > 0)
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_eip712_skipped_nonce() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 271)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 272)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 273,
+        )
+
+    let wallet = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 274)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: wallet, amount: 2 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: wallet,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: 2 * WAD },
+        )
+
+    // Current nonce is 0; submitting nonce = 1 (skipped) must revert!
+    let skipped = SignedOrder {
+        trader: wallet,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 2_000 * WAD,
+        batch_id: 1,
+        nonce: 1,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+    let d: u256 = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeIntentDigest { order: skipped },
+        )
+    let _: bool = evm
+        .call(
+            addr: wallet,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::AuthorizeDigest { digest: d },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitSignedIntent { order: skipped, signature: Bytes::empty() },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_eip712_wrong_batch_id() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 281)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 282)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 283,
+        )
+
+    let wallet = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 284)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: wallet, amount: 2 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: wallet,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: 2 * WAD },
+        )
+
+    // Active batch is 1; signing for batch_id = 2 must revert!
+    let wrong_batch = SignedOrder {
+        trader: wallet,
+        side: SELL_BASE,
+        amount_in: WAD,
+        limit_price: 2_000 * WAD,
+        batch_id: 2,
+        nonce: 0,
+        deadline: Timestamp::from_seconds(1_000_000_000),
+    }
+    let d: u256 = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeIntentDigest { order: wrong_batch },
+        )
+    let _: bool = evm
+        .call(
+            addr: wallet,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::AuthorizeDigest { digest: d },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SubmitSignedIntent {
+                order: wrong_batch,
+                signature: Bytes::empty(),
+            },
+        )
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn evm_liquidity_first_deposit_min_liquidity_and_unused_side_refund() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 291)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 292)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 293,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 200 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 900_000_000_000,
+            },
+        )
+
+    // 1. First deposit burns MINIMUM_LIQUIDITY (1,000) to Address::zero()
+    let seed_shares: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    let burned: u256 = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetLpShares { provider: Address::zero() },
+        )
+    assert!(burned == MINIMUM_LIQUIDITY)
+    let res1: ReserveInfo = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetReserves {},
+        )
+    assert!(res1.total_shares == seed_shares + MINIMUM_LIQUIDITY)
+
+    // 2. Subsequent imbalanced add: offer 10 fWETH + 60,000 fUSDC (2x too much fUSDC!).
+    // Pool ratio is 3,000 fUSDC/fWETH, so only ~30,000 fUSDC should be pulled; the extra
+    // ~30,000 fUSDC stays in the provider's wallet (unused side refunded / not pulled).
+    let weth_before: u256 = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: me },
+        )
+    let usdc_before: u256 = evm
+        .call(
+            addr: usdc,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: me },
+        )
+    let added: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidity {
+                amount_base: 10 * WAD,
+                amount_quote: 60_000_000_000,
+                min_shares: 1,
+            },
+        )
+    let weth_after: u256 = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: me },
+        )
+    let usdc_after: u256 = evm
+        .call(
+            addr: usdc,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: me },
+        )
+    let used_weth = weth_before - weth_after
+    let used_usdc = usdc_before - usdc_after
+    assert!(used_weth <= 10 * WAD && used_weth >= 10 * WAD - 10)
+    assert!(used_usdc <= 30_000_000_001 && used_usdc >= 29_999_999_999)
+
+    // 3. Immediate round-trip withdrawal rounds against user (in favor of pool):
+    //    out_base <= used_weth && out_quote <= used_usdc
+    let (out_base, out_quote): (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RemoveLiquidity {
+                shares: added,
+                min_base: used_weth - 10,
+                min_quote: used_usdc - 10,
+            },
+        )
+    assert!(out_base <= used_weth)
+    assert!(out_quote <= used_usdc)
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_first_deposit_below_minimum_liquidity() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 301)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 302)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 18, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 303,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 10_000 },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 10_000 },
+        )
+    // sqrt(1_000 * 1_000) == 1_000 == MINIMUM_LIQUIDITY (not > MINIMUM_LIQUIDITY) -> must revert!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidity {
+                amount_base: 1_000,
+                amount_quote: 1_000,
+                min_shares: 0,
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_add_liquidity_slippage_min_shares() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 311)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 312)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 313,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 200 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 600_000_000_000,
+            },
+        )
+    let seeded: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    // Requiring more shares than 10% of pool will mint must revert!
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidity {
+                amount_base: 10 * WAD,
+                amount_quote: 30_000_000_000,
+                min_shares: seeded,
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_add_liquidity_locked_slippage_min_shares() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 321)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 322)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 323,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 200 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 600_000_000_000,
+            },
+        )
+    let seeded: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    let _: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidityLocked {
+                amount_base: 10 * WAD,
+                amount_quote: 30_000_000_000,
+                lock_duration: seconds(3_600),
+                min_shares: seeded,
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_remove_liquidity_slippage_min_base() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 331)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 332)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 333,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 100 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let shares: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    // Half of shares yields ~50 fWETH -> asking for min_base = 60 fWETH must revert!
+    let _: (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RemoveLiquidity {
+                shares: shares / 2,
+                min_base: 60 * WAD,
+                min_quote: 0,
+            },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_remove_liquidity_slippage_min_quote() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 341)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 342)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 343,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 100 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+    let shares: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::SeedReserves {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+            },
+        )
+    // Half of shares yields ~150,000 fUSDC -> asking for min_quote = 200,000 fUSDC must revert!
+    let _: (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RemoveLiquidity {
+                shares: shares / 2,
+                min_base: 0,
+                min_quote: 200_000_000_000,
+            },
+        )
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn evm_token_owner_and_authorized_minter_succeed() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 351)
+    let minter_actor = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 352)
+    let recipient = Address::new(0xBEEF01)
+
+    let owner: Address = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Owner {},
+        )
+    assert!(owner == evm.address())
+
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::SetMinter { account: minter_actor },
+        )
+    let configured_minter: Address = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Minter {},
+        )
+    assert!(configured_minter == minter_actor)
+
+    // Authorized minter (e.g. Faucet contract) can call `mint`!
+    let ok: bool = evm
+        .call(
+            addr: minter_actor,
+            gas: 400_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::MintToken { token: weth, to: recipient, amount: 5 * WAD },
+        )
+    assert!(ok)
+    let bal: u256 = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: recipient },
+        )
+    assert!(bal == 5 * WAD)
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_unauthorized_token_mint() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 361)
+    let attacker = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 362)
+
+    // Unauthorized caller cannot mint tokens!
+    let _: bool = evm
+        .call(
+            addr: attacker,
+            gas: 400_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::MintToken { token: weth, to: attacker, amount: 1_000 * WAD },
+        )
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_unauthorized_token_blacklist() uses (evm: mut Evm) {
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 371)
+    let attacker = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 372)
+
+    // Unauthorized caller cannot blacklist any address!
+    let _: bool = evm
+        .call(
+            addr: attacker,
+            gas: 400_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::SetTokenBlacklisted {
+                token: usdc,
+                account: Address::new(0x1234),
+                blocked: true,
+            },
+        )
+}
+
+#[test]
+fn pure_clearing_equal_prices_and_tiny_amounts_rounding() {
+    let rx = 100 * WAD
+    let ry = 300_000_000_000 // 300,000 fUSDC (6 decimals)
+
+    // 1. Equal limit prices matching exact pool spot price ($3,000):
+    //    Seller asks 3,000, Buyer bids 3,000 (asymmetric sizes) -> p* pinned at 3,000, exact balance.
+    var eq_orders: MemVec<Order> = MemVec::new()
+    eq_orders
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xC1,
+                side: SELL_BASE,
+                amount_in: 3 * WAD,
+                limit_price: 3_000 * WAD,
+            ),
+        )
+    eq_orders
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0xC2,
+                side: BUY_BASE,
+                amount_in: 9_000_000_000,
+                limit_price: 3_000 * WAD,
+            ),
+        )
+    let out_eq = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: eq_orders.as_slice(),
+    )
+    assert!(out_eq.clearing_price == Wad::from_int(3_000))
+    assert!(out_eq.fills[0].amount_filled == 3 * WAD)
+    assert!(out_eq.fills[0].payout_out == 9_000_000_000)
+    assert!(out_eq.fills[1].amount_filled == 9_000_000_000)
+    assert!(out_eq.fills[1].payout_out == 3 * WAD)
+    assert!(out_eq.reserve_base_after_raw == rx && out_eq.reserve_quote_after_raw == ry)
+
+    // 2. Non-crossing orders in hybrid pool (both OTM against spot $3,000):
+    //    Seller asks $3,500, Buyer bids $2,500 -> 0 fills, 100% refunds, spot preserved!
+    var no_cross: MemVec<Order> = MemVec::new()
+    no_cross
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xC3,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 3_500 * WAD,
+            ),
+        )
+    no_cross
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0xC4,
+                side: BUY_BASE,
+                amount_in: 5_000_000_000,
+                limit_price: 2_500 * WAD,
+            ),
+        )
+    let out_nc = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: no_cross.as_slice(),
+    )
+    assert!(out_nc.clearing_price == Wad::from_int(3_000))
+    assert!(out_nc.fills[0].amount_filled == 0 && out_nc.fills[0].refund_in == 2 * WAD)
+    assert!(out_nc.fills[1].amount_filled == 0 && out_nc.fills[1].refund_in == 5_000_000_000)
+    assert!(out_nc.reserve_base_after_raw == rx && out_nc.reserve_quote_after_raw == ry)
+
+    // 3. Equal limit prices in Pure P2P with asymmetric volumes (pro-rata rationing at p* = 3,000)
+    var p2p_eq: MemVec<Order> = MemVec::new()
+    p2p_eq
+        .push(
+            make_order(
+                id: 0,
+                trader_id: 0xC5,
+                side: SELL_BASE,
+                amount_in: 10 * WAD,
+                limit_price: 3_000 * WAD,
+            ),
+        )
+    p2p_eq
+        .push(
+            make_order(
+                id: 1,
+                trader_id: 0xC6,
+                side: BUY_BASE,
+                amount_in: 9_000_000_000,
+                limit_price: 3_000 * WAD,
+            ),
+        )
+    let out_p2p = solve_batch(
+        rx_raw: 0,
+        ry_raw: 0,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: p2p_eq.as_slice(),
+    )
+    assert!(out_p2p.clearing_price == Wad::from_int(3_000))
+    assert!(out_p2p.fills[0].amount_filled == 3 * WAD && out_p2p.fills[0].refund_in == 7 * WAD)
+    assert!(out_p2p.fills[1].amount_filled == 9_000_000_000 && out_p2p.fills[1].payout_out == 3 * WAD)
+
+    // 4. Tiny non-dust amount on 18d/6d (1_000 raw micro-USDC = $0.001 buys ~333_333_333_333 wei fWETH)
+    var tiny: MemVec<Order> = MemVec::new()
+    tiny.push(
+        make_order(
+            id: 0,
+            trader_id: 0xC7,
+            side: BUY_BASE,
+            amount_in: 1_000,
+            limit_price: 3_500 * WAD,
+        ),
+    )
+    let out_tiny = solve_batch(
+        rx_raw: rx,
+        ry_raw: ry,
+        base_decimals: 18,
+        quote_decimals: 6,
+        orders: tiny.as_slice(),
+    )
+    assert!(out_tiny.fills[0].amount_filled == 1_000)
+    assert!(out_tiny.fills[0].payout_out > 0)
+    assert!(
+        verify_lnd_invariant(
+            rx_before: normalize_amount(rx, 18),
+            ry_before: normalize_amount(ry, 6),
+            rx_after: normalize_amount(out_tiny.reserve_base_after_raw, 18),
+            ry_after: normalize_amount(out_tiny.reserve_quote_after_raw, 6),
+        ),
+    )
 }
