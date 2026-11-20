@@ -554,6 +554,7 @@ export async function addLiquidity(
   amountBase: string,
   amountQuote: string,
   lockDurationSecs = 0,
+  minShares = 0n,
 ): Promise<LiquidityResult> {
   const baseRaw = toRawAmount(amountBase, config.baseDecimals);
   const quoteRaw = toRawAmount(amountQuote, config.quoteDecimals);
@@ -568,7 +569,7 @@ export async function addLiquidity(
           address: config.fairBatch,
           abi: fairBatchAbi,
           functionName: 'addLiquidityLocked',
-          args: [baseRaw, quoteRaw, BigInt(lockSecs)],
+          args: [baseRaw, quoteRaw, BigInt(lockSecs), minShares],
           account,
           chain: getChain(config),
         })
@@ -576,7 +577,7 @@ export async function addLiquidity(
           address: config.fairBatch,
           abi: fairBatchAbi,
           functionName: 'addLiquidity',
-          args: [baseRaw, quoteRaw],
+          args: [baseRaw, quoteRaw, minShares],
           account,
           chain: getChain(config),
         });
@@ -587,8 +588,8 @@ export async function addLiquidity(
     hash,
     receipt,
     sharesMinted: addedEvents[0] ? eventBig(addedEvents[0], 'sharesMinted') : undefined,
-    amountBase: baseRaw,
-    amountQuote: quoteRaw,
+    amountBase: addedEvents[0] ? eventBig(addedEvents[0], 'amountBase') : baseRaw,
+    amountQuote: addedEvents[0] ? eventBig(addedEvents[0], 'amountQuote') : quoteRaw,
     unlockTime: lockedEvents[0] ? eventBig(lockedEvents[0], 'unlockTime') : undefined,
   };
 }
@@ -597,6 +598,8 @@ export async function removeLiquidity(
   config: RuntimeConfig,
   account: Address,
   shares: string,
+  minBase = 0n,
+  minQuote = 0n,
 ): Promise<LiquidityResult> {
   const sharesRaw = toRawAmount(shares, 18);
   const wallet = await ensureWalletReady(config, account);
@@ -604,7 +607,7 @@ export async function removeLiquidity(
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'removeLiquidity',
-    args: [sharesRaw],
+    args: [sharesRaw, minBase, minQuote],
     account,
     chain: getChain(config),
   });
@@ -647,6 +650,9 @@ export function describeTxError(error: unknown): string {
       ['Not order owner', 'Only the order owner can claim this receipt.'],
       ['Order already claimed', 'This receipt has already been claimed.'],
       ['LP shares locked', 'These LP shares are currently time-locked. Wait until unlock time or withdraw only unlocked shares.'],
+      ['Slippage: insufficient LP shares', 'Liquidity deposit slippage limit exceeded (minted LP shares below minimum).'],
+      ['Slippage: insufficient base output', 'Liquidity withdrawal slippage limit exceeded (base token output below minimum).'],
+      ['Slippage: insufficient quote output', 'Liquidity withdrawal slippage limit exceeded (quote token output below minimum).'],
       ['Faucet cooldown active', 'Faucet cooldown is still active. Each wallet can claim once every 12 hours.'],
       ['user rejected', 'Transaction rejected in the wallet.'],
       ['User rejected', 'Transaction rejected in the wallet.'],

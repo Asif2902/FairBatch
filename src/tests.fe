@@ -2019,7 +2019,7 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
 #[test(balance = 100_000_000_000_000_000_000)]
 fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
     // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
-    // `0x9d0386E93C26978b02a4dd662e37C8BaAe181DA7` on chain_id = 1.
+    // `0xe70765537162c82eD512Ce9c2A11cEffe9Dd13C4` on chain_id = 1.
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
     let fb = evm
@@ -2088,11 +2088,11 @@ fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
             message: FairBatchMsg::ComputeIntentDigest { order: intent },
         )
     assert!(
-        onchain_digest == 0xaf33a01e26d1f8fe9a083b0f61abaf207afa94da3a3fe3dd7abad092b94e2bbf,
+        onchain_digest == 0x6a9958956900cab45eb747b6df1a725765773a5209dd8e0643eb13749a6a23d2,
     )
 
-    let r: u256 = 0x275857956b9339808bcf8d70c05261861b53e47450ed1f641831d6cf253c1c2d
-    let s: u256 = 0x57da4215f566ea379fe0645af6281cfc093f50d401fcc6f2afdfde724f668231
+    let r: u256 = 0x9e9918e2ec5fc6d94f73aba80f6d84f357abea94c982a226219db6e2b1abe5d5
+    let s: u256 = 0x5154a3b3ac1435f67dadfe0eb8be0ab00233766cfd0fdd3e61842c63fcba5811
     let v: u8 = 0x1c
     let sig = encode_packed((r, s, v)).as_bytes()
 
@@ -2405,6 +2405,7 @@ fn evm_multi_batch_rollover_and_lp_withdraw() uses (evm: mut Evm) {
             message: FairBatchMsg::AddLiquidity {
                 amount_base: 50 * WAD,
                 amount_quote: 150_000_000_000,
+                min_shares: 0,
             },
         )
     let total_owned: u256 = evm
@@ -2480,7 +2481,11 @@ fn evm_multi_batch_rollover_and_lp_withdraw() uses (evm: mut Evm) {
             addr: fb,
             gas: 1_000_000,
             value: Wei::zero(),
-            message: FairBatchMsg::RemoveLiquidity { shares: total_owned / 2 },
+            message: FairBatchMsg::RemoveLiquidity {
+                shares: total_owned / 2,
+                min_base: 0,
+                min_quote: 0,
+            },
         )
     assert!(out_x > 0 && out_y > 0)
     assert!(
@@ -2809,8 +2814,8 @@ fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
         nonce: 0,
         deadline: Timestamp::from_seconds(1_000_000_000),
     }
-    let r: u256 = 0x275857956b9339808bcf8d70c05261861b53e47450ed1f641831d6cf253c1c2d
-    let s: u256 = 0x57da4215f566ea379fe0645af6281cfc093f50d401fcc6f2afdfde724f668231
+    let r: u256 = 0x9e9918e2ec5fc6d94f73aba80f6d84f357abea94c982a226219db6e2b1abe5d5
+    let s: u256 = 0x5154a3b3ac1435f67dadfe0eb8be0ab00233766cfd0fdd3e61842c63fcba5811
     let v: u8 = 0x1c
 
     let first_id: u256 = evm
@@ -3116,6 +3121,7 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
             message: FairBatchMsg::AddLiquidity {
                 amount_base: 50 * WAD,
                 amount_quote: 150_000_000_000,
+                min_shares: 0,
             },
         )
     assert!(unlocked_shares > 0)
@@ -3130,6 +3136,7 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
                 amount_base: 10 * WAD,
                 amount_quote: 30_000_000_000,
                 lock_duration: Duration::zero(),
+                min_shares: 0,
             },
         )
     let lock_none: LiquidityLockInfo = evm
@@ -3155,6 +3162,7 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
                 amount_base: 20 * WAD,
                 amount_quote: 60_000_000_000,
                 lock_duration: seconds(3_600),
+                min_shares: 0,
             },
         )
     let lock_after: LiquidityLockInfo = evm
@@ -3180,6 +3188,7 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
                 amount_base: 20 * WAD,
                 amount_quote: 60_000_000_000,
                 lock_duration: seconds(600),
+                min_shares: 0,
             },
         )
     let lock_combined: LiquidityLockInfo = evm
@@ -3200,7 +3209,11 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
             addr: fb,
             gas: 1_000_000,
             value: Wei::zero(),
-            message: FairBatchMsg::RemoveLiquidity { shares: unlocked_shares },
+            message: FairBatchMsg::RemoveLiquidity {
+                shares: unlocked_shares,
+                min_base: 0,
+                min_quote: 0,
+            },
         )
     assert!(out_base > 0 && out_quote > 0)
 
@@ -3257,6 +3270,7 @@ fn evm_revert_remove_locked_liquidity() uses (evm: mut Evm) {
                 amount_base: 100 * WAD,
                 amount_quote: 300_000_000_000,
                 lock_duration: seconds(3_600),
+                min_shares: 0,
             },
         )
     // Attempting to withdraw locked LP shares before `unlock_time` must revert!
@@ -3265,7 +3279,7 @@ fn evm_revert_remove_locked_liquidity() uses (evm: mut Evm) {
             addr: fb,
             gas: 1_000_000,
             value: Wei::zero(),
-            message: FairBatchMsg::RemoveLiquidity { shares: locked },
+            message: FairBatchMsg::RemoveLiquidity { shares: locked, min_base: 0, min_quote: 0 },
         )
 }
 

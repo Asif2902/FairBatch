@@ -9,9 +9,9 @@ import { parseAbi } from 'viem';
  */
 export const fairBatchAbi = parseAbi([
   'function seedReserves(uint256 amountBase, uint256 amountQuote) returns (uint256 sharesMinted)',
-  'function addLiquidity(uint256 amountBase, uint256 amountQuote) returns (uint256 sharesMinted)',
-  'function addLiquidityLocked(uint256 amountBase, uint256 amountQuote, uint256 lockDuration) returns (uint256 sharesMinted)',
-  'function removeLiquidity(uint256 shares) returns (uint256 amountBase, uint256 amountQuote)',
+  'function addLiquidity(uint256 amountBase, uint256 amountQuote, uint256 minShares) returns (uint256 sharesMinted)',
+  'function addLiquidityLocked(uint256 amountBase, uint256 amountQuote, uint256 lockDuration, uint256 minShares) returns (uint256 sharesMinted)',
+  'function removeLiquidity(uint256 shares, uint256 minBase, uint256 minQuote) returns (uint256 amountBase, uint256 amountQuote)',
   'function commitOrder(uint256 commitmentHash) payable returns (uint256 commitId)',
   'function revealOrder(uint256 commitId, uint8 side, uint256 amountIn, uint256 limitPrice, uint256 salt) returns (uint256 orderId)',
   'function submitDirectOrder(uint8 side, uint256 amountIn, uint256 limitPrice) returns (uint256 orderId)',

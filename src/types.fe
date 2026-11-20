@@ -16,6 +16,7 @@ pub const PHASE_SETTLED: u8 = 3
 
 pub const MAX_ORDERS_PER_BATCH: u256 = 64
 pub const MIN_ORDER_AMOUNT: u256 = 1_000
+pub const MINIMUM_LIQUIDITY: u256 = 1_000
 pub const WAD: u256 = 1_000_000_000_000_000_000
 
 /// Strongly-typed order direction used inside internal logic.

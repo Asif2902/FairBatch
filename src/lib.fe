@@ -11,7 +11,7 @@
 // - Strongly-typed `Timestamp`, `Duration`, `Wei`, and `Wad` (`UFixed<18>`) units
 
 use core::abi::Bytes
-use core::num::mul_div
+use core::num::{mul_div, mul_div_ceil}
 use core::ptr::MemVec
 use std::abi::DynArray
 use std::evm::StorageMap
@@ -42,6 +42,7 @@ use ingot::types::{
     LiquidityLocked,
     LiquidityRemoved,
     MAX_ORDERS_PER_BATCH,
+    MINIMUM_LIQUIDITY,
     MIN_ORDER_AMOUNT,
     MODE_COMMIT_REVEAL,
     MODE_DIRECT,
@@ -173,14 +174,19 @@ pub msg FairBatchMsg {
     #[selector = sol("seedReserves(uint256,uint256)")]
     SeedReserves { amount_base: u256, amount_quote: u256 } -> u256,
 
-    #[selector = sol("addLiquidity(uint256,uint256)")]
-    AddLiquidity { amount_base: u256, amount_quote: u256 } -> u256,
+    #[selector = sol("addLiquidity(uint256,uint256,uint256)")]
+    AddLiquidity { amount_base: u256, amount_quote: u256, min_shares: u256 } -> u256,
 
-    #[selector = sol("addLiquidityLocked(uint256,uint256,uint256)")]
-    AddLiquidityLocked { amount_base: u256, amount_quote: u256, lock_duration: Duration } -> u256,
+    #[selector = sol("addLiquidityLocked(uint256,uint256,uint256,uint256)")]
+    AddLiquidityLocked {
+        amount_base: u256,
+        amount_quote: u256,
+        lock_duration: Duration,
+        min_shares: u256,
+    } -> u256,
 
-    #[selector = sol("removeLiquidity(uint256)")]
-    RemoveLiquidity { shares: u256 } -> (u256, u256),
+    #[selector = sol("removeLiquidity(uint256,uint256,uint256)")]
+    RemoveLiquidity { shares: u256, min_base: u256, min_quote: u256 } -> (u256, u256),
 
     #[selector = sol("commitOrder(uint256)")]
     CommitOrder { commitment_hash: u256 } -> u256,
@@ -256,7 +262,12 @@ pub msg FairBatchMsg {
     ComputeIntentDigest { order: SignedOrder } -> u256,
 }
 
-fn add_liquidity_internal(amount_base: u256, amount_quote: u256, lock_duration: Duration) -> u256
+fn add_liquidity_internal(
+    amount_base: u256,
+    amount_quote: u256,
+    min_shares: u256,
+    lock_duration: Duration,
+) -> u256
 uses (
     ctx: Ctx,
     call: mut Call,
@@ -277,31 +288,44 @@ uses (
     let provider = ctx.caller()
     let self_addr = ctx.address()
 
+    var used_base = amount_base
+    var used_quote = amount_quote
     let minted = if pool.total_shares == 0 {
         let base_norm = normalize_amount(amount_base, config.base_decimals)
         let quote_norm = normalize_amount(amount_quote, config.quote_decimals)
         let init_shares = compute_initial_lp_shares(base_norm, quote_norm)
-        assert!(init_shares > 0, "Insufficient initial liquidity")
-        init_shares
+        assert!(init_shares > MINIMUM_LIQUIDITY, "Insufficient initial liquidity")
+        let provider_shares = init_shares - MINIMUM_LIQUIDITY
+        assert!(provider_shares >= min_shares, "Slippage: insufficient LP shares")
+        // Permanently lock `MINIMUM_LIQUIDITY` at `Address::zero()` to prevent
+        // first-depositor share-inflation attacks.
+        lp_shares.set(key: Address::zero(), value: MINIMUM_LIQUIDITY)
+        pool.total_shares = init_shares
+        provider_shares
     } else {
         let shares_x = mul_div(amount_base, pool.total_shares, pool.reserve_base)
         let shares_y = mul_div(amount_quote, pool.total_shares, pool.reserve_quote)
-        let min_shares = if shares_x < shares_y {
+        let min_out = if shares_x < shares_y {
             shares_x
         } else {
             shares_y
         }
-        assert!(min_shares > 0, "Zero LP shares minted")
-        min_shares
+        assert!(min_out > 0, "Zero LP shares minted")
+        assert!(min_out >= min_shares, "Slippage: insufficient LP shares")
+        // Round required token inputs strictly UP (against user, in favor of pool)
+        // and only pull the matched ratio, leaving any unused side in the wallet.
+        used_base = mul_div_ceil(min_out, pool.reserve_base, pool.total_shares)
+        used_quote = mul_div_ceil(min_out, pool.reserve_quote, pool.total_shares)
+        pool.total_shares = pool.total_shares + min_out
+        min_out
     }
 
-    pool.reserve_base = pool.reserve_base + amount_base
-    pool.reserve_quote = pool.reserve_quote + amount_quote
-    pool.total_shares = pool.total_shares + minted
+    pool.reserve_base = pool.reserve_base + used_base
+    pool.reserve_quote = pool.reserve_quote + used_quote
     lp_shares.set(
-            key: provider,
-            value: lp_shares.get(key: provider) + minted,
-        )
+        key: provider,
+        value: lp_shares.get(key: provider) + minted,
+    )
 
     var effective_unlock = Timestamp::from_seconds(0)
     if lock_duration > Duration::zero() {
@@ -330,17 +354,22 @@ uses (
         token: config.base_token,
         owner: provider,
         receiver: self_addr,
-        amount: amount_base,
+        amount: used_base,
     )
     safe_transfer_from(
         token: config.quote_token,
         owner: provider,
         receiver: self_addr,
-        amount: amount_quote,
+        amount: used_quote,
     )
 
     log.emit(
-        LiquidityAdded { provider, amount_base, amount_quote, shares_minted: minted },
+        LiquidityAdded {
+            provider,
+            amount_base: used_base,
+            amount_quote: used_quote,
+            shares_minted: minted,
+        },
     )
     if lock_duration > Duration::zero() {
         log.emit(
@@ -422,22 +451,33 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
         SeedReserves { amount_base, amount_quote } -> u256
         uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut lp_locks, mut guard)
         {
-            add_liquidity_internal(amount_base, amount_quote, lock_duration: Duration::zero())
+            assert!(pool.total_shares == 0, "Pool already seeded")
+            add_liquidity_internal(
+                amount_base,
+                amount_quote,
+                min_shares: 0,
+                lock_duration: Duration::zero(),
+            )
         }
 
-        AddLiquidity { amount_base, amount_quote } -> u256
+        AddLiquidity { amount_base, amount_quote, min_shares } -> u256
         uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut lp_locks, mut guard)
         {
-            add_liquidity_internal(amount_base, amount_quote, lock_duration: Duration::zero())
+            add_liquidity_internal(
+                amount_base,
+                amount_quote,
+                min_shares,
+                lock_duration: Duration::zero(),
+            )
         }
 
-        AddLiquidityLocked { amount_base, amount_quote, lock_duration } -> u256
+        AddLiquidityLocked { amount_base, amount_quote, lock_duration, min_shares } -> u256
         uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut lp_locks, mut guard)
         {
-            add_liquidity_internal(amount_base, amount_quote, lock_duration)
+            add_liquidity_internal(amount_base, amount_quote, min_shares, lock_duration)
         }
 
-        RemoveLiquidity { shares } -> (u256, u256)
+        RemoveLiquidity { shares, min_base, min_quote } -> (u256, u256)
         uses (ctx, mut call, mut log, config, mut pool, mut lp_shares, mut lp_locks, mut guard)
         {
             guard.lock()
@@ -474,6 +514,8 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             // Round LP withdrawals strictly DOWN so remaining pool stays solvent.
             let out_base = mul_div(shares, pool.reserve_base, pool.total_shares)
             let out_quote = mul_div(shares, pool.reserve_quote, pool.total_shares)
+            assert!(out_base >= min_base, "Slippage: insufficient base output")
+            assert!(out_quote >= min_quote, "Slippage: insufficient quote output")
             assert!(out_base > 0 || out_quote > 0, "Zero withdrawal output")
 
             let new_res_base = pool.reserve_base - out_base
