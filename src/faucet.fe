@@ -140,7 +140,9 @@ pub contract Faucet uses (ctx: Ctx, call: mut Call, log: mut Log) {
             }
         }
 
-        GetUserStatus { user } -> FaucetUserStatus uses (ctx, config, last_claim) {
+        GetUserStatus { user } -> FaucetUserStatus
+        uses (ctx, config, last_claim)
+        {
             let now = ctx.timestamp()
             let prev = last_claim.get(key: user)
             if prev.as_seconds() == 0 {

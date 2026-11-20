@@ -164,11 +164,7 @@ pub msg FairBatchMsg {
     AddLiquidity { amount_base: u256, amount_quote: u256 } -> u256,
 
     #[selector = sol("addLiquidityLocked(uint256,uint256,uint256)")]
-    AddLiquidityLocked {
-        amount_base: u256,
-        amount_quote: u256,
-        lock_duration: Duration,
-    } -> u256,
+    AddLiquidityLocked { amount_base: u256, amount_quote: u256, lock_duration: Duration } -> u256,
 
     #[selector = sol("removeLiquidity(uint256)")]
     RemoveLiquidity { shares: u256 } -> (u256, u256),
@@ -247,11 +243,7 @@ pub msg FairBatchMsg {
     ComputeIntentDigest { order: SignedOrder } -> u256,
 }
 
-fn add_liquidity_internal(
-    amount_base: u256,
-    amount_quote: u256,
-    lock_duration: Duration,
-) -> u256
+fn add_liquidity_internal(amount_base: u256, amount_quote: u256, lock_duration: Duration) -> u256
 uses (
     ctx: Ctx,
     call: mut Call,
@@ -314,10 +306,11 @@ uses (
             (minted, new_unlock)
         }
         effective_unlock = unlock_at
-        lp_locks.set(
-            key: provider,
-            value: LiquidityLock { locked_shares: total_locked, unlock_time: unlock_at },
-        )
+        lp_locks
+            .set(
+                key: provider,
+                value: LiquidityLock { locked_shares: total_locked, unlock_time: unlock_at },
+            )
     }
 
     safe_transfer_from(
@@ -338,11 +331,7 @@ uses (
     )
     if lock_duration > Duration::zero() {
         log.emit(
-            LiquidityLocked {
-                provider,
-                shares_locked: minted,
-                unlock_time: effective_unlock,
-            },
+            LiquidityLocked { provider, shares_locked: minted, unlock_time: effective_unlock },
         )
     }
 
@@ -464,13 +453,14 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             }
             assert!(shares <= unlocked, "LP shares locked")
             if lock.locked_shares > 0 && now >= lock.unlock_time {
-                lp_locks.set(
-                    key: provider,
-                    value: LiquidityLock {
-                        locked_shares: 0,
-                        unlock_time: Timestamp::from_seconds(0),
-                    },
-                )
+                lp_locks
+                    .set(
+                        key: provider,
+                        value: LiquidityLock {
+                            locked_shares: 0,
+                            unlock_time: Timestamp::from_seconds(0),
+                        },
+                    )
             }
 
             // Round LP withdrawals strictly DOWN so remaining pool stays solvent.

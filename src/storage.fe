@@ -38,9 +38,6 @@ pub struct BatchMeta {
 impl Copy for BatchMeta {}
 
 /// Per-provider optional LP share lock state.
-pub struct LiquidityLock {
-    pub locked_shares: u256,
-    pub unlock_time: Timestamp,
-}
+pub struct LiquidityLock { pub locked_shares: u256, pub unlock_time: Timestamp }
 
 impl Copy for LiquidityLock {}

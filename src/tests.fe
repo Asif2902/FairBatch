@@ -123,7 +123,9 @@ contract TraderActor uses (call: mut Call) {
     mut approved_digest: u256,
     mut refund_count: u256,
 
-    init() uses (mut approved_digest, mut refund_count) {
+    init()
+    uses (mut approved_digest, mut refund_count)
+    {
         approved_digest = 0
         refund_count = 0
     }
@@ -3105,7 +3107,9 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
             message: FairBatchMsg::GetLiquidityLock { provider: me },
         )
     assert!(lock_none.locked_shares == 0)
-    assert!(lock_none.unlocked_shares == unlocked_shares + zero_lock_shares)
+    assert!(
+        lock_none.unlocked_shares == unlocked_shares + zero_lock_shares,
+    )
 
     // 3. Add locked liquidity for 1 hour (3,600s)
     let now = evm.timestamp()
@@ -3129,7 +3133,9 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
         )
     assert!(lock_after.locked_shares == locked_first)
     assert!(lock_after.unlock_time == now + seconds(3_600))
-    assert!(lock_after.unlocked_shares == unlocked_shares + zero_lock_shares)
+    assert!(
+        lock_after.unlocked_shares == unlocked_shares + zero_lock_shares,
+    )
 
     // 4. Add another locked deposit with shorter duration -> shares accumulate, unlock_time is NOT shortened
     let locked_second: u256 = evm
@@ -3150,7 +3156,9 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
             value: Wei::zero(),
             message: FairBatchMsg::GetLiquidityLock { provider: me },
         )
-    assert!(lock_combined.locked_shares == locked_first + locked_second)
+    assert!(
+        lock_combined.locked_shares == locked_first + locked_second,
+    )
     assert!(lock_combined.unlock_time == now + seconds(3_600))
 
     // 5. Unlocked portion can still be withdrawn immediately while locked shares stay protected
@@ -3170,7 +3178,9 @@ fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
             value: Wei::zero(),
             message: FairBatchMsg::GetLiquidityLock { provider: me },
         )
-    assert!(lock_post_withdraw.locked_shares == locked_first + locked_second)
+    assert!(
+        lock_post_withdraw.locked_shares == locked_first + locked_second,
+    )
     assert!(lock_post_withdraw.unlocked_shares == zero_lock_shares)
 }
 
@@ -3227,7 +3237,9 @@ fn evm_revert_remove_locked_liquidity() uses (evm: mut Evm) {
 }
 
 #[test(balance = 10_000_000_000_000_000_000)]
-fn evm_faucet_claim_transfers_exact_amounts_and_tracks_cooldown() uses (evm: mut Evm) {
+fn evm_faucet_claim_transfers_exact_amounts_and_tracks_cooldown()
+uses (evm: mut Evm)
+{
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 171)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 172)
     let base_drip = WAD // 1 fWETH
