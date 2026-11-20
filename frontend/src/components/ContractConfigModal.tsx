@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   Globe,
   Link2,
   LogOut,
@@ -9,8 +10,8 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { getAddress, isAddress, zeroAddress } from 'viem';
 import type { RuntimeConfig } from '../onchain/config';
+import { explorerAddressUrl } from '../onchain/config';
 import { getChainLabel, shortenAddress } from '../lib/format';
 
 interface ContractConfigModalProps {
@@ -21,46 +22,8 @@ interface ContractConfigModalProps {
   wrongNetwork: boolean;
   busyAction: string | null;
   onClose: () => void;
-  onSaveConfig: (partial: Partial<RuntimeConfig>) => void;
-  onResetConfig: () => void;
   onConnect: () => Promise<void>;
   onDisconnect: () => void;
-}
-
-const NETWORK_PRESETS: Array<{
-  label: string;
-  hint: string;
-  chainId: number;
-  rpcUrl: string;
-  explorerUrl: string;
-  fairBatch: string;
-  baseToken: string;
-  quoteToken: string;
-}> = [
-  {
-    label: 'Ethereum Sepolia',
-    hint: 'Live deployment',
-    chainId: 11155111,
-    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
-    explorerUrl: 'https://sepolia.etherscan.io',
-    fairBatch: '0x60122518eccbeeb247cd42b0201f244432c7600d',
-    baseToken: '0xe72678fb21267fbb5c02c59496f04a86a7d8d56b',
-    quoteToken: '0x0384fb6158fb2e5ea021af6f8fa3e81daeb075f0',
-  },
-  {
-    label: 'Local Anvil',
-    hint: 'Developer chain',
-    chainId: 31337,
-    rpcUrl: 'http://127.0.0.1:8545',
-    explorerUrl: '',
-    fairBatch: '0x0000000000000000000000000000000000000000',
-    baseToken: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
-    quoteToken: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512',
-  },
-];
-
-function validAddress(value: string): boolean {
-  return isAddress(value.trim()) && getAddress(value.trim()) !== zeroAddress;
 }
 
 export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
@@ -71,76 +34,49 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
   wrongNetwork,
   busyAction,
   onClose,
-  onSaveConfig,
-  onResetConfig,
   onConnect,
   onDisconnect,
 }) => {
-  const [rpcUrl, setRpcUrl] = useState<string>(config.rpcUrl);
-  const [chainId, setChainId] = useState<string>(String(config.chainId));
-  const [fairBatchAddr, setFairBatchAddr] = useState<string>(config.fairBatch);
-  const [baseTokenAddr, setBaseTokenAddr] = useState<string>(config.baseToken);
-  const [quoteTokenAddr, setQuoteTokenAddr] = useState<string>(config.quoteToken);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setRpcUrl(config.rpcUrl);
-    setChainId(String(config.chainId));
-    setFairBatchAddr(config.fairBatch);
-    setBaseTokenAddr(config.baseToken);
-    setQuoteTokenAddr(config.quoteToken);
-    setStatusMsg(null);
-    setFormError(null);
-  }, [isOpen, config]);
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const busy = busyAction !== null;
 
   const handleConnect = async () => {
-    setFormError(null);
+    setWalletError(null);
+    setStatusMsg(null);
     try {
       await onConnect();
-      setStatusMsg('Wallet authorised for on-chain transactions.');
+      setStatusMsg('Wallet authorised for Ethereum Sepolia transactions.');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to connect wallet');
+      setWalletError(err instanceof Error ? err.message : 'Failed to connect wallet');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-    setStatusMsg(null);
-    const parsedChainId = Number.parseInt(chainId, 10);
-    if (!Number.isFinite(parsedChainId) || parsedChainId <= 0) {
-      setFormError('Chain ID must be a positive integer.');
-      return;
-    }
-    if (!/^https?:\/\//i.test(rpcUrl.trim())) {
-      setFormError('JSON-RPC endpoint must be an http(s) URL.');
-      return;
-    }
-    if (!validAddress(fairBatchAddr)) {
-      setFormError('Enter the deployed FairBatch contract address (not the zero address).');
-      return;
-    }
-    if (!validAddress(baseTokenAddr) || !validAddress(quoteTokenAddr)) {
-      setFormError('Enter valid base and quote token contract addresses.');
-      return;
-    }
-    onSaveConfig({
-      chainId: parsedChainId,
-      rpcUrl: rpcUrl.trim(),
-      explorerUrl: NETWORK_PRESETS.find((p) => p.chainId === parsedChainId)?.explorerUrl ??
-        (parsedChainId === 11155111 ? 'https://sepolia.etherscan.io' : ''),
-      fairBatch: getAddress(fairBatchAddr.trim()),
-      baseToken: getAddress(baseTokenAddr.trim()),
-      quoteToken: getAddress(quoteTokenAddr.trim()),
-    });
-    onClose();
-  };
+  const contractRows: Array<{ label: string; detail: string; address: string }> = [
+    {
+      label: 'FairBatch Exchange',
+      detail: 'Uniform batch clearing + optional LP locking',
+      address: config.fairBatch,
+    },
+    {
+      label: 'Sepolia Faucet',
+      detail: '1 fWETH + 100 fUSDC per wallet every 12h',
+      address: config.faucet,
+    },
+    {
+      label: `Base Token · ${config.baseSymbol}`,
+      detail: `${config.baseDecimals} decimals`,
+      address: config.baseToken,
+    },
+    {
+      label: `Quote Token · ${config.quoteSymbol}`,
+      detail: `${config.quoteDecimals} decimals`,
+      address: config.quoteToken,
+    },
+  ];
 
   return (
     <div
@@ -156,7 +92,7 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
               <Globe className="h-4 w-4" aria-hidden="true" />
             </div>
             <div>
-              <div className="eyebrow">Runtime configuration</div>
+              <div className="eyebrow">Global Sepolia configuration</div>
               <h2
                 id="contract-config-modal-title"
                 className="mt-1 font-display text-xl font-bold leading-tight tracking-tight text-ink"
@@ -164,8 +100,9 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                 Contract &amp; network readiness
               </h2>
               <p className="mt-0.5 text-[11px] text-ink-muted">
-                Point this terminal at any EVM deployment of FairBatch. Values are
-                stored locally in this browser.
+                Loaded directly from the shared repository config{' '}
+                <code className="font-mono text-ink-soft">config/deployment.json</code> (Ethereum
+                Sepolia only).
               </p>
             </div>
           </div>
@@ -184,13 +121,16 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
             <div className="border border-rule bg-paper-soft p-3">
               <div className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-ink-soft">
                 <Link2 className="h-3.5 w-3.5 text-cobalt-700" />
-                <span>Live deployment</span>
+                <span>Target network</span>
               </div>
-              <p className="mt-1 font-mono text-[10px] text-ink-muted">
-                {getChainLabel(config.chainId)}
+              <p className="mt-1 font-mono text-[11px] font-bold text-ink">
+                {getChainLabel(config.chainId)} · Chain ID {config.chainId}
               </p>
-              <p className="mt-0.5 break-all font-mono text-[10px] text-ink-soft">
-                {config.fairBatch}
+              <p className="mt-0.5 break-all font-mono text-[9.5px] text-ink-muted">
+                RPC: {config.rpcUrl}
+              </p>
+              <p className="mt-0.5 font-mono text-[9.5px] text-ink-faint">
+                Deployer: {shortenAddress(config.deployer)} · Block #{config.deploymentBlock.toString()}
               </p>
             </div>
 
@@ -209,9 +149,9 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
               <p className="mt-1 text-[10px] leading-snug text-ink-muted">
                 {account
                   ? wrongNetwork
-                    ? `Wallet is on chain ${walletChainId ?? '?'}; FairBatch expects ${config.chainId}. Reconnect to switch.`
-                    : 'Signing orders, commitments, settlements and claims with this wallet.'
-                  : 'Connect MetaMask, Rabby, or another EIP-1193 wallet to submit transactions.'}
+                    ? `Wallet is on chain ${walletChainId ?? '?'}; FairBatch requires Ethereum Sepolia (${config.chainId}). Reconnect to switch.`
+                    : 'Signing orders, commitments, LP locks, faucet claims and settlements on Sepolia.'
+                  : 'Connect MetaMask, Rabby, or another EIP-1193 wallet on Ethereum Sepolia.'}
               </p>
               {account ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -251,170 +191,72 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brass-700" />
             <div>
               <span className="font-bold">EVM Cancun opcode compatibility:</span>{' '}
-              FairBatch uses Fe 26.5 <code>std::evm::mutex::Mutex</code> (`TLOAD`/`TSTORE`,
-              EIP-1153) and `PUSH0` (EIP-3855). The target chain must support Cancun.
+              FairBatch and Faucet use Fe 26.5 <code>std::evm::mutex::Mutex</code> (
+              <code>TLOAD</code>/<code>TSTORE</code>, EIP-1153) and <code>PUSH0</code> (EIP-3855) on
+              Ethereum Sepolia.
             </div>
           </div>
 
           <div>
-            <span className="eyebrow mb-1.5 block">Quick network templates</span>
-            <div className="grid grid-cols-2 gap-px border border-rule bg-rule sm:grid-cols-4">
-              {NETWORK_PRESETS.map((preset) => (
-                <button
-                  key={preset.chainId}
-                  type="button"
-                  onClick={() => {
-                    setChainId(String(preset.chainId));
-                    setRpcUrl(preset.rpcUrl);
-                    setFairBatchAddr(preset.fairBatch);
-                    setBaseTokenAddr(preset.baseToken);
-                    setQuoteTokenAddr(preset.quoteToken);
-                    setFormError(null);
-                  }}
-                  className="bg-paper-bright px-2.5 py-2 text-left transition hover:bg-paper-soft"
-                >
-                  <div className="font-display text-[11px] font-bold text-ink">
-                    {preset.label}
+            <span className="eyebrow mb-2 block">Deployed Sepolia Contracts</span>
+            <div className="divide-y divide-rule border border-rule bg-paper">
+              {contractRows.map((row) => {
+                const url = explorerAddressUrl(config, row.address);
+                return (
+                  <div
+                    key={row.label}
+                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                  >
+                    <div>
+                      <div className="font-display text-[12px] font-bold text-ink">
+                        {row.label}
+                      </div>
+                      <div className="font-mono text-[9px] text-ink-muted">{row.detail}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <code className="break-all font-mono text-[10px] text-ink-soft">
+                        {row.address}
+                      </code>
+                      {url && (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`View ${row.label} on Etherscan`}
+                          className="border border-rule-strong p-1 text-ink-muted transition hover:border-ink hover:text-ink"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
                   </div>
-                  <div className="mt-0.5 font-mono text-[9px] text-ink-muted">
-                    {preset.hint} · chain {preset.chainId}
-                  </div>
-                </button>
-              ))}
-              <div className="flex items-center bg-paper-bright px-2.5 py-2 font-mono text-[9px] leading-snug text-ink-faint">
-                Or edit the fields below for a custom deployment.
-              </div>
+                );
+              })}
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="sm:col-span-2">
-                <label
-                  htmlFor="cfg-rpc-url"
-                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
-                >
-                  JSON-RPC endpoint
-                </label>
-                <input
-                  id="cfg-rpc-url"
-                  type="text"
-                  value={rpcUrl}
-                  onChange={(e) => setRpcUrl(e.target.value)}
-                  placeholder="https://ethereum-sepolia-rpc.publicnode.com"
-                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="cfg-chain-id"
-                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
-                >
-                  Chain ID
-                </label>
-                <input
-                  id="cfg-chain-id"
-                  type="number"
-                  value={chainId}
-                  onChange={(e) => setChainId(e.target.value)}
-                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
-                />
-              </div>
+          {statusMsg && (
+            <div className="flex items-center gap-2 border-l-2 border-pine-600 bg-pine-50 px-3 py-2 text-[10.5px] text-pine-800">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              <span>{statusMsg}</span>
             </div>
+          )}
 
-            <div>
-              <label
-                htmlFor="cfg-fairbatch-addr"
-                className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
-              >
-                FairBatch contract address
-              </label>
-              <input
-                id="cfg-fairbatch-addr"
-                type="text"
-                value={fairBatchAddr}
-                onChange={(e) => setFairBatchAddr(e.target.value)}
-                placeholder="0x0000000000000000000000000000000000000000"
-                className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
-              />
+          {walletError && (
+            <div className="border-l-2 border-vermilion-500 bg-vermilion-50 px-3 py-2 text-[10.5px] text-vermilion-800">
+              {walletError}
             </div>
+          )}
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label
-                  htmlFor="cfg-base-addr"
-                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
-                >
-                  Base token · {config.baseSymbol} ({config.baseDecimals} decimals)
-                </label>
-                <input
-                  id="cfg-base-addr"
-                  type="text"
-                  value={baseTokenAddr}
-                  onChange={(e) => setBaseTokenAddr(e.target.value)}
-                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="cfg-quote-addr"
-                  className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-label text-ink-muted"
-                >
-                  Quote token · {config.quoteSymbol} ({config.quoteDecimals} decimals)
-                </label>
-                <input
-                  id="cfg-quote-addr"
-                  type="text"
-                  value={quoteTokenAddr}
-                  onChange={(e) => setQuoteTokenAddr(e.target.value)}
-                  className="w-full border border-rule-strong bg-paper px-2.5 py-2 font-mono text-[11px] text-ink transition focus:border-cobalt-600 focus:outline-none"
-                />
-              </div>
-            </div>
-
-            {statusMsg && (
-              <div className="flex items-center gap-2 border-l-2 border-pine-600 bg-pine-50 px-3 py-2 text-[10.5px] text-pine-800">
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                <span>{statusMsg}</span>
-              </div>
-            )}
-
-            {formError && (
-              <div className="border-l-2 border-vermilion-500 bg-vermilion-50 px-3 py-2 text-[10.5px] text-vermilion-800">
-                {formError}
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
-              <button
-                type="button"
-                onClick={() => {
-                  onResetConfig();
-                  onClose();
-                }}
-                className="inline-flex items-center gap-1.5 border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
-              >
-                <RefreshCw className="h-3 w-3" />
-                <span>Reset to Sepolia defaults</span>
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="border border-rule-strong px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-ink-muted transition hover:border-ink hover:text-ink"
-                >
-                  Close
-                </button>
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className="border border-pine-700 bg-pine-600 px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-paper transition hover:bg-pine-700 disabled:opacity-50"
-                >
-                  Save contract config
-                </button>
-              </div>
-            </div>
-          </form>
+          <div className="flex justify-end border-t border-rule pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="border border-ink bg-ink px-3.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-paper transition hover:bg-ink-soft"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>

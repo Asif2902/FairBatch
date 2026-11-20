@@ -200,12 +200,13 @@ export const App: React.FC = () => {
                   wrongNetwork={fb.wrongNetwork}
                   balances={snapshot.balances}
                   allowances={snapshot.allowances}
+                  faucet={snapshot.faucet}
                   busyAction={fb.busyAction}
                   faucetEnabled={fb.config.tokenFaucetEnabled}
                   onConnect={fb.connect}
                   onDisconnect={fb.disconnect}
-                  onFaucet={async (token) => {
-                    await fb.faucet(token);
+                  onClaimFaucet={async () => {
+                    await fb.claimFaucet();
                   }}
                   onApprove={async (token) => {
                     await fb.approve(token);
@@ -277,10 +278,11 @@ export const App: React.FC = () => {
                   config={fb.config}
                   reserves={snapshot.reserves}
                   balances={snapshot.balances}
+                  lpLock={snapshot.lpLock}
                   account={fb.account}
                   busyAction={fb.busyAction}
-                  onAddLiquidity={async (amountBase, amountQuote) => {
-                    await fb.addLiquidity(amountBase, amountQuote);
+                  onAddLiquidity={async (amountBase, amountQuote, lockDurationSecs) => {
+                    await fb.addLiquidity(amountBase, amountQuote, lockDurationSecs);
                   }}
                   onRemoveLiquidity={async (shares) => {
                     await fb.removeLiquidity(shares);
@@ -333,8 +335,6 @@ export const App: React.FC = () => {
         wrongNetwork={fb.wrongNetwork}
         busyAction={fb.busyAction}
         onClose={() => setIsContractModalOpen(false)}
-        onSaveConfig={fb.updateConfig}
-        onResetConfig={fb.resetConfig}
         onConnect={fb.connect}
         onDisconnect={fb.disconnect}
       />

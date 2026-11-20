@@ -11,13 +11,19 @@ import {
 } from 'viem';
 import type { LocalSecretVaultEntry, OrderSide, SignedIntentArtifact } from '../types';
 import { keccak256Utf8 } from '../lib/keccak';
-import { erc20Abi, fairBatchAbi, fairBatchEvents } from './abi';
+import { erc20Abi, fairBatchAbi, fairBatchEvents, faucetAbi, faucetEvents } from './abi';
 import { ensureWalletReady, getPublicClient } from './client';
 import { getChain, type RuntimeConfig } from './config';
 
 export interface TxResult {
   hash: Hash;
   receipt: TransactionReceipt;
+}
+
+export interface FaucetClaimResult extends TxResult {
+  baseAmount: bigint;
+  quoteAmount: bigint;
+  nextClaimAt: bigint;
 }
 
 export interface DirectOrderResult extends TxResult {
@@ -45,6 +51,7 @@ export interface LiquidityResult extends TxResult {
   sharesMinted?: bigint;
   amountBase?: bigint;
   amountQuote?: bigint;
+  unlockTime?: bigint;
 }
 
 function decimalString(value: string | number): string {
@@ -169,26 +176,41 @@ export async function ensureInputAllowance(
   return approveToken(config, account, inputToken(config, side), config.fairBatch, amount);
 }
 
-export async function mintTestTokens(
+export async function claimFaucet(
   config: RuntimeConfig,
   account: Address,
-  token: 'base' | 'quote',
-  amount: string,
-): Promise<TxResult> {
-  const tokenAddress = token === 'base' ? config.baseToken : config.quoteToken;
-  const decimals = token === 'base' ? config.baseDecimals : config.quoteDecimals;
-  const raw = toRawAmount(amount, decimals);
+): Promise<FaucetClaimResult> {
+  if (!config.tokenFaucetEnabled) {
+    throw new Error('Sepolia faucet contract is not configured.');
+  }
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
-    address: tokenAddress,
-    abi: erc20Abi,
-    functionName: 'mintAndApprove',
-    args: [account, config.fairBatch, raw],
+    address: config.faucet,
+    abi: faucetAbi,
+    functionName: 'claim',
+    args: [],
     account,
     chain: getChain(config),
   });
   const receipt = await waitForSuccess(config, hash);
-  return { hash, receipt };
+  let baseAmount = config.faucetClaimBase;
+  let quoteAmount = config.faucetClaimQuote;
+  let nextClaimAt = 0n;
+  try {
+    const parsed = parseEventLogs({
+      abi: faucetEvents,
+      logs: receipt.logs,
+      eventName: 'FaucetClaimed',
+    }) as unknown as Array<{ args: Record<string, unknown> }>;
+    if (parsed[0]) {
+      baseAmount = eventBig(parsed[0].args, 'baseAmount');
+      quoteAmount = eventBig(parsed[0].args, 'quoteAmount');
+      nextClaimAt = eventBig(parsed[0].args, 'nextClaimAt');
+    }
+  } catch {
+    // fallback to configured faucet amounts
+  }
+  return { hash, receipt, baseAmount, quoteAmount, nextClaimAt };
 }
 
 export async function submitDirectOrder(
@@ -531,29 +553,43 @@ export async function addLiquidity(
   account: Address,
   amountBase: string,
   amountQuote: string,
+  lockDurationSecs = 0,
 ): Promise<LiquidityResult> {
   const baseRaw = toRawAmount(amountBase, config.baseDecimals);
   const quoteRaw = toRawAmount(amountQuote, config.quoteDecimals);
+  const lockSecs = Math.max(0, Math.floor(lockDurationSecs));
   await approveToken(config, account, config.baseToken, config.fairBatch, baseRaw);
   await approveToken(config, account, config.quoteToken, config.fairBatch, quoteRaw);
 
   const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
-    address: config.fairBatch,
-    abi: fairBatchAbi,
-    functionName: 'addLiquidity',
-    args: [baseRaw, quoteRaw],
-    account,
-    chain: getChain(config),
-  });
+  const hash =
+    lockSecs > 0
+      ? await wallet.writeContract({
+          address: config.fairBatch,
+          abi: fairBatchAbi,
+          functionName: 'addLiquidityLocked',
+          args: [baseRaw, quoteRaw, BigInt(lockSecs)],
+          account,
+          chain: getChain(config),
+        })
+      : await wallet.writeContract({
+          address: config.fairBatch,
+          abi: fairBatchAbi,
+          functionName: 'addLiquidity',
+          args: [baseRaw, quoteRaw],
+          account,
+          chain: getChain(config),
+        });
   const receipt = await waitForSuccess(config, hash);
-  const events = decodeEvents(receipt, 'LiquidityAdded');
+  const addedEvents = decodeEvents(receipt, 'LiquidityAdded');
+  const lockedEvents = lockSecs > 0 ? decodeEvents(receipt, 'LiquidityLocked') : [];
   return {
     hash,
     receipt,
-    sharesMinted: events[0] ? eventBig(events[0], 'sharesMinted') : undefined,
+    sharesMinted: addedEvents[0] ? eventBig(addedEvents[0], 'sharesMinted') : undefined,
     amountBase: baseRaw,
     amountQuote: quoteRaw,
+    unlockTime: lockedEvents[0] ? eventBig(lockedEvents[0], 'unlockTime') : undefined,
   };
 }
 
@@ -610,6 +646,8 @@ export function describeTxError(error: unknown): string {
       ['Not commitment owner', 'Only the wallet that committed can reveal it.'],
       ['Not order owner', 'Only the order owner can claim this receipt.'],
       ['Order already claimed', 'This receipt has already been claimed.'],
+      ['LP shares locked', 'These LP shares are currently time-locked. Wait until unlock time or withdraw only unlocked shares.'],
+      ['Faucet cooldown active', 'Faucet cooldown is still active. Each wallet can claim once every 12 hours.'],
       ['user rejected', 'Transaction rejected in the wallet.'],
       ['User rejected', 'Transaction rejected in the wallet.'],
     ];

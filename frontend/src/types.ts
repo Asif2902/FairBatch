@@ -18,6 +18,7 @@ export interface ContractAddressesDto {
   fair_batch: string;
   base_token: string;
   quote_token: string;
+  faucet?: string;
   deployed: boolean;
 }
 

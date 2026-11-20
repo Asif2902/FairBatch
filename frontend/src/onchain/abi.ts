@@ -1,15 +1,16 @@
 import { parseAbi } from 'viem';
 
 /**
- * Hand-authored ABI for the deployed Fe 26.5.0 FairBatch contract.
+ * Hand-authored ABI for the deployed Fe 26.5.0 FairBatch & Faucet contracts.
  *
  * Fe emits ABI structs as tuples. The contract exposes one tuple return per
- * view, so these signatures must stay in sync with `src/types.fe` and the
- * `FairBatchMsg` selectors in `src/lib.fe`.
+ * view, so these signatures must stay in sync with `src/types.fe`, `src/lib.fe`,
+ * and `src/faucet.fe`.
  */
 export const fairBatchAbi = parseAbi([
   'function seedReserves(uint256 amountBase, uint256 amountQuote) returns (uint256 sharesMinted)',
   'function addLiquidity(uint256 amountBase, uint256 amountQuote) returns (uint256 sharesMinted)',
+  'function addLiquidityLocked(uint256 amountBase, uint256 amountQuote, uint256 lockDuration) returns (uint256 sharesMinted)',
   'function removeLiquidity(uint256 shares) returns (uint256 amountBase, uint256 amountQuote)',
   'function commitOrder(uint256 commitmentHash) payable returns (uint256 commitId)',
   'function revealOrder(uint256 commitId, uint8 side, uint256 amountIn, uint256 limitPrice, uint256 salt) returns (uint256 orderId)',
@@ -25,6 +26,7 @@ export const fairBatchAbi = parseAbi([
   'function getCommitment(uint256 batchId, uint256 commitId) view returns ((uint256 commitId, address trader, uint256 commitmentHash, uint256 bond, bool revealed, bool slashed))',
   'function getNonce(address trader) view returns (uint256)',
   'function getLpShares(address provider) view returns (uint256)',
+  'function getLiquidityLock(address provider) view returns ((uint256 lockedShares, uint256 unlockTime, uint256 unlockedShares))',
   'function domainSeparator() view returns (uint256)',
   'function computeCommitmentHash(uint256 batchId, address trader, uint8 side, uint256 amountIn, uint256 limitPrice, uint256 salt) view returns (uint256)',
   'function computeIntentDigest((address trader, uint8 side, uint256 amountIn, uint256 limitPrice, uint256 batchId, uint256 nonce, uint256 deadline) order) view returns (uint256)',
@@ -33,6 +35,7 @@ export const fairBatchAbi = parseAbi([
 
 export const fairBatchEvents = parseAbi([
   'event LiquidityAdded(address indexed provider, uint256 amountBase, uint256 amountQuote, uint256 sharesMinted)',
+  'event LiquidityLocked(address indexed provider, uint256 sharesLocked, uint256 unlockTime)',
   'event LiquidityRemoved(address indexed provider, uint256 amountBase, uint256 amountQuote, uint256 sharesBurned)',
   'event OrderCommitted(uint256 indexed batchId, uint256 indexed commitId, address indexed trader, uint256 commitmentHash, uint256 bond)',
   'event OrderRevealed(uint256 indexed batchId, uint256 indexed orderId, address indexed trader, uint256 commitId, uint8 side, uint256 amountIn, uint256 limitPrice)',
@@ -40,6 +43,18 @@ export const fairBatchEvents = parseAbi([
   'event CommitmentSlashed(uint256 indexed batchId, uint256 indexed commitId, address indexed trader, uint256 forfeitedBond)',
   'event BatchSettled(uint256 indexed batchId, uint256 clearingPrice, uint256 totalSellBase, uint256 totalBuyQuote, uint256 cowMatchedBase, uint256 cowMatchedQuote, uint256 reserveBaseAfter, uint256 reserveQuoteAfter, uint256 orderCount)',
   'event OrderClaimed(uint256 indexed batchId, uint256 indexed orderId, address indexed trader, uint256 payoutBase, uint256 payoutQuote)',
+]);
+
+export const faucetAbi = parseAbi([
+  'function claim() returns (uint256 baseAmount, uint256 quoteAmount)',
+  'function getConfig() view returns ((address baseToken, address quoteToken, uint256 baseAmount, uint256 quoteAmount, uint256 cooldown))',
+  'function getUserStatus(address user) view returns ((uint256 lastClaim, uint256 nextClaimAt, bool canClaim))',
+  'function getLastClaim(address user) view returns (uint256)',
+  'function canClaim(address user) view returns (bool)',
+]);
+
+export const faucetEvents = parseAbi([
+  'event FaucetClaimed(address indexed recipient, uint256 baseAmount, uint256 quoteAmount, uint256 nextClaimAt)',
 ]);
 
 export const erc20Abi = parseAbi([

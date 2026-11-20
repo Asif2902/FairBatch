@@ -270,7 +270,7 @@ export const fairBatchApi = {
           status: raw.status ?? 'ok',
           execution_mode: raw.execution_mode ?? 'local_engine',
           rpc_url: raw.rpc_url ?? null,
-          chain_id: num(raw.chain_id, 31337),
+          chain_id: num(raw.chain_id, 11155111),
           contracts: {
             fair_batch:
               raw.contracts?.fair_batch ??

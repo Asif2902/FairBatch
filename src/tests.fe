@@ -15,6 +15,7 @@ use std::evm::packed::encode_packed
 use std::evm::{ether, gwei, seconds}
 
 use ingot::clearing::solve_batch
+use ingot::faucet::{Faucet, FaucetConfigInfo, FaucetMsg, FaucetUserStatus}
 use ingot::intent::{
     EIP712_NAME_HASH,
     EIP712_VERSION_HASH,
@@ -38,6 +39,7 @@ use ingot::types::{
     BatchInfo,
     BatchSummary,
     Commitment,
+    LiquidityLockInfo,
     MODE_DIRECT,
     Order,
     OrderReceipt,
@@ -112,12 +114,19 @@ msg TraderActorMsg {
 
     #[selector = sol("isValidSignature(bytes32,bytes)")]
     IsValidSignature { digest: Bytes32, signature: Bytes } -> u256,
+
+    #[selector = sol("refundCount()")]
+    RefundCount -> u256,
 }
 
 contract TraderActor uses (call: mut Call) {
     mut approved_digest: u256,
+    mut refund_count: u256,
 
-    init() uses (mut approved_digest) { approved_digest = 0 }
+    init() uses (mut approved_digest, mut refund_count) {
+        approved_digest = 0
+        refund_count = 0
+    }
 
     recv TraderActorMsg {
         ApproveToken { token, spender, amount } -> bool
@@ -209,11 +218,19 @@ contract TraderActor uses (call: mut Call) {
                 0xffffffff00000000000000000000000000000000000000000000000000000000
             }
         }
+
+        RefundCount -> u256 uses (refund_count) {
+            refund_count
+        }
     }
 
     recv {
         #[payable]
-        _ {}
+        _ uses (mut refund_count) {
+            // Performs an SSTORE (> 2,300 gas stipend) so bond refund tests
+            // catch regressions against smart wallets and EIP-7702 accounts.
+            refund_count = refund_count + 1
+        }
     }
 }
 
@@ -1912,6 +1929,14 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
     assert!(ord0 == 0)
     assert!(evm.balance(alice) == bond_req)
     assert!(evm.balance(fb) == Wei::zero())
+    let refunds: u256 = evm
+        .call(
+            addr: alice,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::RefundCount {},
+        )
+    assert!(refunds == 1)
 
     // 2. Griefer (`mallory`) commits with 0.1 ETH bond and withholds reveal!
     let mallory = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 24)
@@ -1959,7 +1984,7 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
 #[test(balance = 100_000_000_000_000_000_000)]
 fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
     // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
-    // `0x551bfdb22633839a95b807b8631c77f014ada5dd` on chain_id = 1.
+    // `0xfC89Ff14f67bb4A67bd861b3261ff79b60Cc68d0` on chain_id = 1.
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
     let fb = evm
@@ -2028,12 +2053,12 @@ fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
             message: FairBatchMsg::ComputeIntentDigest { order: intent },
         )
     assert!(
-        onchain_digest == 0xd478dda09a8eb13ac2ef94af2c6ee41f3e31ca6ddf3ff04a021bd43411c36858,
+        onchain_digest == 0x3cb7691f888c9bf77b1af40a18d134c3da52f5f24131394abbfbab972b6b0440,
     )
 
-    let r: u256 = 0x855c6f89b5583b63e417dc1e5dcea3d4548635d0f66d82a53395fe4af7102ec9
-    let s: u256 = 0x46e875b6bd04e3de4a5d22335ee0c91f1c782b65f72e8628dc298d87c3db658a
-    let v: u8 = 0x1c
+    let r: u256 = 0x3ffe1e4df0e519ace7e4a67c32d5ad631b677f1f64160b21d0222559896bf680
+    let s: u256 = 0x2f424d331109d5e5f2ee47091178867decbc5905dd6aac536961e819336aa991
+    let v: u8 = 0x1b
     let sig = encode_packed((r, s, v)).as_bytes()
 
     // Separate relayer contract submits the gasless EIP-712 intent on behalf of `signer`!
@@ -2749,9 +2774,9 @@ fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
         nonce: 0,
         deadline: Timestamp::from_seconds(1_000_000_000),
     }
-    let r: u256 = 0x855c6f89b5583b63e417dc1e5dcea3d4548635d0f66d82a53395fe4af7102ec9
-    let s: u256 = 0x46e875b6bd04e3de4a5d22335ee0c91f1c782b65f72e8628dc298d87c3db658a
-    let v: u8 = 0x1c
+    let r: u256 = 0x3ffe1e4df0e519ace7e4a67c32d5ad631b677f1f64160b21d0222559896bf680
+    let s: u256 = 0x2f424d331109d5e5f2ee47091178867decbc5905dd6aac536961e819336aa991
+    let v: u8 = 0x1b
 
     let first_id: u256 = evm
         .call(
@@ -2922,5 +2947,447 @@ fn evm_revert_dust_order_below_minimum() uses (evm: mut Evm) {
                 // < MIN_ORDER_AMOUNT (1,000)
                 limit_price: 2_000 * WAD,
             },
+        )
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn evm_commit_reveal_bond_refund_to_stateful_receiver() uses (evm: mut Evm) {
+    // Regression test: `revealOrder` must forward >2,300 gas when refunding the
+    // commit bond so smart-contract wallets and EIP-7702 delegated accounts whose
+    // `receive()` executes SSTORE succeed instead of reverting "Bond refund failed".
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 141)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 142)
+    let bond_req = gwei(100_000) // 0.0001 ETH (same as Sepolia deployment)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), bond_req),
+            salt: 143,
+        )
+
+    let smart_trader = evm.create2<TraderActor>(value: Wei::zero(), args: (), salt: 144)
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: smart_trader, amount: 2 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: smart_trader,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::ApproveToken { token: weth, spender: fb, amount: 2 * WAD },
+        )
+
+    let salt: u256 = 0x7702CAFE
+    let commit_hash: u256 = evm
+        .call(
+            addr: fb,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::ComputeCommitmentHash {
+                batch_id: 1,
+                trader: smart_trader,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_650 * WAD,
+                salt,
+            },
+        )
+    let commit_id: u256 = evm
+        .call(
+            addr: smart_trader,
+            gas: 800_000,
+            value: bond_req,
+            message: TraderActorMsg::CommitOnExchange {
+                exchange: fb,
+                commitment_hash: commit_hash,
+                bond_wei: bond_req,
+            },
+        )
+    assert!(commit_id == 0)
+    assert!(evm.balance(fb) == bond_req)
+    assert!(evm.balance(smart_trader) == Wei::zero())
+
+    let order_id: u256 = evm
+        .call(
+            addr: smart_trader,
+            gas: 1_500_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::RevealOnExchange {
+                exchange: fb,
+                commit_id,
+                side: SELL_BASE,
+                amount_in: 2 * WAD,
+                limit_price: 2_650 * WAD,
+                salt,
+            },
+        )
+    assert!(order_id == 0)
+    assert!(evm.balance(smart_trader) == bond_req)
+    assert!(evm.balance(fb) == Wei::zero())
+
+    // Proves `TraderActor`'s payable fallback executed its SSTORE (`refund_count += 1`),
+    // which requires ~22,100 gas (impossible under the old `gas: 0` 2,300-gas stipend).
+    let refunds: u256 = evm
+        .call(
+            addr: smart_trader,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: TraderActorMsg::RefundCount {},
+        )
+    assert!(refunds == 1)
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn evm_liquidity_lock_optional_and_partial_withdrawal() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 151)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 152)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 153,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 200 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 600_000_000_000,
+            },
+        )
+
+    // 1. Add unlocked liquidity via `addLiquidity` (flexible default)
+    let unlocked_shares: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidity {
+                amount_base: 50 * WAD,
+                amount_quote: 150_000_000_000,
+            },
+        )
+    assert!(unlocked_shares > 0)
+
+    // 2. Calling `addLiquidityLocked` with `Duration::zero()` stays unlocked (optional)
+    let zero_lock_shares: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidityLocked {
+                amount_base: 10 * WAD,
+                amount_quote: 30_000_000_000,
+                lock_duration: Duration::zero(),
+            },
+        )
+    let lock_none: LiquidityLockInfo = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetLiquidityLock { provider: me },
+        )
+    assert!(lock_none.locked_shares == 0)
+    assert!(lock_none.unlocked_shares == unlocked_shares + zero_lock_shares)
+
+    // 3. Add locked liquidity for 1 hour (3,600s)
+    let now = evm.timestamp()
+    let locked_first: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidityLocked {
+                amount_base: 20 * WAD,
+                amount_quote: 60_000_000_000,
+                lock_duration: seconds(3_600),
+            },
+        )
+    let lock_after: LiquidityLockInfo = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetLiquidityLock { provider: me },
+        )
+    assert!(lock_after.locked_shares == locked_first)
+    assert!(lock_after.unlock_time == now + seconds(3_600))
+    assert!(lock_after.unlocked_shares == unlocked_shares + zero_lock_shares)
+
+    // 4. Add another locked deposit with shorter duration -> shares accumulate, unlock_time is NOT shortened
+    let locked_second: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidityLocked {
+                amount_base: 20 * WAD,
+                amount_quote: 60_000_000_000,
+                lock_duration: seconds(600),
+            },
+        )
+    let lock_combined: LiquidityLockInfo = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetLiquidityLock { provider: me },
+        )
+    assert!(lock_combined.locked_shares == locked_first + locked_second)
+    assert!(lock_combined.unlock_time == now + seconds(3_600))
+
+    // 5. Unlocked portion can still be withdrawn immediately while locked shares stay protected
+    let (out_base, out_quote): (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RemoveLiquidity { shares: unlocked_shares },
+        )
+    assert!(out_base > 0 && out_quote > 0)
+
+    let lock_post_withdraw: LiquidityLockInfo = evm
+        .call(
+            addr: fb,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::GetLiquidityLock { provider: me },
+        )
+    assert!(lock_post_withdraw.locked_shares == locked_first + locked_second)
+    assert!(lock_post_withdraw.unlocked_shares == zero_lock_shares)
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_remove_locked_liquidity() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 161)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 162)
+    let fb = evm
+        .create2<FairBatch>(
+            value: Wei::zero(),
+            args: (weth, usdc, 18, 6, Duration::zero(), Duration::zero(), Wei::zero()),
+            salt: 163,
+        )
+
+    let me = evm.address()
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove { owner: me, spender: fb, amount: 100 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::MintAndApprove {
+                owner: me,
+                spender: fb,
+                amount: 300_000_000_000,
+            },
+        )
+
+    let locked: u256 = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::AddLiquidityLocked {
+                amount_base: 100 * WAD,
+                amount_quote: 300_000_000_000,
+                lock_duration: seconds(3_600),
+            },
+        )
+    // Attempting to withdraw locked LP shares before `unlock_time` must revert!
+    let _: (u256, u256) = evm
+        .call(
+            addr: fb,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: FairBatchMsg::RemoveLiquidity { shares: locked },
+        )
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn evm_faucet_claim_transfers_exact_amounts_and_tracks_cooldown() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 171)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 172)
+    let base_drip = WAD // 1 fWETH
+    let quote_drip: u256 = 100_000_000 // 100 fUSDC (6 decimals)
+    let cooldown = seconds(43_200) // 12 hours
+
+    let faucet = evm
+        .create2<Faucet>(
+            value: Wei::zero(),
+            args: (weth, usdc, base_drip, quote_drip, cooldown),
+            salt: 173,
+        )
+
+    // Fund faucet with 2,000 fWETH and 1,000,000 fUSDC
+    let fund_base = 2_000 * WAD
+    let fund_quote: u256 = 1_000_000_000_000
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: faucet, amount: fund_base },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: faucet, amount: fund_quote },
+        )
+
+    let cfg: FaucetConfigInfo = evm
+        .call(
+            addr: faucet,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FaucetMsg::GetConfig {},
+        )
+    assert!(cfg.base_token == weth)
+    assert!(cfg.quote_token == usdc)
+    assert!(cfg.base_amount == base_drip)
+    assert!(cfg.quote_amount == quote_drip)
+    assert!(cfg.cooldown == cooldown)
+
+    let me = evm.address()
+    let before_status: FaucetUserStatus = evm
+        .call(
+            addr: faucet,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FaucetMsg::GetUserStatus { user: me },
+        )
+    assert!(before_status.can_claim)
+    assert!(before_status.last_claim.as_seconds() == 0)
+
+    let now = evm.timestamp()
+    let (got_base, got_quote): (u256, u256) = evm
+        .call(
+            addr: faucet,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FaucetMsg::Claim {},
+        )
+    assert!(got_base == base_drip)
+    assert!(got_quote == quote_drip)
+
+    let user_weth: u256 = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: me },
+        )
+    let user_usdc: u256 = evm
+        .call(
+            addr: usdc,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: me },
+        )
+    assert!(user_weth == base_drip)
+    assert!(user_usdc == quote_drip)
+
+    let rem_weth: u256 = evm
+        .call(
+            addr: weth,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: faucet },
+        )
+    let rem_usdc: u256 = evm
+        .call(
+            addr: usdc,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::BalanceOf { account: faucet },
+        )
+    assert!(rem_weth == fund_base - base_drip)
+    assert!(rem_usdc == fund_quote - quote_drip)
+
+    let after_status: FaucetUserStatus = evm
+        .call(
+            addr: faucet,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: FaucetMsg::GetUserStatus { user: me },
+        )
+    assert!(!after_status.can_claim)
+    assert!(after_status.last_claim == now)
+    assert!(after_status.next_claim_at == now + cooldown)
+
+    let can_now: bool = evm
+        .call(
+            addr: faucet,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: FaucetMsg::CanClaim { user: me },
+        )
+    assert!(!can_now)
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn evm_revert_faucet_double_claim_during_cooldown() uses (evm: mut Evm) {
+    let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 181)
+    let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 182)
+    let faucet = evm
+        .create2<Faucet>(
+            value: Wei::zero(),
+            args: (weth, usdc, WAD, 100_000_000, seconds(43_200)),
+            salt: 183,
+        )
+
+    let _: bool = evm
+        .call(
+            addr: weth,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: faucet, amount: 10 * WAD },
+        )
+    let _: bool = evm
+        .call(
+            addr: usdc,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: MockErc20Msg::Mint { to: faucet, amount: 1_000_000_000 },
+        )
+
+    let _: (u256, u256) = evm
+        .call(
+            addr: faucet,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FaucetMsg::Claim {},
+        )
+    // Immediate second claim during 12h cooldown must revert!
+    let _: (u256, u256) = evm
+        .call(
+            addr: faucet,
+            gas: 500_000,
+            value: Wei::zero(),
+            message: FaucetMsg::Claim {},
         )
 }

@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { getAddress } from 'viem';
 import type { BatchPhase, ClaimableDto, OrderDto, StateResponse } from '../types';
 import type { FairBatchController } from '../onchain/useFairBatch';
-import type { OnchainSnapshot } from '../onchain/state';
+import type { FaucetState, LiquidityLockState, OnchainSnapshot } from '../onchain/state';
 import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
 import { computeBatchSettlement } from '../lib/fallbackEngine';
 import { formatPrice } from '../lib/format';
@@ -72,6 +71,7 @@ let controller: FairBatchController;
 function makeSnapshot(
   phase: BatchPhase,
   account: string | null = null,
+  overrides: { lpLock?: Partial<LiquidityLockState>; faucet?: Partial<FaucetState> } = {},
 ): OnchainSnapshot {
   const settlement = computeBatchSettlement(BATCH_ID, 100, 300_000, ORDERS);
   const state: StateResponse = {
@@ -119,6 +119,7 @@ function makeSnapshot(
         fair_batch: DEFAULT_RUNTIME_CONFIG.fairBatch,
         base_token: DEFAULT_RUNTIME_CONFIG.baseToken,
         quote_token: DEFAULT_RUNTIME_CONFIG.quoteToken,
+        faucet: DEFAULT_RUNTIME_CONFIG.faucet,
         deployed: true,
       },
       fe_artifacts_present: false,
@@ -147,6 +148,24 @@ function makeSnapshot(
       lpShares: 100n * 10n ** 18n,
     },
     allowances: { base: 10n ** 24n, quote: 10n ** 24n },
+    lpLock: {
+      lockedShares: 0n,
+      unlockTime: 0n,
+      unlockedShares: 100n * 10n ** 18n,
+      ...overrides.lpLock,
+    },
+    faucet: {
+      address: DEFAULT_RUNTIME_CONFIG.faucet,
+      baseBalance: 2_000n * 10n ** 18n,
+      quoteBalance: 1_000_000n * 10n ** 6n,
+      claimBaseAmount: 1n * 10n ** 18n,
+      claimQuoteAmount: 100n * 10n ** 6n,
+      cooldownSecs: 43_200,
+      lastClaim: 0n,
+      nextClaimAt: 0n,
+      canClaim: true,
+      ...overrides.faucet,
+    },
     nonce: 3n,
     domainSeparator: `0x${'22'.repeat(32)}`,
     minBondWei: 100_000_000_000_000n,
@@ -198,8 +217,6 @@ function makeController(
     connect: vi.fn(async () => undefined),
     disconnect: vi.fn(),
     refresh: vi.fn(),
-    updateConfig: vi.fn(),
-    resetConfig: vi.fn(),
     clearNotice: vi.fn(),
     submitDirect: vi.fn(async () => ({ hash: '0x', receipt: {} })),
     sealCommit: vi.fn(async () => ({ hash: '0x', receipt: {} })),
@@ -225,7 +242,13 @@ function makeController(
     claimMany: vi.fn(async () => ({ hash: '0x', claimed: 1 })),
     addLiquidity: vi.fn(async () => ({ hash: '0x', receipt: {} })),
     removeLiquidity: vi.fn(async () => ({ hash: '0x', receipt: {} })),
-    faucet: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    claimFaucet: vi.fn(async () => ({
+      hash: '0x',
+      receipt: {},
+      baseAmount: 10n ** 18n,
+      quoteAmount: 100n * 10n ** 6n,
+      nextClaimAt: 0n,
+    })),
     approve: vi.fn(async () => null),
     ...overrides,
   } as unknown as FairBatchController;
@@ -341,50 +364,68 @@ describe('FairBatch on-chain terminal', () => {
     });
   });
 
-  it('saves a validated runtime contract configuration', async () => {
-    render(<App />);
+  it('claims 1 fWETH + 100 fUSDC from the Sepolia faucet and enforces cooldown display', async () => {
+    controller = makeController({ account: ALICE });
+    const { rerender } = render(<App />);
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Contract & Network Config/i }),
-    );
+    const claimBtn = screen.getByTestId('faucet-claim-button');
+    expect(claimBtn).toBeEnabled();
+    expect(claimBtn).toHaveTextContent(/Claim 1 fWETH \+ 100 fUSDC/i);
 
-    fireEvent.change(screen.getByLabelText(/Chain ID/i), {
-      target: { value: '11155111' },
+    fireEvent.click(claimBtn);
+    await waitFor(() => {
+      expect(controller.claimFaucet).toHaveBeenCalledTimes(1);
     });
-    fireEvent.change(screen.getByLabelText(/FairBatch contract address/i), {
-      target: { value: '0x1234567890123456789012345678901234567890' },
-    });
-    fireEvent.click(
-      screen.getByRole('button', { name: /Save contract config/i }),
-    );
 
-    expect(controller.updateConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chainId: 11155111,
-        fairBatch: getAddress('0x1234567890123456789012345678901234567890'),
+    const futureUnlock = BigInt(Math.floor(Date.now() / 1000) + 3_600);
+    controller = makeController({
+      account: ALICE,
+      snapshot: makeSnapshot('Open', ALICE, {
+        faucet: { canClaim: false, nextClaimAt: futureUnlock },
       }),
-    );
-    expect(
-      screen.queryByRole('dialog', { name: /Contract & network readiness/i }),
-    ).not.toBeInTheDocument();
+    });
+    rerender(<App />);
+    expect(screen.getByTestId('faucet-claim-button')).toBeDisabled();
+    expect(screen.getByTestId('faucet-claim-button')).toHaveTextContent(/Next claim in/i);
   });
 
-  it('rejects an invalid contract address before saving', () => {
+  it('supports optional liquidity locking when adding liquidity and shows active lock status', async () => {
+    const futureUnlock = BigInt(Math.floor(Date.now() / 1000) + 7_200);
+    controller = makeController({
+      account: ALICE,
+      snapshot: makeSnapshot('Open', ALICE, {
+        lpLock: {
+          lockedShares: 40n * 10n ** 18n,
+          unlockTime: futureUnlock,
+          unlockedShares: 60n * 10n ** 18n,
+        },
+      }),
+    });
     render(<App />);
+
+    expect(screen.getByTestId('lp-lock-banner')).toHaveTextContent(/40\.00 shares locked/i);
+    expect(screen.getByTestId('lp-lock-banner')).toHaveTextContent(/60\.00 withdrawable now/i);
+
+    fireEvent.click(screen.getByRole('button', { name: '12 hours' }));
+    fireEvent.click(screen.getByTestId('lp-add-submit'));
+
+    await waitFor(() => {
+      expect(controller.addLiquidity).toHaveBeenCalledWith('1', '3000', 43_200);
+    });
+  });
+
+  it('renders the read-only Sepolia deployment modal from config/deployment.json with no local fork controls', () => {
+    render(<App />);
+
     fireEvent.click(
       screen.getByRole('button', { name: /Contract & Network Config/i }),
     );
-    fireEvent.change(screen.getByLabelText(/FairBatch contract address/i), {
-      target: { value: '0xnot-an-address' },
-    });
-    fireEvent.click(
-      screen.getByRole('button', { name: /Save contract config/i }),
-    );
 
-    expect(controller.updateConfig).not.toHaveBeenCalled();
-    expect(
-      screen.getByText(/valid FairBatch contract address|deployed FairBatch contract address/i),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(DEFAULT_RUNTIME_CONFIG.fairBatch)).toBeInTheDocument();
+    expect(screen.getByText(DEFAULT_RUNTIME_CONFIG.faucet)).toBeInTheDocument();
+    expect(screen.queryByText(/Local Anvil/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save contract config/i })).not.toBeInTheDocument();
   });
 
   it('renders transaction notices with an explorer link', () => {

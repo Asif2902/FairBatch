@@ -4,22 +4,38 @@ import {
   ArrowUpFromLine,
   Coins,
   Droplets,
+  Lock,
   Scale,
+  Unlock,
 } from 'lucide-react';
 import { formatUnits } from 'viem';
 import type { RuntimeConfig } from '../onchain/config';
-import type { RawReserves, WalletBalances } from '../onchain/state';
-import { formatPrice, formatToken } from '../lib/format';
+import type { LiquidityLockState, RawReserves, WalletBalances } from '../onchain/state';
+import { formatDuration, formatPrice, formatToken } from '../lib/format';
+import { useNow } from '../lib/useNow';
 
 type LiquidityMode = 'add' | 'remove';
+
+const LOCK_PRESETS: Array<{ label: string; seconds: number }> = [
+  { label: 'No lock', seconds: 0 },
+  { label: '1 hour', seconds: 3_600 },
+  { label: '12 hours', seconds: 43_200 },
+  { label: '1 day', seconds: 86_400 },
+  { label: '7 days', seconds: 604_800 },
+];
 
 interface LiquidityPanelProps {
   config: RuntimeConfig;
   reserves: RawReserves;
   balances: WalletBalances | null;
+  lpLock: LiquidityLockState | null;
   account: string | null;
   busyAction: string | null;
-  onAddLiquidity: (amountBase: string, amountQuote: string) => Promise<void>;
+  onAddLiquidity: (
+    amountBase: string,
+    amountQuote: string,
+    lockDurationSecs?: number,
+  ) => Promise<void>;
   onRemoveLiquidity: (shares: string) => Promise<void>;
 }
 
@@ -37,6 +53,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   config,
   reserves,
   balances,
+  lpLock,
   account,
   busyAction,
   onAddLiquidity,
@@ -45,8 +62,10 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   const [mode, setMode] = useState<LiquidityMode>('add');
   const [baseInput, setBaseInput] = useState<string>('1');
   const [quoteInput, setQuoteInput] = useState<string>('3000');
+  const [lockDurationSecs, setLockDurationSecs] = useState<number>(0);
   const [sharesInput, setSharesInput] = useState<string>('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const nowSecs = useNow();
 
   const rx = human(reserves.reserveBase, config.baseDecimals);
   const ry = human(reserves.reserveQuote, config.quoteDecimals);
@@ -54,6 +73,14 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   const userShares = human(balances?.lpShares ?? 0n, 18);
   const spot = rx > 0 ? ry / rx : 0;
   const poolSharePct = totalShares > 0 ? (userShares / totalShares) * 100 : 0;
+
+  const unlockTimeSecs = Number(lpLock?.unlockTime ?? 0n);
+  const lockActive = Boolean(lpLock && lpLock.lockedShares > 0n && unlockTimeSecs > nowSecs);
+  const lockedShares = lockActive ? human(lpLock!.lockedShares, 18) : 0;
+  const unlockedShares = lockActive
+    ? Math.max(0, human(lpLock!.unlockedShares, 18))
+    : userShares;
+  const lockRemainingSecs = lockActive ? Math.max(0, unlockTimeSecs - nowSecs) : 0;
 
   const baseNum = Number(baseInput) || 0;
   const quoteNum = Number(quoteInput) || 0;
@@ -94,7 +121,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
       return;
     }
     try {
-      await onAddLiquidity(baseInput, quoteInput);
+      await onAddLiquidity(baseInput, quoteInput, lockDurationSecs);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Add liquidity failed');
     }
@@ -109,6 +136,15 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
     }
     if (sharesNum <= 0) {
       setLocalError('Enter a positive LP share amount.');
+      return;
+    }
+    if (lockActive && sharesNum > unlockedShares + 1e-12) {
+      setLocalError(
+        `Only ${formatToken(unlockedShares, 4)} LP shares are unlocked. ${formatToken(
+          lockedShares,
+          4,
+        )} shares unlock in ${formatDuration(lockRemainingSecs)}.`,
+      );
       return;
     }
     try {
@@ -130,7 +166,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
             FM-AMM liquidity desk
           </h2>
           <p className="mt-0.5 text-[11px] leading-relaxed text-ink-muted">
-            Internal, non-transferable LP shares earn the invariant surplus and slashed bonds.
+            Internal, non-transferable LP shares with optional time-locking on deposits.
           </p>
         </div>
         <div className="flex border border-rule-strong bg-paper-soft p-0.5">
@@ -192,15 +228,30 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
         </div>
       </div>
 
+      {lockActive && (
+        <div
+          data-testid="lp-lock-banner"
+          className="flex flex-wrap items-center justify-between gap-2 border-b border-rule bg-brass-50/70 px-4 py-2 font-mono text-[9.5px] text-brass-900"
+        >
+          <span className="inline-flex items-center gap-1.5 font-bold">
+            <Lock className="h-3 w-3 text-brass-700" aria-hidden="true" />
+            <span>
+              {formatToken(lockedShares, 2)} shares locked · unlocks in{' '}
+              {formatDuration(lockRemainingSecs)}
+            </span>
+          </span>
+          <span className="text-brass-800 tabular-nums">
+            {formatToken(unlockedShares, 2)} withdrawable now
+          </span>
+        </div>
+      )}
+
       <div className="p-4">
         {mode === 'add' ? (
           <form onSubmit={handleAdd} className="space-y-3">
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="ledger-inset px-3 py-2">
-                <label
-                  htmlFor="lp-base-input"
-                  className="eyebrow block"
-                >
+                <label htmlFor="lp-base-input" className="eyebrow block">
                   {config.baseSymbol} deposit
                 </label>
                 <div className="mt-1 flex items-baseline gap-1.5">
@@ -219,10 +270,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                 </div>
               </div>
               <div className="ledger-inset px-3 py-2">
-                <label
-                  htmlFor="lp-quote-input"
-                  className="eyebrow block"
-                >
+                <label htmlFor="lp-quote-input" className="eyebrow block">
                   {config.quoteSymbol} deposit
                 </label>
                 <div className="mt-1 flex items-baseline gap-1.5">
@@ -239,6 +287,46 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                     {config.quoteSymbol}
                   </span>
                 </div>
+              </div>
+            </div>
+
+            <div className="border border-rule bg-paper-soft p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 font-mono text-[8.5px] font-bold uppercase tracking-label text-ink-soft">
+                  {lockDurationSecs > 0 ? (
+                    <Lock className="h-3 w-3 text-brass-700" aria-hidden="true" />
+                  ) : (
+                    <Unlock className="h-3 w-3 text-pine-700" aria-hidden="true" />
+                  )}
+                  Liquidity lock (optional)
+                </span>
+                <span className="font-mono text-[8.5px] text-ink-muted">
+                  {lockDurationSecs > 0
+                    ? `Locks new shares for ${formatDuration(lockDurationSecs)}`
+                    : 'Flexible · withdraw anytime'}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label="Optional liquidity lock duration">
+                {LOCK_PRESETS.map((preset) => {
+                  const selected = lockDurationSecs === preset.seconds;
+                  return (
+                    <button
+                      key={preset.seconds}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setLockDurationSecs(preset.seconds)}
+                      className={`border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] transition ${
+                        selected
+                          ? preset.seconds > 0
+                            ? 'border-brass-700 bg-brass-600 text-paper'
+                            : 'border-ink bg-ink text-paper'
+                          : 'border-rule-strong bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -260,21 +348,28 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
 
             <button
               type="submit"
+              data-testid="lp-add-submit"
               disabled={!account || busy}
               className="inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-3 py-2.5 font-display text-sm font-bold text-paper transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <ArrowDownToLine className="h-4 w-4" aria-hidden="true" />
+              {lockDurationSecs > 0 ? (
+                <Lock className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <ArrowDownToLine className="h-4 w-4" aria-hidden="true" />
+              )}
               <span>
                 {!account
                   ? 'Connect a wallet to add liquidity'
                   : busyAction === 'add-liquidity'
                     ? 'Adding liquidity…'
-                    : 'Add liquidity'}
+                    : lockDurationSecs > 0
+                      ? `Add & lock liquidity (${formatDuration(lockDurationSecs)})`
+                      : 'Add liquidity'}
               </span>
             </button>
             <p className="font-mono text-[8.5px] leading-relaxed text-ink-faint">
-              FairBatch mints min(sharesX, sharesY). Matching the pool ratio avoids donating the
-              excess side to existing LPs.
+              FairBatch mints min(sharesX, sharesY). Locking is optional — unlocked shares remain
+              withdrawable anytime.
             </p>
           </form>
         ) : (
@@ -286,10 +381,10 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                 </label>
                 <button
                   type="button"
-                  onClick={() => setSharesInput(trimAmount(userShares, 18))}
+                  onClick={() => setSharesInput(trimAmount(unlockedShares, 18))}
                   className="font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-plum-700 underline decoration-dotted underline-offset-2"
                 >
-                  Max
+                  Max unlocked ({formatToken(unlockedShares, 2)})
                 </button>
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
@@ -326,16 +421,18 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
 
             <button
               type="submit"
-              disabled={!account || busy}
+              disabled={!account || busy || (lockActive && unlockedShares <= 0)}
               className="inline-flex w-full items-center justify-center gap-2 bg-ink px-3 py-2.5 font-display text-sm font-bold text-paper transition hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ArrowUpFromLine className="h-4 w-4" aria-hidden="true" />
               <span>
                 {!account
                   ? 'Connect a wallet to remove liquidity'
-                  : busyAction === 'remove-liquidity'
-                    ? 'Removing liquidity…'
-                    : 'Remove liquidity'}
+                  : lockActive && unlockedShares <= 0
+                    ? `Shares locked (${formatDuration(lockRemainingSecs)} left)`
+                    : busyAction === 'remove-liquidity'
+                      ? 'Removing liquidity…'
+                      : 'Remove liquidity'}
               </span>
             </button>
           </form>

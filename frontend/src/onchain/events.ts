@@ -4,6 +4,7 @@ import type { RuntimeConfig } from './config';
 
 export type FairBatchEventName =
   | 'LiquidityAdded'
+  | 'LiquidityLocked'
   | 'LiquidityRemoved'
   | 'OrderCommitted'
   | 'OrderRevealed'
@@ -99,8 +100,6 @@ export async function loadFairBatchEvents(
   if (force || cache?.key !== key) {
     cache = {
       key,
-      // Custom/local chains may have a latest block below the configured deployment
-      // block; clamp so the first range never starts past the chain head.
       lastBlock: configuredStart > latest ? latest : configuredStart,
       events: [],
     };

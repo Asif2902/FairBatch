@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
   Droplets,
   ExternalLink,
   Link2,
@@ -11,8 +12,9 @@ import {
 } from 'lucide-react';
 import { formatUnits } from 'viem';
 import type { RuntimeConfig } from '../onchain/config';
-import type { WalletAllowances, WalletBalances } from '../onchain/state';
-import { formatToken, getChainLabel, shortenAddress } from '../lib/format';
+import type { FaucetState, WalletAllowances, WalletBalances } from '../onchain/state';
+import { formatDuration, formatPrice, formatToken, getChainLabel, shortenAddress } from '../lib/format';
+import { useNow } from '../lib/useNow';
 
 interface AccountPanelProps {
   config: RuntimeConfig;
@@ -21,11 +23,12 @@ interface AccountPanelProps {
   wrongNetwork: boolean;
   balances: WalletBalances | null;
   allowances: WalletAllowances | null;
+  faucet: FaucetState | null;
   busyAction: string | null;
   faucetEnabled: boolean;
   onConnect: () => Promise<void>;
   onDisconnect: () => void;
-  onFaucet: (token: 'base' | 'quote') => Promise<void>;
+  onClaimFaucet: () => Promise<void>;
   onApprove: (token: 'base' | 'quote') => Promise<void>;
 }
 
@@ -41,15 +44,31 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
   wrongNetwork,
   balances,
   allowances,
+  faucet,
   busyAction,
   faucetEnabled,
   onConnect,
   onDisconnect,
-  onFaucet,
+  onClaimFaucet,
   onApprove,
 }) => {
   const busy = busyAction !== null;
   const connected = Boolean(account);
+  const nowSecs = useNow();
+
+  const claimBaseHuman = human(faucet?.claimBaseAmount ?? config.faucetClaimBase, config.baseDecimals);
+  const claimQuoteHuman = human(
+    faucet?.claimQuoteAmount ?? config.faucetClaimQuote,
+    config.quoteDecimals,
+  );
+  const faucetBaseReserve = human(faucet?.baseBalance, config.baseDecimals);
+  const faucetQuoteReserve = human(faucet?.quoteBalance, config.quoteDecimals);
+  const nextClaimSecs = Number(faucet?.nextClaimAt ?? 0n);
+  const cooldownRemaining = nextClaimSecs > nowSecs ? nextClaimSecs - nowSecs : 0;
+  const faucetReady =
+    faucetEnabled &&
+    cooldownRemaining === 0 &&
+    (faucet ? faucet.canClaim || nextClaimSecs <= nowSecs : true);
 
   return (
     <section aria-label="Connected wallet and balances" className="ledger-panel overflow-hidden">
@@ -95,8 +114,7 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
               <span>{busyAction === 'connect' ? 'Connecting…' : 'Connect injected wallet'}</span>
             </button>
             <p className="border-t border-rule pt-2 font-mono text-[9px] leading-relaxed text-ink-faint">
-              RPC · {config.rpcUrl.replace(/^https?:\/\//, '').split('/')[0]} ·{' '}
-              {shortenAddress(config.fairBatch)}
+              Sepolia · {shortenAddress(config.fairBatch)} · Faucet {shortenAddress(config.faucet)}
             </p>
           </>
         ) : (
@@ -234,30 +252,49 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
 
             {faucetEnabled && (
               <div className="border border-brass-500/40 bg-brass-50/60 p-2.5">
-                <div className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-brass-700">
-                  <Droplets className="h-3 w-3" />
-                  Testnet faucet
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onFaucet('base')}
-                    className="border border-brass-600/50 bg-paper-bright px-2 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-brass-800 transition hover:bg-brass-100 disabled:opacity-40"
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-label text-brass-700">
+                    <Droplets className="h-3 w-3" />
+                    Sepolia faucet
+                  </div>
+                  <a
+                    href={`${config.explorerUrl}/address/${config.faucet}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-mono text-[8.5px] text-brass-800 underline decoration-dotted underline-offset-2 hover:text-ink"
                   >
-                    Mint 10 {config.baseSymbol}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onFaucet('quote')}
-                    className="border border-brass-600/50 bg-paper-bright px-2 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-brass-800 transition hover:bg-brass-100 disabled:opacity-40"
-                  >
-                    Mint 30,000 {config.quoteSymbol}
-                  </button>
+                    <span>{shortenAddress(config.faucet)}</span>
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
                 </div>
-                <p className="mt-1.5 font-mono text-[8.5px] leading-relaxed text-ink-faint">
-                  Mock tokens mint to this wallet and approve FairBatch in one call.
+                <button
+                  type="button"
+                  data-testid="faucet-claim-button"
+                  disabled={busy || wrongNetwork || !faucetReady}
+                  onClick={() => void onClaimFaucet()}
+                  className="mt-2 inline-flex w-full items-center justify-center gap-1.5 border border-brass-600/60 bg-paper-bright px-2.5 py-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.06em] text-brass-900 transition hover:bg-brass-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busyAction === 'faucet' ? (
+                    <span>Claiming from faucet…</span>
+                  ) : cooldownRemaining > 0 ? (
+                    <>
+                      <Clock className="h-3 w-3" aria-hidden="true" />
+                      <span>Next claim in {formatDuration(cooldownRemaining)}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Droplets className="h-3 w-3" aria-hidden="true" />
+                      <span>
+                        Claim {formatToken(claimBaseHuman, 2, 0)} {config.baseSymbol} +{' '}
+                        {formatPrice(claimQuoteHuman, 0)} {config.quoteSymbol}
+                      </span>
+                    </>
+                  )}
+                </button>
+                <p className="mt-1.5 font-mono text-[8.5px] leading-relaxed text-ink-faint tabular-nums">
+                  {formatDuration(faucet?.cooldownSecs ?? config.faucetCooldownSecs)} cooldown per
+                  wallet · pool holds {formatToken(faucetBaseReserve, 1, 0)} {config.baseSymbol} &amp;{' '}
+                  {formatPrice(faucetQuoteReserve, 0)} {config.quoteSymbol}.
                 </p>
               </div>
             )}

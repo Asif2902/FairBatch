@@ -18,7 +18,7 @@ import {
   computeBatchSettlement,
 } from '../lib/fallbackEngine';
 import { shortenAddress } from '../lib/format';
-import { erc20Abi, fairBatchAbi } from './abi';
+import { erc20Abi, fairBatchAbi, faucetAbi } from './abi';
 import { getPublicClient } from './client';
 import type { RuntimeConfig } from './config';
 import { loadFairBatchEvents, type FairBatchEvent } from './events';
@@ -77,6 +77,24 @@ export interface WalletAllowances {
   quote: bigint;
 }
 
+export interface LiquidityLockState {
+  lockedShares: bigint;
+  unlockTime: bigint;
+  unlockedShares: bigint;
+}
+
+export interface FaucetState {
+  address: Address;
+  baseBalance: bigint;
+  quoteBalance: bigint;
+  claimBaseAmount: bigint;
+  claimQuoteAmount: bigint;
+  cooldownSecs: number;
+  lastClaim: bigint;
+  nextClaimAt: bigint;
+  canClaim: boolean;
+}
+
 export interface OnchainSnapshot {
   config: RuntimeConfig;
   health: HealthResponse;
@@ -85,6 +103,8 @@ export interface OnchainSnapshot {
   reserves: RawReserves;
   balances: WalletBalances;
   allowances: WalletAllowances;
+  lpLock: LiquidityLockState;
+  faucet: FaucetState;
   nonce: bigint;
   domainSeparator: `0x${string}`;
   minBondWei: bigint;
@@ -420,64 +440,152 @@ export async function loadOnchainSnapshot(
 
   let balances: WalletBalances = { eth: 0n, base: 0n, quote: 0n, lpShares: 0n };
   let allowances: WalletAllowances = { base: 0n, quote: 0n };
+  let lpLock: LiquidityLockState = { lockedShares: 0n, unlockTime: 0n, unlockedShares: 0n };
   let nonce = 0n;
 
+  const [faucetBaseBal, faucetQuoteBal] = config.tokenFaucetEnabled
+    ? await Promise.all([
+        client
+          .readContract({
+            address: config.baseToken,
+            abi: erc20Abi,
+            functionName: 'balanceOf',
+            args: [config.faucet],
+          })
+          .catch(() => 0n),
+        client
+          .readContract({
+            address: config.quoteToken,
+            abi: erc20Abi,
+            functionName: 'balanceOf',
+            args: [config.faucet],
+          })
+          .catch(() => 0n),
+      ])
+    : [0n, 0n];
+
+  let faucet: FaucetState = {
+    address: config.faucet,
+    baseBalance: faucetBaseBal,
+    quoteBalance: faucetQuoteBal,
+    claimBaseAmount: config.faucetClaimBase,
+    claimQuoteAmount: config.faucetClaimQuote,
+    cooldownSecs: config.faucetCooldownSecs,
+    lastClaim: 0n,
+    nextClaimAt: 0n,
+    canClaim: config.tokenFaucetEnabled,
+  };
+
   if (account) {
-    const [eth, base, quote, lpShares, baseAllowance, quoteAllowance, accountNonce] =
-      await Promise.all([
-        client.getBalance({ address: account }).catch(() => 0n),
-        client
-          .readContract({
-            address: config.baseToken,
-            abi: erc20Abi,
-            functionName: 'balanceOf',
-            args: [account],
-          })
-          .catch(() => 0n),
-        client
-          .readContract({
-            address: config.quoteToken,
-            abi: erc20Abi,
-            functionName: 'balanceOf',
-            args: [account],
-          })
-          .catch(() => 0n),
-        client
-          .readContract({
-            address: config.fairBatch,
-            abi: fairBatchAbi,
-            functionName: 'getLpShares',
-            args: [account],
-          })
-          .catch(() => 0n),
-        client
-          .readContract({
-            address: config.baseToken,
-            abi: erc20Abi,
-            functionName: 'allowance',
-            args: [account, config.fairBatch],
-          })
-          .catch(() => 0n),
-        client
-          .readContract({
-            address: config.quoteToken,
-            abi: erc20Abi,
-            functionName: 'allowance',
-            args: [account, config.fairBatch],
-          })
-          .catch(() => 0n),
-        client
-          .readContract({
-            address: config.fairBatch,
-            abi: fairBatchAbi,
-            functionName: 'getNonce',
-            args: [account],
-          })
-          .catch(() => 0n),
-      ]);
+    const [
+      eth,
+      base,
+      quote,
+      lpShares,
+      baseAllowance,
+      quoteAllowance,
+      accountNonce,
+      lockRaw,
+      faucetStatusRaw,
+    ] = await Promise.all([
+      client.getBalance({ address: account }).catch(() => 0n),
+      client
+        .readContract({
+          address: config.baseToken,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [account],
+        })
+        .catch(() => 0n),
+      client
+        .readContract({
+          address: config.quoteToken,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [account],
+        })
+        .catch(() => 0n),
+      client
+        .readContract({
+          address: config.fairBatch,
+          abi: fairBatchAbi,
+          functionName: 'getLpShares',
+          args: [account],
+        })
+        .catch(() => 0n),
+      client
+        .readContract({
+          address: config.baseToken,
+          abi: erc20Abi,
+          functionName: 'allowance',
+          args: [account, config.fairBatch],
+        })
+        .catch(() => 0n),
+      client
+        .readContract({
+          address: config.quoteToken,
+          abi: erc20Abi,
+          functionName: 'allowance',
+          args: [account, config.fairBatch],
+        })
+        .catch(() => 0n),
+      client
+        .readContract({
+          address: config.fairBatch,
+          abi: fairBatchAbi,
+          functionName: 'getNonce',
+          args: [account],
+        })
+        .catch(() => 0n),
+      client
+        .readContract({
+          address: config.fairBatch,
+          abi: fairBatchAbi,
+          functionName: 'getLiquidityLock',
+          args: [account],
+        })
+        .catch(() => null),
+      config.tokenFaucetEnabled
+        ? client
+            .readContract({
+              address: config.faucet,
+              abi: faucetAbi,
+              functionName: 'getUserStatus',
+              args: [account],
+            })
+            .catch(() => null)
+        : Promise.resolve(null),
+    ]);
     balances = { eth, base, quote, lpShares };
     allowances = { base: baseAllowance, quote: quoteAllowance };
     nonce = accountNonce;
+    if (lockRaw) {
+      const parsedLock = lockRaw as unknown as {
+        lockedShares: bigint;
+        unlockTime: bigint;
+        unlockedShares: bigint;
+      };
+      lpLock = {
+        lockedShares: asBig(parsedLock.lockedShares),
+        unlockTime: asBig(parsedLock.unlockTime),
+        unlockedShares: asBig(parsedLock.unlockedShares),
+      };
+    } else {
+      lpLock = { lockedShares: 0n, unlockTime: 0n, unlockedShares: lpShares };
+    }
+    if (faucetStatusRaw) {
+      const parsedStatus = faucetStatusRaw as unknown as {
+        lastClaim: bigint;
+        nextClaimAt: bigint;
+        canClaim: boolean;
+      };
+      faucet = {
+        ...faucet,
+        lastClaim: asBig(parsedStatus.lastClaim),
+        nextClaimAt: asBig(parsedStatus.nextClaimAt),
+        canClaim: Boolean(parsedStatus.canClaim),
+      };
+    }
   }
 
   const ordersByBatch = new Map<number, ChainOrder[]>();
@@ -769,6 +877,7 @@ export async function loadOnchainSnapshot(
       fair_batch: config.fairBatch,
       base_token: config.baseToken,
       quote_token: config.quoteToken,
+      faucet: config.faucet,
       deployed: true,
     },
     fe_artifacts_present: false,
@@ -783,6 +892,8 @@ export async function loadOnchainSnapshot(
     reserves,
     balances,
     allowances,
+    lpLock,
+    faucet,
     nonce,
     domainSeparator,
     minBondWei: config.minBondWei,
