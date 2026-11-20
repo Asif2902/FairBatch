@@ -11,6 +11,36 @@ use std::evm::StorageMap
 use std::evm::erc20::safe_transfer
 use std::evm::mutex::Mutex
 
+use ingot::{BatchClock, EvmClock}
+
+/// Evaluates a user's faucet cooldown status under the injected `BatchClock`.
+pub fn evaluate_faucet_status(prev: Timestamp, cooldown: Duration) -> FaucetUserStatus
+uses (clock: BatchClock)
+{
+    let now = clock.now()
+    if prev.as_seconds() == 0 {
+        FaucetUserStatus {
+            last_claim: prev,
+            next_claim_at: Timestamp::from_seconds(0),
+            can_claim: true,
+        }
+    } else {
+        let next_claim_at = prev + cooldown
+        FaucetUserStatus { last_claim: prev, next_claim_at, can_claim: now >= next_claim_at }
+    }
+}
+
+/// Enforces that a faucet claim is eligible under `clock.now()` and returns
+/// `(claim_timestamp, next_claim_at)`.
+pub fn assert_faucet_claimable(prev: Timestamp, cooldown: Duration) -> (Timestamp, Timestamp)
+uses (clock: BatchClock)
+{
+    let now = clock.now()
+    let status = evaluate_faucet_status(prev, cooldown)
+    assert!(status.can_claim, "Faucet cooldown active")
+    (now, now + cooldown)
+}
+
 pub struct FaucetConfig {
     pub base_token: Address,
     pub quote_token: Address,
@@ -95,16 +125,13 @@ pub contract Faucet uses (ctx: Ctx, call: mut Call, log: mut Log) {
             guard.lock()
 
             let recipient = ctx.caller()
-            let now = ctx.timestamp()
             let prev = last_claim.get(key: recipient)
-            if prev.as_seconds() > 0 {
-                let next_allowed = prev + config.cooldown
-                assert!(now >= next_allowed, "Faucet cooldown active")
+            let (now, next_claim_at) = with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_faucet_claimable(prev, cooldown: config.cooldown)
             }
 
             // Effects before external token transfers (CEI + transient Mutex)
             last_claim.set(key: recipient, value: now)
-            let next_claim_at = now + config.cooldown
 
             safe_transfer(
                 token: config.base_token,
@@ -143,21 +170,9 @@ pub contract Faucet uses (ctx: Ctx, call: mut Call, log: mut Log) {
         GetUserStatus { user } -> FaucetUserStatus
         uses (ctx, config, last_claim)
         {
-            let now = ctx.timestamp()
             let prev = last_claim.get(key: user)
-            if prev.as_seconds() == 0 {
-                FaucetUserStatus {
-                    last_claim: prev,
-                    next_claim_at: Timestamp::from_seconds(0),
-                    can_claim: true,
-                }
-            } else {
-                let next_claim_at = prev + config.cooldown
-                FaucetUserStatus {
-                    last_claim: prev,
-                    next_claim_at,
-                    can_claim: now >= next_claim_at,
-                }
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                evaluate_faucet_status(prev, cooldown: config.cooldown)
             }
         }
 
@@ -167,11 +182,10 @@ pub contract Faucet uses (ctx: Ctx, call: mut Call, log: mut Log) {
 
         CanClaim { user } -> bool uses (ctx, config, last_claim) {
             let prev = last_claim.get(key: user)
-            if prev.as_seconds() == 0 {
-                true
-            } else {
-                ctx.timestamp() >= prev + config.cooldown
+            let status = with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                evaluate_faucet_status(prev, cooldown: config.cooldown)
             }
+            status.can_claim
         }
     }
 }

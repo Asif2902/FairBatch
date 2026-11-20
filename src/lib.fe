@@ -153,6 +153,67 @@ uses (clock: BatchClock)
     assert!(can_slash, "Reveal window not expired")
 }
 
+/// Computes an updated optional LP share lock under `clock.now()`, accumulating
+/// active locked shares and never shortening an existing active unlock timestamp.
+pub fn compute_updated_lock(
+    cur: LiquidityLock,
+    minted: u256,
+    lock_duration: Duration,
+) -> LiquidityLock
+uses (clock: BatchClock)
+{
+    if lock_duration == Duration::zero() {
+        return cur
+    }
+    let now = clock.now()
+    let new_unlock = now + lock_duration
+    if cur.locked_shares > 0 && now < cur.unlock_time {
+        let max_unlock = if new_unlock > cur.unlock_time {
+            new_unlock
+        } else {
+            cur.unlock_time
+        }
+        LiquidityLock { locked_shares: cur.locked_shares + minted, unlock_time: max_unlock }
+    } else {
+        LiquidityLock { locked_shares: minted, unlock_time: new_unlock }
+    }
+}
+
+/// Evaluates active locked vs. unlocked LP shares under `clock.now()`.
+pub fn evaluate_liquidity_lock(owned: u256, lock: LiquidityLock) -> LiquidityLockInfo
+uses (clock: BatchClock)
+{
+    let now = clock.now()
+    if lock.locked_shares > 0 && now < lock.unlock_time {
+        let unlocked = if owned > lock.locked_shares {
+            owned - lock.locked_shares
+        } else {
+            0
+        }
+        LiquidityLockInfo {
+            locked_shares: lock.locked_shares,
+            unlock_time: lock.unlock_time,
+            unlocked_shares: unlocked,
+        }
+    } else {
+        LiquidityLockInfo {
+            locked_shares: 0,
+            unlock_time: Timestamp::from_seconds(0),
+            unlocked_shares: owned,
+        }
+    }
+}
+
+/// Enforces that `shares` does not exceed currently unlocked LP shares under `clock.now()`.
+/// Returns `true` when an expired lock record should be cleared from storage.
+pub fn assert_removable_shares(owned: u256, shares: u256, lock: LiquidityLock) -> bool
+uses (clock: BatchClock)
+{
+    let info = evaluate_liquidity_lock(owned, lock)
+    assert!(shares <= info.unlocked_shares, "LP shares locked")
+    lock.locked_shares > 0 && info.locked_shares == 0
+}
+
 /// Pure validation of order side, minimum anti-dust size, and positive buyer limit price.
 pub const fn validate_order_params(side: u8, amount_in: u256, limit_price: u256) {
     match Side::from_u8(side) {
@@ -294,9 +355,15 @@ uses (
         let base_norm = normalize_amount(amount_base, config.base_decimals)
         let quote_norm = normalize_amount(amount_quote, config.quote_decimals)
         let init_shares = compute_initial_lp_shares(base_norm, quote_norm)
-        assert!(init_shares > MINIMUM_LIQUIDITY, "Insufficient initial liquidity")
+        assert!(
+            init_shares > MINIMUM_LIQUIDITY,
+            "Insufficient initial liquidity",
+        )
         let provider_shares = init_shares - MINIMUM_LIQUIDITY
-        assert!(provider_shares >= min_shares, "Slippage: insufficient LP shares")
+        assert!(
+            provider_shares >= min_shares,
+            "Slippage: insufficient LP shares",
+        )
         // Permanently lock `MINIMUM_LIQUIDITY` at `Address::zero()` to prevent
         // first-depositor share-inflation attacks.
         lp_shares.set(key: Address::zero(), value: MINIMUM_LIQUIDITY)
@@ -323,31 +390,18 @@ uses (
     pool.reserve_base = pool.reserve_base + used_base
     pool.reserve_quote = pool.reserve_quote + used_quote
     lp_shares.set(
-        key: provider,
-        value: lp_shares.get(key: provider) + minted,
-    )
+            key: provider,
+            value: lp_shares.get(key: provider) + minted,
+        )
 
     var effective_unlock = Timestamp::from_seconds(0)
     if lock_duration > Duration::zero() {
-        let now = ctx.timestamp()
-        let new_unlock = now + lock_duration
         let cur = lp_locks.get(key: provider)
-        let (total_locked, unlock_at) = if cur.locked_shares > 0 && now < cur.unlock_time {
-            let max_unlock = if new_unlock > cur.unlock_time {
-                new_unlock
-            } else {
-                cur.unlock_time
-            }
-            (cur.locked_shares + minted, max_unlock)
-        } else {
-            (minted, new_unlock)
+        let updated = with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+            compute_updated_lock(cur, minted, lock_duration)
         }
-        effective_unlock = unlock_at
-        lp_locks
-            .set(
-                key: provider,
-                value: LiquidityLock { locked_shares: total_locked, unlock_time: unlock_at },
-            )
+        effective_unlock = updated.unlock_time
+        lp_locks.set(key: provider, value: updated)
     }
 
     safe_transfer_from(
@@ -487,20 +541,11 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             assert!(owned >= shares, "Insufficient LP shares")
             assert!(pool.total_shares >= shares, "Invalid total shares")
 
-            let now = ctx.timestamp()
             let lock = lp_locks.get(key: provider)
-            let active_locked = if lock.locked_shares > 0 && now < lock.unlock_time {
-                lock.locked_shares
-            } else {
-                0
+            let clear_expired = with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                assert_removable_shares(owned, shares, lock)
             }
-            let unlocked = if owned > active_locked {
-                owned - active_locked
-            } else {
-                0
-            }
-            assert!(shares <= unlocked, "LP shares locked")
-            if lock.locked_shares > 0 && now >= lock.unlock_time {
+            if clear_expired {
                 lp_locks
                     .set(
                         key: provider,
@@ -515,7 +560,10 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             let out_base = mul_div(shares, pool.reserve_base, pool.total_shares)
             let out_quote = mul_div(shares, pool.reserve_quote, pool.total_shares)
             assert!(out_base >= min_base, "Slippage: insufficient base output")
-            assert!(out_quote >= min_quote, "Slippage: insufficient quote output")
+            assert!(
+                out_quote >= min_quote,
+                "Slippage: insufficient quote output",
+            )
             assert!(out_base > 0 || out_quote > 0, "Zero withdrawal output")
 
             let new_res_base = pool.reserve_base - out_base
@@ -1136,26 +1184,10 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
         GetLiquidityLock { provider } -> LiquidityLockInfo
         uses (ctx, lp_shares, lp_locks)
         {
-            let now = ctx.timestamp()
             let owned = lp_shares.get(key: provider)
             let lock = lp_locks.get(key: provider)
-            if lock.locked_shares > 0 && now < lock.unlock_time {
-                let unlocked = if owned > lock.locked_shares {
-                    owned - lock.locked_shares
-                } else {
-                    0
-                }
-                LiquidityLockInfo {
-                    locked_shares: lock.locked_shares,
-                    unlock_time: lock.unlock_time,
-                    unlocked_shares: unlocked,
-                }
-            } else {
-                LiquidityLockInfo {
-                    locked_shares: 0,
-                    unlock_time: Timestamp::from_seconds(0),
-                    unlocked_shares: owned,
-                }
+            with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
+                evaluate_liquidity_lock(owned, lock)
             }
         }
 

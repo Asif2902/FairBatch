@@ -2019,7 +2019,7 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
 #[test(balance = 100_000_000_000_000_000_000)]
 fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
     // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
-    // `0xe70765537162c82eD512Ce9c2A11cEffe9Dd13C4` on chain_id = 1.
+    // `0x2353CC9CeC2A0Deac3011C075DA728A0346094A0` on chain_id = 1.
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
     let fb = evm
@@ -2088,11 +2088,11 @@ fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
             message: FairBatchMsg::ComputeIntentDigest { order: intent },
         )
     assert!(
-        onchain_digest == 0x6a9958956900cab45eb747b6df1a725765773a5209dd8e0643eb13749a6a23d2,
+        onchain_digest == 0x0e54db7fd79467b6a0dfcacb6dd35f6ae66a1c344e4d2da5c18f71c98f7d585d,
     )
 
-    let r: u256 = 0x9e9918e2ec5fc6d94f73aba80f6d84f357abea94c982a226219db6e2b1abe5d5
-    let s: u256 = 0x5154a3b3ac1435f67dadfe0eb8be0ab00233766cfd0fdd3e61842c63fcba5811
+    let r: u256 = 0xf0896e680745febd1ac2f31e1ee4e483380a35216707c655644a30e1afe37439
+    let s: u256 = 0x70dca1f798a67279c58e4621f143724b996e14e659f4ce5fb71ce01bf5e0ab18
     let v: u8 = 0x1c
     let sig = encode_packed((r, s, v)).as_bytes()
 
@@ -2814,8 +2814,8 @@ fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
         nonce: 0,
         deadline: Timestamp::from_seconds(1_000_000_000),
     }
-    let r: u256 = 0x9e9918e2ec5fc6d94f73aba80f6d84f357abea94c982a226219db6e2b1abe5d5
-    let s: u256 = 0x5154a3b3ac1435f67dadfe0eb8be0ab00233766cfd0fdd3e61842c63fcba5811
+    let r: u256 = 0xf0896e680745febd1ac2f31e1ee4e483380a35216707c655644a30e1afe37439
+    let s: u256 = 0x70dca1f798a67279c58e4621f143724b996e14e659f4ce5fb71ce01bf5e0ab18
     let v: u8 = 0x1c
 
     let first_id: u256 = evm
