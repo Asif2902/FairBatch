@@ -97,16 +97,6 @@ pub struct FillOutcome {
 impl Copy for FillOutcome {}
 
 #[abi]
-pub struct UserClaim {
-    pub trader: Address,
-    pub payout_base: u256,
-    pub payout_quote: u256,
-    pub claimed: bool,
-}
-
-impl Copy for UserClaim {}
-
-#[abi]
 pub struct OrderReceipt {
     pub order_id: u256,
     pub trader: Address,

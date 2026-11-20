@@ -27,6 +27,7 @@ pub struct BatchMeta {
     pub reveal_deadline: Timestamp,
     pub order_count: u256,
     pub commit_count: u256,
+    pub revealed_count: u256,
     pub settled: bool,
 }
 

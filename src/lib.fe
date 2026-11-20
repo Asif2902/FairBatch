@@ -496,6 +496,7 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
                     reveal_deadline: reveal_dl,
                     order_count: 0,
                     commit_count: 0,
+                    revealed_count: 0,
                     settled: false,
                 },
             )
@@ -615,7 +616,9 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             active_batch_id,
             mut batches,
             mut commitments,
+            mut guard,
         ) {
+            guard.lock()
             assert!(commitment_hash != 0, "Empty commitment hash")
             let bond = ctx.value()
             assert!(bond >= config.min_bond, "Insufficient reveal bond")
@@ -625,8 +628,9 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
                 assert_open_window(meta)
             }
+            let reserved_slots = meta.order_count + (meta.commit_count - meta.revealed_count)
             assert!(
-                meta.commit_count < MAX_ORDERS_PER_BATCH,
+                meta.commit_count < MAX_ORDERS_PER_BATCH && reserved_slots < MAX_ORDERS_PER_BATCH,
                 "Batch commit cap reached",
             )
 
@@ -651,6 +655,7 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             log.emit(
                 OrderCommitted { batch_id: b_id, commit_id: c_id, trader, commitment_hash, bond },
             )
+            guard.unlock()
             c_id
         }
 
@@ -708,6 +713,7 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
 
             let ord_id = meta.order_count
             meta.order_count = ord_id + 1
+            meta.revealed_count = meta.revealed_count + 1
             batches.set(key: b_id, value: meta)
 
             orders
@@ -773,8 +779,9 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
                 assert_open_window(meta)
             }
+            let reserved_slots = meta.order_count + (meta.commit_count - meta.revealed_count)
             assert!(
-                meta.order_count < MAX_ORDERS_PER_BATCH,
+                reserved_slots < MAX_ORDERS_PER_BATCH,
                 "Batch order cap reached",
             )
 
@@ -850,8 +857,9 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
             with (BatchClock = EvmClock { ts: ctx.timestamp() }) {
                 assert_intent_window(meta)
             }
+            let reserved_slots = meta.order_count + (meta.commit_count - meta.revealed_count)
             assert!(
-                meta.order_count < MAX_ORDERS_PER_BATCH,
+                reserved_slots < MAX_ORDERS_PER_BATCH,
                 "Batch order cap reached",
             )
 
@@ -1059,6 +1067,7 @@ pub contract FairBatch uses (ctx: Ctx, call: mut Call, log: mut Log) {
                         reveal_deadline: next_reveal_dl,
                         order_count: 0,
                         commit_count: 0,
+                        revealed_count: 0,
                         settled: false,
                     },
                 )

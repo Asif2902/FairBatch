@@ -1470,6 +1470,7 @@ fn effect_mocked_clock_transitions() {
         reveal_deadline: Timestamp::from_seconds(1_120),
         order_count: 0,
         commit_count: 0,
+        revealed_count: 0,
         settled: false,
     }
 
@@ -1496,6 +1497,7 @@ fn effect_mocked_clock_transitions() {
         reveal_deadline: meta.reveal_deadline,
         order_count: 2,
         commit_count: 1,
+        revealed_count: 1,
         settled: true,
     }
     with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_200) }) {
@@ -2019,7 +2021,7 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
 #[test(balance = 100_000_000_000_000_000_000)]
 fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
     // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
-    // `0x2353CC9CeC2A0Deac3011C075DA728A0346094A0` on chain_id = 1.
+    // `0xcd417526890a5446Bf501F1f6ac478F4638bF3D3` on chain_id = 1.
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
     let fb = evm
@@ -2088,11 +2090,11 @@ fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
             message: FairBatchMsg::ComputeIntentDigest { order: intent },
         )
     assert!(
-        onchain_digest == 0x0e54db7fd79467b6a0dfcacb6dd35f6ae66a1c344e4d2da5c18f71c98f7d585d,
+        onchain_digest == 0x448b1f5e6e9e9a7db1e39df9d4a6ff51906eeeeb02b12213300612b3515b69c3,
     )
 
-    let r: u256 = 0xf0896e680745febd1ac2f31e1ee4e483380a35216707c655644a30e1afe37439
-    let s: u256 = 0x70dca1f798a67279c58e4621f143724b996e14e659f4ce5fb71ce01bf5e0ab18
+    let r: u256 = 0x3d91ca1cb1227ffff1c314806ed1193834496da813a9b80b4fb4246a9ac34dad
+    let s: u256 = 0x65ddf4b5611599baed204d1eee244675b77972285801dc63de11a6a0eff6e3b6
     let v: u8 = 0x1c
     let sig = encode_packed((r, s, v)).as_bytes()
 
@@ -2814,8 +2816,8 @@ fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
         nonce: 0,
         deadline: Timestamp::from_seconds(1_000_000_000),
     }
-    let r: u256 = 0xf0896e680745febd1ac2f31e1ee4e483380a35216707c655644a30e1afe37439
-    let s: u256 = 0x70dca1f798a67279c58e4621f143724b996e14e659f4ce5fb71ce01bf5e0ab18
+    let r: u256 = 0x3d91ca1cb1227ffff1c314806ed1193834496da813a9b80b4fb4246a9ac34dad
+    let s: u256 = 0x65ddf4b5611599baed204d1eee244675b77972285801dc63de11a6a0eff6e3b6
     let v: u8 = 0x1c
 
     let first_id: u256 = evm
