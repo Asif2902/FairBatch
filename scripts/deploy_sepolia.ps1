@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     FairBatch Ethereum Sepolia Deployment, Faucet Funding & Reserve Seeding (`CHAIN_ID = 11155111`).
 
@@ -536,11 +536,15 @@ $FaucetRcpt = Send-SignedTxAndWait "Create Faucet" "" "0x$FaucetInitHex$FaucetCt
 $FaucetAddr = $FaucetRcpt.contractAddress
 Write-Host ("  Faucet Deployed     : {0} (gasUsed={1})" -f $FaucetAddr, (Parse-HexBigInt $FaucetRcpt.gasUsed)) -ForegroundColor Green
 
+$SetMinterData = (& $CastBin calldata "setMinter(address)" $FaucetAddr).Trim()
+$null = Send-SignedTxAndWait "setMinter fWETH->Faucet" $BaseTokenAddr  $SetMinterData 150000
+$null = Send-SignedTxAndWait "setMinter fUSDC->Faucet" $QuoteTokenAddr $SetMinterData 150000
+
 $FundBaseData  = (& $CastBin calldata "mint(address,uint256)" $FaucetAddr $FaucetFundBaseRawStr).Trim()
 $FundQuoteData = (& $CastBin calldata "mint(address,uint256)" $FaucetAddr $FaucetFundQuoteRawStr).Trim()
 $FundBaseRcpt  = Send-SignedTxAndWait "Fund Faucet fWETH"  $BaseTokenAddr  $FundBaseData  250000
 $FundQuoteRcpt = Send-SignedTxAndWait "Fund Faucet fUSDC"  $QuoteTokenAddr $FundQuoteData 250000
-Write-Host ("  Faucet Funded       : {0} fWETH + {1} fUSDC" -f $FaucetFundBase, $FaucetFundQuote) -ForegroundColor Green
+Write-Host ("  Faucet Authorized & Funded: {0} fWETH + {1} fUSDC" -f $FaucetFundBase, $FaucetFundQuote) -ForegroundColor Green
 
 # Step 5: Seed Initial FM-AMM Liquidity
 Write-Host ""

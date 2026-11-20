@@ -62,9 +62,13 @@ export const erc20Abi = parseAbi([
   'function totalSupply() view returns (uint256)',
   'function balanceOf(address account) view returns (uint256)',
   'function allowance(address owner, address spender) view returns (uint256)',
+  'function owner() view returns (address)',
+  'function minter() view returns (address)',
   'function transfer(address to, uint256 amount) returns (bool)',
   'function approve(address spender, uint256 amount) returns (bool)',
   'function transferFrom(address from, address to, uint256 amount) returns (bool)',
   'function mint(address to, uint256 amount) returns (bool)',
   'function mintAndApprove(address owner, address spender, uint256 amount) returns (bool)',
+  'function setMinter(address account) returns (bool)',
+  'function setBlacklisted(address account, bool blocked) returns (bool)',
 ]);

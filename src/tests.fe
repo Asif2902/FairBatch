@@ -297,6 +297,14 @@ contract MaliciousReentrantERC20 uses (ctx: Ctx, call: mut Call) {
             allowances.get(key: (owner, spender))
         }
 
+        Owner -> Address {
+            Address::zero()
+        }
+
+        Minter -> Address {
+            Address::zero()
+        }
+
         Transfer { to, amount } -> bool uses (
             ctx,
             mut call,
@@ -362,6 +370,11 @@ contract MaliciousReentrantERC20 uses (ctx: Ctx, call: mut Call) {
                     key: (owner, spender),
                     value: allowances.get(key: (owner, spender)) + amount,
                 )
+            true
+        }
+
+        SetMinter { account } -> bool {
+            let _ = account
             true
         }
 
@@ -2006,7 +2019,7 @@ fn evm_commit_reveal_bond_refund_and_unrevealed_slashing() uses (evm: mut Evm) {
 #[test(balance = 100_000_000_000_000_000_000)]
 fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
     // Deploy with salts (1, 2, 3) so FairBatch sits at deterministic CREATE2 address
-    // `0x9e9B48DD637425CF1B1b26bE46dbc72a3a819D8d` on chain_id = 1.
+    // `0x9d0386E93C26978b02a4dd662e37C8BaAe181DA7` on chain_id = 1.
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 1)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 2)
     let fb = evm
@@ -2075,11 +2088,11 @@ fn evm_eip712_eoa_signed_intent_gasless_relayer() uses (evm: mut Evm) {
             message: FairBatchMsg::ComputeIntentDigest { order: intent },
         )
     assert!(
-        onchain_digest == 0x11480450ba7e9c2b6d6662fcf1820e95f179cd8195a1316c7f3792150d4d8bff,
+        onchain_digest == 0xaf33a01e26d1f8fe9a083b0f61abaf207afa94da3a3fe3dd7abad092b94e2bbf,
     )
 
-    let r: u256 = 0xc8160a0d0e9be6dc31790100d0d0fea3a7744f100a0b378ba5bc6271bb2432fc
-    let s: u256 = 0x4eac7fcc68a9d1d1b8fe4a48edfabd4c743708bc344040be3daf3ff9f7192523
+    let r: u256 = 0x275857956b9339808bcf8d70c05261861b53e47450ed1f641831d6cf253c1c2d
+    let s: u256 = 0x57da4215f566ea379fe0645af6281cfc093f50d401fcc6f2afdfde724f668231
     let v: u8 = 0x1c
     let sig = encode_packed((r, s, v)).as_bytes()
 
@@ -2796,8 +2809,8 @@ fn evm_revert_replayed_eip712_intent() uses (evm: mut Evm) {
         nonce: 0,
         deadline: Timestamp::from_seconds(1_000_000_000),
     }
-    let r: u256 = 0xc8160a0d0e9be6dc31790100d0d0fea3a7744f100a0b378ba5bc6271bb2432fc
-    let s: u256 = 0x4eac7fcc68a9d1d1b8fe4a48edfabd4c743708bc344040be3daf3ff9f7192523
+    let r: u256 = 0x275857956b9339808bcf8d70c05261861b53e47450ed1f641831d6cf253c1c2d
+    let s: u256 = 0x57da4215f566ea379fe0645af6281cfc093f50d401fcc6f2afdfde724f668231
     let v: u8 = 0x1c
 
     let first_id: u256 = evm
