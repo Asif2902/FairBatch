@@ -18,6 +18,7 @@ import {
   commitOrder,
   describeTxError,
   removeLiquidity as removeLiquidityAction,
+  relaySignedIntent as relaySignedIntentAction,
   revealOrder,
   settleAndSubmitDirect as settleAndSubmitDirectAction,
   settleBatch as settleBatchAction,
@@ -31,6 +32,7 @@ import {
   type FaucetClaimResult,
   type IntentResult,
   type LiquidityResult,
+  type RelayIntentResult,
   type RevealResult,
 } from './actions';
 import {
@@ -144,6 +146,7 @@ export interface FairBatchController {
     limitPrice: string;
   }) => Promise<IntentResult>;
   submitIntent: (artifact: SignedIntentArtifact) => Promise<DirectOrderResult>;
+  relayIntent: (keeperUrl: string, artifact: SignedIntentArtifact) => Promise<RelayIntentResult>;
   settle: () => Promise<{ hash: Hash; batchId: number }>;
   slash: (batchId: number, commitId: number) => Promise<{ hash: Hash; forfeitedBond: bigint }>;
   claim: (item: ClaimableDto) => Promise<{ hash: Hash; payoutBase: bigint; payoutQuote: bigint }>;
@@ -358,7 +361,7 @@ export function useFairBatch(): FairBatchController {
       const report = (msg: string) => setTxStatus(msg);
       try {
         const snap = snapshotRef.current;
-        if (name !== 'sign-intent' && snap && snap.balances.eth === 0n) {
+        if (name !== 'sign-intent' && name !== 'relay-intent' && snap && snap.balances.eth === 0n) {
           throw new Error(
             'You need a little Sepolia ETH for gas (plus 0.0001 ETH refundable deposit for sealed orders). Grab free Sepolia ETH from a public faucet and try again.',
           );
@@ -614,6 +617,30 @@ export function useFairBatch(): FairBatchController {
     [config, runAction],
   );
 
+  const relayIntent = useCallback(
+    (keeperUrl: string, artifact: SignedIntentArtifact) =>
+      runAction(
+        'relay-intent',
+        (active, report) => relaySignedIntentAction(config, keeperUrl, active, artifact, report),
+        (result): Notice =>
+          result.hash
+            ? toMessage(
+                result.hash,
+                `Relayer submitted your signed order${
+                  result.orderId !== undefined && result.orderId >= 0 ? ` #${result.orderId}` : ''
+                }.`,
+              )
+            : {
+                kind: 'success',
+                text:
+                  result.status === 'already_submitted'
+                    ? 'Your signed order was already submitted on-chain.'
+                    : 'Signed order validated by relayer (dry-run).',
+              },
+      ),
+    [config, runAction],
+  );
+
   const settle = useCallback(
     () =>
       runAction(
@@ -783,6 +810,7 @@ export function useFairBatch(): FairBatchController {
     revealCommit,
     signIntent,
     submitIntent,
+    relayIntent,
     settle,
     slash,
     claim,

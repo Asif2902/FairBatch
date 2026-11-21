@@ -243,6 +243,7 @@ function makeController(
       digest: `0x${'44'.repeat(32)}`,
     })),
     submitIntent: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    relayIntent: vi.fn(async () => ({ status: 'submitted', relayed: true, hash: '0x', orderId: 1 })),
     settle: vi.fn(async () => ({ hash: '0x', batchId: BATCH_ID })),
     slash: vi.fn(async () => ({ hash: '0x', forfeitedBond: 0n })),
     claim: vi.fn(async () => ({ hash: '0x', payoutBase: 0n, payoutQuote: 0n })),

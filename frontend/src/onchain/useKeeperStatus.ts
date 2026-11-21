@@ -4,6 +4,8 @@ export interface KeeperStatus {
   configured: boolean;
   healthy: boolean;
   graceSeconds: number;
+  relayerHealthy: boolean;
+  relayGraceSeconds: number;
   keeperUrl: string | null;
 }
 
@@ -24,12 +26,21 @@ export function useKeeperStatus(overrideUrl?: string | null): KeeperStatus {
     configured: Boolean(keeperUrl),
     healthy: false,
     graceSeconds: 5,
+    relayerHealthy: false,
+    relayGraceSeconds: 5,
     keeperUrl,
   });
 
   useEffect(() => {
     if (!keeperUrl) {
-      setStatus({ configured: false, healthy: false, graceSeconds: 5, keeperUrl: null });
+      setStatus({
+        configured: false,
+        healthy: false,
+        graceSeconds: 5,
+        relayerHealthy: false,
+        relayGraceSeconds: 5,
+        keeperUrl: null,
+      });
       return;
     }
 
@@ -46,14 +57,22 @@ export function useKeeperStatus(overrideUrl?: string | null): KeeperStatus {
           lowBalance?: boolean;
           dryRun?: boolean;
           graceSeconds?: number;
+          relayerEnabled?: boolean;
+          relayGraceSeconds?: number;
         };
         if (cancelled) return;
+        const healthy = data.status === 'ok' && !data.lowBalance && !data.dryRun;
         setStatus({
           configured: true,
-          healthy: data.status === 'ok' && !data.lowBalance && !data.dryRun,
+          healthy,
           graceSeconds:
             typeof data.graceSeconds === 'number' && data.graceSeconds >= 0
               ? data.graceSeconds
+              : 5,
+          relayerHealthy: healthy && Boolean(data.relayerEnabled),
+          relayGraceSeconds:
+            typeof data.relayGraceSeconds === 'number' && data.relayGraceSeconds >= 0
+              ? data.relayGraceSeconds
               : 5,
           keeperUrl,
         });
@@ -63,6 +82,8 @@ export function useKeeperStatus(overrideUrl?: string | null): KeeperStatus {
           configured: true,
           healthy: false,
           graceSeconds: 5,
+          relayerHealthy: false,
+          relayGraceSeconds: 5,
           keeperUrl,
         });
       }

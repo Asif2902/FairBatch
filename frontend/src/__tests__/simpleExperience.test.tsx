@@ -175,8 +175,27 @@ function makeCtrl(overrides: Partial<FairBatchController> = {}): FairBatchContro
     })),
     sealCommit: vi.fn(async () => ({ hash: '0x', receipt: {}, commitId: 0 })),
     revealCommit: vi.fn(async () => ({ hash: '0x', receipt: {}, orderId: 0 })),
-    signIntent: vi.fn(async () => ({})),
-    submitIntent: vi.fn(async () => ({ hash: '0x', receipt: {}, orderId: 0 })),
+    signIntent: vi.fn(async () => ({
+      trader: ALICE,
+      label: 'Signed',
+      side: 'SellBase' as const,
+      amount_in: 0.5,
+      limit_price: 2760,
+      amount_in_raw: '500000000000000000',
+      limit_price_raw: '2760000000000000000000',
+      batch_id: BATCH_ID,
+      nonce: 0,
+      deadline: Math.floor(Date.now() / 1000) + 3600,
+      signature: `0x${'ab'.repeat(65)}`,
+      digest: `0x${'cd'.repeat(32)}`,
+    })),
+    submitIntent: vi.fn(async () => ({ hash: `0x${'34'.repeat(32)}`, receipt: {}, orderId: 0 })),
+    relayIntent: vi.fn(async () => ({
+      status: 'submitted' as const,
+      relayed: true,
+      hash: `0x${'35'.repeat(32)}`,
+      orderId: 0,
+    })),
     settle: vi.fn(async () => ({ hash: `0x${'44'.repeat(32)}`, batchId: BATCH_ID })),
     slash: vi.fn(async () => ({ hash: '0x', forfeitedBond: 0n })),
     claim: vi.fn(async () => ({
@@ -518,5 +537,53 @@ describe('Simple mode end-to-end flows', () => {
       />,
     );
     expect(screen.getByTestId('simple-start-next-round')).toHaveTextContent(/Start next round/i);
+  });
+
+  it('supports optional intent relayer in Simple mode with gas disclosure and Submit it myself fallback', async () => {
+    const relayIntent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Relayer queue is full.'))
+      .mockResolvedValue({ status: 'submitted', relayed: true, hash: `0x${'35'.repeat(32)}`, orderId: 1 });
+    const submitIntent = vi.fn(async () => ({
+      hash: `0x${'34'.repeat(32)}`,
+      receipt: {},
+      orderId: 1,
+    }));
+    const ctrl = makeCtrl({
+      account: ALICE,
+      snapshot: buildSnapshot({ phase: 'Reveal', baseBal: 1n * 10n ** 18n }),
+      livePhase: 'Reveal',
+      relayIntent: relayIntent as unknown as FairBatchController['relayIntent'],
+      submitIntent: submitIntent as unknown as FairBatchController['submitIntent'],
+    });
+
+    render(
+      <SimpleExperience
+        controller={ctrl}
+        keeperHealthy={true}
+        keeperGraceSeconds={5}
+        relayerHealthy={true}
+        relayGraceSeconds={5}
+        keeperUrl="http://localhost:3002"
+        onOpenHowItWorks={() => undefined}
+      />,
+    );
+
+    // Reveal auto-selects signed flow and shows relayer info + clear gas disclosure
+    const relayerBox = screen.getByTestId('simple-relayer-info');
+    expect(relayerBox).toHaveTextContent(/no submission gas/i);
+    expect(relayerBox).toHaveTextContent(/one-time token approval/i);
+    expect(relayerBox).toHaveTextContent(/collecting payouts/i);
+    expect(screen.getByTestId('simple-swap-button')).toHaveTextContent(/Sign & relay swap/i);
+
+    // Trigger relay; first call rejects -> "Submit it myself" retry button appears without re-signing
+    fireEvent.click(screen.getByTestId('simple-swap-button'));
+    await waitFor(() => expect(relayIntent).toHaveBeenCalledTimes(1));
+    expect(ctrl.signIntent).toHaveBeenCalledTimes(1);
+    const retryBtn = await screen.findByTestId('simple-submit-signed-myself-retry');
+    expect(retryBtn).toHaveTextContent(/Submit it myself/i);
+
+    fireEvent.click(retryBtn);
+    await waitFor(() => expect(submitIntent).toHaveBeenCalledTimes(1));
   });
 });

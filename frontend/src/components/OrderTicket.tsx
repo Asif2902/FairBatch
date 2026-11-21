@@ -63,6 +63,9 @@ interface OrderTicketProps {
     limitPrice: string;
   }) => Promise<SignedIntentArtifact>;
   onSubmitIntent: (artifact: SignedIntentArtifact) => Promise<void>;
+  relayerHealthy?: boolean;
+  relayGraceSeconds?: number;
+  onRelayIntent?: (artifact: SignedIntentArtifact) => Promise<void>;
 }
 
 export const OrderTicket: React.FC<OrderTicketProps> = ({
@@ -80,6 +83,9 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   onRevealCommit,
   onSignIntent,
   onSubmitIntent,
+  relayerHealthy = false,
+  relayGraceSeconds = 5,
+  onRelayIntent,
 }) => {
   const [activeTab, setActiveTab] = useState<TicketTab>('direct');
   const [side, setSide] = useState<OrderSide>('SellBase');
@@ -321,6 +327,23 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     } catch (err) {
       setLocalError(
         err instanceof Error ? err.message : 'Intent submission failed',
+      );
+    }
+  };
+
+  const handleRelayIntent = async () => {
+    if (!signedArtifact || !onRelayIntent) return;
+    setLocalError(null);
+    setLocalFeedback(null);
+    try {
+      await onRelayIntent(signedArtifact);
+      setSignedArtifact(null);
+      setLocalFeedback('Optional relayer submitted your signed EIP-712 intent on-chain.');
+    } catch (err) {
+      setLocalError(
+        err instanceof Error
+          ? `${err.message} You can click "Submit it myself" to send directly.`
+          : 'Relayer submission failed. Click "Submit it myself" to send directly.',
       );
     }
   };
@@ -877,19 +900,50 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               >
                 1. Sign EIP-712 Intent
               </button>
-              <button
-                type="button"
-                disabled={!signedArtifact || !intentOpen || busyAction !== null}
-                onClick={handleSubmitIntent}
-                className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                2. Submit Signed Intent
-              </button>
+              {relayerHealthy && onRelayIntent ? (
+                <button
+                  type="button"
+                  data-testid="pro-relay-intent-button"
+                  disabled={!signedArtifact || !intentOpen || busyAction !== null}
+                  onClick={handleRelayIntent}
+                  className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  2. Relay Intent (no submission gas)
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!signedArtifact || !intentOpen || busyAction !== null}
+                  onClick={handleSubmitIntent}
+                  className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  2. Submit Signed Intent
+                </button>
+              )}
             </div>
 
-            <p className="font-mono text-[8.5px] leading-relaxed text-ink-faint">
+            {relayerHealthy && onRelayIntent && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border border-cobalt-500/30 bg-paper-soft px-2.5 py-2">
+                <span className="font-mono text-[10px] text-ink-soft">
+                  Optional relayer waits ~{relayGraceSeconds}s so others can submit first. Cannot alter your signed order.
+                </span>
+                <button
+                  type="button"
+                  data-testid="pro-submit-intent-myself"
+                  disabled={!signedArtifact || !intentOpen || busyAction !== null}
+                  onClick={handleSubmitIntent}
+                  className="shrink-0 border border-rule-strong bg-paper-bright px-2.5 py-1 font-mono text-[10px] font-bold text-ink transition hover:border-ink disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Submit it myself
+                </button>
+              </div>
+            )}
+
+            <p className="font-mono text-[9.5px] leading-relaxed text-ink-muted">
               {intentOpen
-                ? 'Signed intents are accepted through the reveal deadline. The contract verifies the signer, batch id, nonce and deadline.'
+                ? relayerHealthy
+                  ? 'Signing is free and the optional relayer pays submission gas. You still pay Sepolia ETH gas for your one-time token approval, collecting payouts (claim), or if you click "Submit it myself".'
+                  : 'Signed intents are accepted through the reveal deadline. You pay Sepolia ETH gas for one-time token approval, submission, and collecting payouts.'
                 : 'The intent window is closed for this batch. Wait for the next batch after settlement.'}
             </p>
           </div>

@@ -351,6 +351,9 @@ export const App: React.FC = () => {
                 controller={fb}
                 keeperHealthy={keeperStatus.healthy}
                 keeperGraceSeconds={keeperStatus.graceSeconds}
+                relayerHealthy={keeperStatus.relayerHealthy}
+                relayGraceSeconds={keeperStatus.relayGraceSeconds}
+                keeperUrl={keeperStatus.keeperUrl}
                 onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
               />
             )}
@@ -590,6 +593,15 @@ export const App: React.FC = () => {
                         onSubmitIntent={async (artifact) => {
                           await fb.submitIntent(artifact);
                         }}
+                        relayerHealthy={keeperStatus.relayerHealthy}
+                        relayGraceSeconds={keeperStatus.relayGraceSeconds}
+                        onRelayIntent={
+                          keeperStatus.keeperUrl
+                            ? async (artifact) => {
+                                await fb.relayIntent(keeperStatus.keeperUrl!, artifact);
+                              }
+                            : undefined
+                        }
                       />
                     </div>
 

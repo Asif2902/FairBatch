@@ -37,6 +37,9 @@ interface SimpleExperienceProps {
   controller: FairBatchController;
   keeperHealthy?: boolean;
   keeperGraceSeconds?: number;
+  relayerHealthy?: boolean;
+  relayGraceSeconds?: number;
+  keeperUrl?: string | null;
   onOpenHowItWorks: () => void;
 }
 
@@ -58,6 +61,9 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
   controller: fb,
   keeperHealthy = false,
   keeperGraceSeconds = 5,
+  relayerHealthy = false,
+  relayGraceSeconds = 5,
+  keeperUrl = null,
   onOpenHowItWorks,
 }) => {
   const [activeTab, setActiveTab] = useState<SimpleTab>('swap');
@@ -602,6 +608,8 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                 txStatus={fb.txStatus}
                 keeperHealthy={keeperHealthy}
                 keeperGraceSeconds={keeperGraceSeconds}
+                relayerHealthy={relayerHealthy}
+                relayGraceSeconds={relayGraceSeconds}
                 onConnect={fb.connect}
                 onSwitchNetwork={fb.switchNetwork}
                 onClaimFaucet={async () => {
@@ -610,6 +618,21 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                 onSubmitDirect={handleSubmitDirect}
                 onSettleAndSubmitDirect={handleSettleAndSubmitDirect}
                 onSignAndSubmitIntent={handleSignAndSubmitIntent}
+                onSignIntent={fb.signIntent}
+                onSubmitIntent={async (artifact) => {
+                  setLastCollected(null);
+                  await fb.submitIntent(artifact);
+                  setForceShowSwapForm(false);
+                }}
+                onRelayIntent={
+                  keeperUrl
+                    ? async (artifact) => {
+                        setLastCollected(null);
+                        await fb.relayIntent(keeperUrl, artifact);
+                        setForceShowSwapForm(false);
+                      }
+                    : undefined
+                }
                 onSealCommit={handleSealCommit}
                 onRevealCommit={handleRevealCommit}
                 onStartNextRound={handleStartNextRound}

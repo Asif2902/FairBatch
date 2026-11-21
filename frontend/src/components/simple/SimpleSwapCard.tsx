@@ -17,6 +17,7 @@ import type {
   BatchPhase,
   LocalSecretVaultEntry,
   OrderSide,
+  SignedIntentArtifact,
   StateResponse,
 } from '../../types';
 import type {
@@ -51,6 +52,8 @@ interface SimpleSwapCardProps {
   txStatus: string | null;
   keeperHealthy?: boolean;
   keeperGraceSeconds?: number;
+  relayerHealthy?: boolean;
+  relayGraceSeconds?: number;
   onConnect: () => Promise<void>;
   onSwitchNetwork: () => Promise<void>;
   onClaimFaucet: () => Promise<void>;
@@ -69,6 +72,13 @@ interface SimpleSwapCardProps {
     amountIn: string;
     limitPrice: string;
   }) => Promise<void>;
+  onSignIntent?: (params: {
+    side: OrderSide;
+    amountIn: string;
+    limitPrice: string;
+  }) => Promise<SignedIntentArtifact>;
+  onSubmitIntent?: (artifact: SignedIntentArtifact) => Promise<void>;
+  onRelayIntent?: (artifact: SignedIntentArtifact) => Promise<void>;
   onSealCommit: (params: {
     side: OrderSide;
     amountIn: string;
@@ -119,12 +129,17 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
   txStatus,
   keeperHealthy = false,
   keeperGraceSeconds = 5,
+  relayerHealthy = false,
+  relayGraceSeconds = 5,
   onConnect,
   onSwitchNetwork,
   onClaimFaucet,
   onSubmitDirect,
   onSettleAndSubmitDirect,
   onSignAndSubmitIntent,
+  onSignIntent,
+  onSubmitIntent,
+  onRelayIntent,
   onSealCommit,
   onRevealCommit,
   onStartNextRound,
@@ -139,6 +154,9 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [pendingSignedArtifact, setPendingSignedArtifact] =
+    useState<SignedIntentArtifact | null>(null);
+  const [preferSelfSubmit, setPreferSelfSubmit] = useState(false);
 
   const busy = busyAction !== null;
   const spot = state.reserves.spot_price || 3000;
@@ -307,7 +325,15 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
         if (livePhase === 'Ready') {
           await onStartNextRound();
         }
+        if (relayerHealthy && !preferSelfSubmit && onSignIntent && onRelayIntent) {
+          const artifact = await onSignIntent(params);
+          setPendingSignedArtifact(artifact);
+          await onRelayIntent(artifact);
+          setPendingSignedArtifact(null);
+          return;
+        }
         await onSignAndSubmitIntent(params);
+        setPendingSignedArtifact(null);
         return;
       }
 
@@ -343,7 +369,9 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
         : 'Place private swap';
     }
     if (orderMode === 'signed' || autoSignedInFinalizing) {
-      return 'Swap now (sign & send)';
+      return relayerHealthy && !preferSelfSubmit
+        ? 'Sign & relay swap (no submission gas)'
+        : 'Swap now (sign & send)';
     }
     if (livePhase === 'Ready') {
       return 'Start next round & Swap';
@@ -802,10 +830,62 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
         {localError && (
           <div
             role="alert"
-            className="flex items-start gap-2 border-l-2 border-vermilion-600 bg-vermilion-50 px-3.5 py-2.5 text-sm text-vermilion-800"
+            className="space-y-2 border-l-2 border-vermilion-600 bg-vermilion-50 px-3.5 py-2.5 text-sm text-vermilion-800"
           >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>{localError}</span>
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{localError}</span>
+            </div>
+            {pendingSignedArtifact && onSubmitIntent && (
+              <button
+                type="button"
+                data-testid="simple-submit-signed-myself-retry"
+                disabled={busy}
+                onClick={async () => {
+                  setLocalError(null);
+                  try {
+                    await onSubmitIntent(pendingSignedArtifact);
+                    setPendingSignedArtifact(null);
+                  } catch (err) {
+                    setLocalError(
+                      err instanceof Error ? err.message : 'Direct submission failed.',
+                    );
+                  }
+                }}
+                className="border border-ink bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-ink transition hover:bg-paper-soft disabled:opacity-40"
+              >
+                Submit it myself
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Signed order relayer info + self-submit fallback */}
+        {(orderMode === 'signed' || autoSignedInFinalizing) && relayerHealthy && (
+          <div
+            data-testid="simple-relayer-info"
+            className="space-y-2 border border-cobalt-500/40 bg-cobalt-50/70 px-3.5 py-2.5 text-xs text-cobalt-900"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-bold">
+                {preferSelfSubmit
+                  ? 'Self-submit selected — your wallet will submit the signed order.'
+                  : `Optional relayer active (~${relayGraceSeconds}s grace) — no submission gas.`}
+              </span>
+              <button
+                type="button"
+                data-testid="simple-toggle-submit-myself"
+                onClick={() => setPreferSelfSubmit((v) => !v)}
+                className="shrink-0 border border-cobalt-600/50 bg-paper-bright px-2.5 py-1 font-mono text-[11px] font-bold text-cobalt-800 transition hover:border-ink"
+              >
+                {preferSelfSubmit ? 'Use optional relayer' : 'Submit it myself'}
+              </button>
+            </div>
+            <p className="leading-relaxed text-ink-soft">
+              You still pay Sepolia ETH gas for your one-time token approval, collecting payouts, or
+              if you choose &ldquo;Submit it myself&rdquo;. The relayer cannot alter your signed
+              order.
+            </p>
           </div>
         )}
 

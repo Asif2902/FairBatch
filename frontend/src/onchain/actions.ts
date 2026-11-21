@@ -50,6 +50,13 @@ export interface IntentResult extends SignedIntentArtifact {
   digest: `0x${string}`;
 }
 
+export interface RelayIntentResult {
+  status: 'submitted' | 'already_submitted' | 'dry_run';
+  relayed: boolean;
+  hash?: Hash;
+  orderId?: number;
+}
+
 export interface LiquidityResult extends TxResult {
   sharesMinted?: bigint;
   amountBase?: bigint;
@@ -641,6 +648,75 @@ export async function submitSignedIntent(
   const events = decodeEvents(receipt, 'OrderSubmitted');
   const orderId = events[0] ? Number(eventBig(events[0], 'orderId')) : -1;
   return { hash, receipt, orderId };
+}
+
+/**
+ * Sends a signed EIP-712 order to the optional relayer (`POST /relay/intent`)
+ * after ensuring the user's one-time ERC-20 token approval is in place.
+ */
+export async function relaySignedIntent(
+  config: RuntimeConfig,
+  keeperUrl: string,
+  account: Address,
+  artifact: SignedIntentArtifact,
+  onStatus?: StatusReporter,
+): Promise<RelayIntentResult> {
+  if (getAddress(artifact.trader) !== getAddress(account)) {
+    throw new Error('The connected wallet must be the signed order owner.');
+  }
+  const amountRaw = BigInt(artifact.amount_in_raw);
+  const symbol = inputSymbol(config, artifact.side);
+  const approved = await ensureInputAllowance(config, account, artifact.side, amountRaw, onStatus);
+
+  onStatus?.(
+    approved
+      ? `Approved ${symbol} → Sending signed order to optional relayer…`
+      : 'Sending signed order to optional relayer (~5s grace)…',
+  );
+
+  const response = await fetch(`${keeperUrl.replace(/\/+$/, '')}/relay/intent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      order: {
+        trader: getAddress(artifact.trader),
+        side: sideU8(artifact.side),
+        amountIn: artifact.amount_in_raw,
+        limitPrice: artifact.limit_price_raw,
+        batchId: String(artifact.batch_id),
+        nonce: String(artifact.nonce),
+        deadline: String(artifact.deadline),
+      },
+      signature: artifact.signature,
+    }),
+  });
+
+  let data: {
+    status?: 'submitted' | 'already_submitted' | 'dry_run';
+    relayed?: boolean;
+    txHash?: Hash;
+    orderId?: number;
+    error?: string;
+  } = {};
+  try {
+    data = (await response.json()) as typeof data;
+  } catch {
+    // non-JSON response
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      data.error ??
+        `Relayer rejected the signed order (HTTP ${response.status}). Click "Submit it myself" to send directly.`,
+    );
+  }
+
+  return {
+    status: data.status ?? 'submitted',
+    relayed: Boolean(data.relayed),
+    hash: data.txHash,
+    orderId: data.orderId,
+  };
 }
 
 /**
