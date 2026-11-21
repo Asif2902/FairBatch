@@ -157,9 +157,9 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 h-12 border-b border-ink bg-paper-bright sm:h-14">
-      <div className="mx-auto flex h-full max-w-[1560px] items-center justify-between gap-2 px-3 sm:px-4 lg:px-8">
+      <div className="mx-auto flex h-full max-w-[1560px] items-center justify-between gap-1 px-2 sm:gap-2 sm:px-4 lg:px-8">
         {/* Left: brand + Simple | Pro toggle */}
-        <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-1 sm:gap-3">
           <div className="flex shrink-0 items-center gap-2">
             <span className="flex h-7 w-7 items-center justify-center border border-ink bg-ink text-paper sm:h-8 sm:w-8">
               <ShieldCheck className="h-4 w-4" aria-hidden="true" />
@@ -179,7 +179,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
               data-testid="mode-simple-button"
               aria-pressed={mode === 'simple'}
               onClick={() => onModeChange('simple')}
-              className={`min-h-[30px] px-2 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
+              className={`min-h-[30px] px-1.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
                 mode === 'simple'
                   ? 'bg-ink text-paper'
                   : 'text-ink-muted hover:text-ink'
@@ -192,7 +192,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
               data-testid="mode-pro-button"
               aria-pressed={mode === 'pro'}
               onClick={() => onModeChange('pro')}
-              className={`min-h-[30px] px-2 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
+              className={`min-h-[30px] px-1.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
                 mode === 'pro'
                   ? 'bg-ink text-paper'
                   : 'text-ink-muted hover:text-ink'
@@ -219,16 +219,16 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
         </div>
 
         {/* Right: compact mobile round pill + single wallet button + overflow menu */}
-        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           {roundNumber !== null && (
             <span
-              className={`inline-flex items-center gap-1 border px-1.5 py-1 font-mono text-xs font-bold tabular-nums md:hidden ${statusPillClass}`}
+              className={`inline-flex items-center gap-1 border px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums md:hidden ${statusPillClass}`}
               title={`${mode === 'simple' ? 'Round' : 'Batch'} ${roundNumber} · ${phaseText}`}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass}`} />
               <span>
                 #{roundNumber}
-                {showTimer ? ` ${formatShortClock(remaining)}` : ''}
+                {showTimer ? `·${formatShortClock(remaining)}` : ''}
               </span>
             </span>
           )}
@@ -241,7 +241,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                 data-testid="header-wallet-button"
                 disabled={busyAction !== null}
                 onClick={() => void onConnect()}
-                className="inline-flex min-h-[36px] items-center gap-1.5 border border-ink bg-ink px-2.5 font-sans text-xs font-bold text-paper transition hover:bg-ink-soft disabled:opacity-50 sm:min-h-[38px] sm:px-3.5"
+                className="inline-flex min-h-[34px] items-center gap-1 border border-ink bg-ink px-2 font-sans text-xs font-bold text-paper transition hover:bg-ink-soft disabled:opacity-50 sm:min-h-[38px] sm:gap-1.5 sm:px-3.5"
               >
                 <Wallet className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>{busyAction === 'connect' ? 'Connecting…' : 'Connect'}</span>
@@ -256,7 +256,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                   setMoreMenuOpen(false);
                   setWalletMenuOpen((v) => !v);
                 }}
-                className={`inline-flex min-h-[36px] items-center gap-1.5 border px-2.5 font-mono text-xs font-bold transition sm:min-h-[38px] sm:px-3 ${
+                className={`inline-flex min-h-[34px] items-center gap-1 border px-2 font-mono text-xs font-bold transition sm:min-h-[38px] sm:gap-1.5 sm:px-3 ${
                   wrongNetwork
                     ? 'border-vermilion-600 bg-vermilion-50 text-vermilion-800'
                     : 'border-rule-strong bg-paper-soft text-ink hover:border-ink'
@@ -268,12 +268,12 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                   <span className="h-2 w-2 rounded-full bg-pine-500" />
                 )}
                 <span className="sm:hidden">
-                  {wrongNetwork ? 'Network' : `${account.slice(0, 4)}…${account.slice(-3)}`}
+                  {wrongNetwork ? 'Net' : `${account.slice(0, 4)}…${account.slice(-2)}`}
                 </span>
                 <span className="hidden sm:inline">
                   {wrongNetwork ? 'Wrong network' : shortenAddress(account)}
                 </span>
-                <ChevronDown className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
+                <ChevronDown className="hidden h-3.5 w-3.5 text-ink-muted sm:inline" aria-hidden="true" />
               </button>
             )}
 
@@ -383,7 +383,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                 setWalletMenuOpen(false);
                 setMoreMenuOpen((v) => !v);
               }}
-              className="inline-flex h-9 w-9 items-center justify-center border border-rule-strong bg-paper-soft text-ink transition hover:border-ink sm:h-[38px] sm:w-[38px]"
+              className="inline-flex h-8 w-8 items-center justify-center border border-rule-strong bg-paper-soft text-ink transition hover:border-ink sm:h-[38px] sm:w-[38px]"
             >
               <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
             </button>
