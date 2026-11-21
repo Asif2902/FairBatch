@@ -13,6 +13,7 @@ import { formatUnits } from 'viem';
 import type { ClaimableDto, LocalSecretVaultEntry } from './types';
 import { explorerTxUrl } from './onchain/config';
 import { useFairBatch } from './onchain/useFairBatch';
+import { useKeeperStatus } from './onchain/useKeeperStatus';
 import { TopCommandBar, type UiMode } from './components/TopCommandBar';
 import { SimpleExperience } from './components/SimpleExperience';
 import { ProStatsRow } from './components/ProStatsRow';
@@ -74,6 +75,7 @@ function human(raw: bigint | undefined, decimals: number): number {
 
 export const App: React.FC = () => {
   const fb = useFairBatch();
+  const keeperStatus = useKeeperStatus();
   const [mode, setMode] = useState<UiMode>(() => readInitialMode('simple'));
   const [proSection, setProSection] = useState<ProSectionTab>('all');
   const [selectedViewBatchId, setSelectedViewBatchId] = useState<number | 'live'>('live');
@@ -347,6 +349,8 @@ export const App: React.FC = () => {
             {snapshot && state && displayedSettlement && mode === 'simple' && (
               <SimpleExperience
                 controller={fb}
+                keeperHealthy={keeperStatus.healthy}
+                keeperGraceSeconds={keeperStatus.graceSeconds}
                 onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
               />
             )}

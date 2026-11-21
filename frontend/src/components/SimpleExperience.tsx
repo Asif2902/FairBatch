@@ -35,6 +35,8 @@ type SimpleTab = 'swap' | 'earn';
 
 interface SimpleExperienceProps {
   controller: FairBatchController;
+  keeperHealthy?: boolean;
+  keeperGraceSeconds?: number;
   onOpenHowItWorks: () => void;
 }
 
@@ -54,6 +56,8 @@ function human(raw: bigint | undefined, decimals: number): number {
 
 export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
   controller: fb,
+  keeperHealthy = false,
+  keeperGraceSeconds = 5,
   onOpenHowItWorks,
 }) => {
   const [activeTab, setActiveTab] = useState<SimpleTab>('swap');
@@ -567,6 +571,8 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                 localSecrets={fb.secretVault}
                 busyAction={fb.busyAction}
                 txStatus={fb.txStatus}
+                keeperHealthy={keeperHealthy}
+                keeperGraceSeconds={keeperGraceSeconds}
                 onRevealCommit={handleRevealCommit}
                 onSettleRound={handleStartNextRound}
                 onPlaceAnother={() => setForceShowSwapForm(true)}
@@ -594,6 +600,8 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                 localSecrets={fb.secretVault}
                 busyAction={fb.busyAction}
                 txStatus={fb.txStatus}
+                keeperHealthy={keeperHealthy}
+                keeperGraceSeconds={keeperGraceSeconds}
                 onConnect={fb.connect}
                 onSwitchNetwork={fb.switchNetwork}
                 onClaimFaucet={async () => {

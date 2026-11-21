@@ -24,6 +24,8 @@ interface SimpleWaitingCardProps {
   localSecrets: LocalSecretVaultEntry[];
   busyAction: string | null;
   txStatus: string | null;
+  keeperHealthy?: boolean;
+  keeperGraceSeconds?: number;
   onRevealCommit: (secret: LocalSecretVaultEntry) => Promise<void>;
   onSettleRound: () => Promise<void>;
   onPlaceAnother: () => void;
@@ -46,6 +48,8 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
   localSecrets,
   busyAction,
   txStatus,
+  keeperHealthy = false,
+  keeperGraceSeconds = 5,
   onRevealCommit,
   onSettleRound,
   onPlaceAnother,
@@ -236,25 +240,46 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
 
         {/* Primary CTA when round is finished (Ready) */}
         {livePhase === 'Ready' && (
-          <button
-            type="button"
-            data-testid="simple-finalize-round"
-            disabled={busy}
-            onClick={() => void onSettleRound()}
-            className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busyAction === 'settle' ? (
-              <>
-                <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-                <span>{txStatus ?? 'Finishing round…'}</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-5 w-5" aria-hidden="true" />
-                <span>Finish Round #{roundId} &amp; unlock tokens</span>
-              </>
-            )}
-          </button>
+          keeperHealthy ? (
+            <div
+              data-testid="simple-keeper-auto-settling"
+              className="flex flex-wrap items-center justify-between gap-3 border border-cobalt-600/60 bg-cobalt-50 px-4 py-3.5 text-sm text-cobalt-900"
+            >
+              <span className="flex items-center gap-2 font-medium">
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cobalt-700" aria-hidden="true" />
+                <span>Round closes, settling automatically in about {keeperGraceSeconds}s.</span>
+              </span>
+              <button
+                type="button"
+                data-testid="simple-finalize-round"
+                disabled={busy}
+                onClick={() => void onSettleRound()}
+                className="shrink-0 border border-cobalt-700 bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-cobalt-800 transition hover:border-ink disabled:opacity-50"
+              >
+                {busyAction === 'settle' ? 'Finishing…' : 'Settle manually'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              data-testid="simple-finalize-round"
+              disabled={busy}
+              onClick={() => void onSettleRound()}
+              className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busyAction === 'settle' ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                  <span>{txStatus ?? 'Finishing round…'}</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-5 w-5" aria-hidden="true" />
+                  <span>Finish Round #{roundId} &amp; unlock tokens</span>
+                </>
+              )}
+            </button>
+          )
         )}
 
         {txStatus && busy && livePhase !== 'Ready' && (

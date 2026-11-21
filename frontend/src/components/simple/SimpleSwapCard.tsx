@@ -49,6 +49,8 @@ interface SimpleSwapCardProps {
   localSecrets: LocalSecretVaultEntry[];
   busyAction: string | null;
   txStatus: string | null;
+  keeperHealthy?: boolean;
+  keeperGraceSeconds?: number;
   onConnect: () => Promise<void>;
   onSwitchNetwork: () => Promise<void>;
   onClaimFaucet: () => Promise<void>;
@@ -115,6 +117,8 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
   localSecrets,
   busyAction,
   txStatus,
+  keeperHealthy = false,
+  keeperGraceSeconds = 5,
   onConnect,
   onSwitchNetwork,
   onClaimFaucet,
@@ -357,27 +361,49 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
       {livePhase === 'Ready' && (
         <div
           data-testid="simple-ready-banner"
-          className="flex flex-col gap-2.5 border-b-2 border-vermilion-500 bg-vermilion-50 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+          className={`flex flex-col gap-2.5 border-b-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5 ${
+            keeperHealthy
+              ? 'border-cobalt-600 bg-cobalt-50'
+              : 'border-vermilion-500 bg-vermilion-50'
+          }`}
         >
           <div className="min-w-0 flex-1">
-            <div className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold uppercase tracking-label text-vermilion-800">
+            <div
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold uppercase tracking-label ${
+                keeperHealthy ? 'text-cobalt-800' : 'text-vermilion-800'
+              }`}
+            >
               <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>Round #{state.batch_id} finished</span>
             </div>
             <p className="mt-1 text-sm leading-snug text-ink">
-              {SIMPLE_COPY.readyBanner}
+              {keeperHealthy
+                ? `Round closes, settling automatically in about ${keeperGraceSeconds}s.`
+                : SIMPLE_COPY.readyBanner}
             </p>
           </div>
           {account && !wrongNetwork && (
-            <button
-              type="button"
-              data-testid="simple-start-next-round"
-              disabled={busy}
-              onClick={() => void onStartNextRound()}
-              className="tap-target w-full shrink-0 whitespace-nowrap bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50 sm:w-auto"
-            >
-              {busyAction === 'settle' ? 'Starting…' : SIMPLE_COPY.readyButton}
-            </button>
+            keeperHealthy ? (
+              <button
+                type="button"
+                data-testid="simple-manual-settle-fallback"
+                disabled={busy}
+                onClick={() => void onStartNextRound()}
+                className="shrink-0 whitespace-nowrap border border-cobalt-600/50 bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-cobalt-800 transition hover:border-ink disabled:opacity-50"
+              >
+                {busyAction === 'settle' ? 'Starting…' : 'Settle now'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="simple-start-next-round"
+                disabled={busy}
+                onClick={() => void onStartNextRound()}
+                className="tap-target w-full shrink-0 whitespace-nowrap bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50 sm:w-auto"
+              >
+                {busyAction === 'settle' ? 'Starting…' : SIMPLE_COPY.readyButton}
+              </button>
+            )
           )}
         </div>
       )}

@@ -6,6 +6,7 @@ import type { OnchainSnapshot } from '../onchain/state';
 import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
 import { computeBatchSettlement } from '../lib/clearingMath';
 import App from '../App';
+import { SimpleExperience } from '../components/SimpleExperience';
 
 const ALICE = '0x9AFe5CeF11fC10756faef213f7A30D9873B5d372';
 const BATCH_ID = 10;
@@ -486,5 +487,36 @@ describe('Simple mode end-to-end flows', () => {
     // Back to exchange
     fireEvent.click(screen.getByTestId('docs-back-button'));
     expect(screen.getByTestId('simple-swap-card')).toBeInTheDocument();
+  });
+
+  it('shows auto-settling keeper message when keeper is healthy and falls back to Start next round when offline', () => {
+    const readyCtrl = makeCtrl({
+      account: ALICE,
+      livePhase: 'Ready',
+      snapshot: buildSnapshot({ phase: 'Ready' }),
+    });
+
+    const { rerender } = render(
+      <SimpleExperience
+        controller={readyCtrl}
+        keeperHealthy={true}
+        keeperGraceSeconds={5}
+        onOpenHowItWorks={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId('simple-ready-banner')).toHaveTextContent(
+      /Round closes, settling automatically in about 5s/i,
+    );
+    expect(screen.queryByTestId('simple-start-next-round')).not.toBeInTheDocument();
+
+    rerender(
+      <SimpleExperience
+        controller={readyCtrl}
+        keeperHealthy={false}
+        keeperGraceSeconds={5}
+        onOpenHowItWorks={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId('simple-start-next-round')).toHaveTextContent(/Start next round/i);
   });
 });
