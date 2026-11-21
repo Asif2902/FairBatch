@@ -104,6 +104,19 @@ export const SIMPLE_COPY = {
     'Built natively in Fe 26.5.0 — clearing::solve_batch, core::fixed::Wad, EIP-1153 Mutex, std::evm::eip712',
 } as const;
 
+export const PUBLIC_SEPOLIA_FAUCETS = [
+  {
+    name: 'Google Cloud Sepolia Faucet',
+    url: 'https://cloud.google.com/application/web3/faucet/ethereum/sepolia',
+  },
+  {
+    name: 'PoW Sepolia Faucet',
+    url: 'https://sepolia-faucet.pk910.de/',
+  },
+] as const;
+
+export const LOW_GAS_THRESHOLD_WEI = 2_000_000_000_000_000n; // 0.002 Sepolia ETH
+
 export const PRO_TOOLTIPS: Record<string, string> = {
   rx: 'Pool reserve of the base token (fWETH) available to absorb net order imbalance.',
   ry: 'Pool reserve of the quote token (fUSDC) available to absorb net order imbalance.',
@@ -114,10 +127,11 @@ export const PRO_TOOLTIPS: Record<string, string> = {
   fmAmm: 'Function-Maximizing AMM: clears the entire batch at its post-trade marginal price so arbitrageurs cannot extract LVR.',
   proRata: 'When orders sit exactly at the clearing price p*, available volume is split proportionally by order size and the rest is refunded.',
   pullOverPush: 'Settlement records claimable receipts instead of pushing transfers in a loop, so one blocked address can never stall a batch.',
-  revealBond: 'Refundable Sepolia ETH deposit locked with a sealed commitment; returned on reveal, or paid as a bounty to whoever slashes an expired unrevealed commit.',
+  revealBond: 'Refundable Sepolia ETH deposit (minimum 0.0001 ETH) locked with a sealed commitment; returned on reveal, or paid as a bounty to whoever slashes an expired unrevealed commit.',
   eip712: 'Typed structured data signing (domain-bound to FairBatch on Sepolia) verified on-chain with nonces and deadlines.',
   lnd: 'Liquidity-Nondecreasing invariant: R_x′·R_y′ ≥ R_x·R_y on every batch settlement.',
   multicall: 'Executes multiple FairBatch calls (such as claiming several receipts or settling + submitting) atomically in one transaction.',
+  simulatedSaving: 'Client-side comparison against a simulated 0.30% fee sequential constant-product (x·y=k) AMM executing the same orders one-by-one in arrival order.',
 };
 
 export interface VerifiedFeFeature {

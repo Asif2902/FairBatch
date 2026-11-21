@@ -424,9 +424,9 @@ export async function commitOrder(
   }
   const client = getPublicClient(config);
   const ethBalance = await client.getBalance({ address: account });
-  if (ethBalance < bondWei) {
+  if (ethBalance <= bondWei) {
     throw new Error(
-      `Insufficient Sepolia ETH for the deposit. Need ${Number(bondWei) / 1e18} ETH plus gas.`,
+      `You need a little Sepolia ETH for gas plus the ${Number(bondWei) / 1e18} ETH refundable deposit for sealed orders (minimum 0.0001 ETH).`,
     );
   }
 
@@ -932,9 +932,10 @@ export function describeTxError(error: unknown, context?: ErrorMappingContext): 
       ['Reveal window still active', 'This round is still finalizing — wait a few seconds for the countdown to finish.'],
       ['Insufficient allowance', 'Token approval is too low. Approve the token and try again.'],
       ['Insufficient balance', 'Wallet balance is too low for this amount.'],
-      ['Insufficient reveal bond', 'The refundable deposit is below the contract minimum.'],
-      ['Insufficient Sepolia ETH', 'You need a little Sepolia ETH for gas (and any sealed deposit).'],
-      ['insufficient funds for gas', 'Not enough Sepolia ETH to cover transaction gas.'],
+      ['Insufficient reveal bond', 'The refundable deposit is below the contract minimum (0.0001 ETH).'],
+      ['Insufficient Sepolia ETH', 'You need a little Sepolia ETH for gas (plus the 0.0001 ETH refundable deposit for sealed orders).'],
+      ['insufficient funds for gas', 'You need a little Sepolia ETH for gas (plus the 0.0001 ETH refundable deposit for sealed orders).'],
+      ['exceeds the balance of the account', 'You need a little Sepolia ETH for gas (plus the 0.0001 ETH refundable deposit for sealed orders).'],
       ['Commitment hash mismatch', 'The reveal details do not match your sealed order.'],
       ['Already revealed', 'This sealed order has already been revealed.'],
       ['Not commitment owner', 'Only the wallet that placed this sealed order can reveal it.'],

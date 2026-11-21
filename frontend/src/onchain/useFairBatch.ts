@@ -327,6 +327,15 @@ export function useFairBatch(): FairBatchController {
     return () => window.clearInterval(id);
   }, [onChainPhaseMatchesLive, refresh]);
 
+  // Auto-dismiss success/info banners after ~8s; error banners stay until dismissed.
+  useEffect(() => {
+    if (!notice || notice.kind === 'error') return;
+    const timer = window.setTimeout(() => {
+      setNotice((current) => (current === notice ? null : current));
+    }, 8_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const requireAccount = useCallback((): Address => {
     const active = accountRef.current;
     if (!active) {
@@ -348,6 +357,12 @@ export function useFairBatch(): FairBatchController {
       setNotice(null);
       const report = (msg: string) => setTxStatus(msg);
       try {
+        const snap = snapshotRef.current;
+        if (name !== 'sign-intent' && snap && snap.balances.eth === 0n) {
+          throw new Error(
+            'You need a little Sepolia ETH for gas (plus 0.0001 ETH refundable deposit for sealed orders). Grab free Sepolia ETH from a public faucet and try again.',
+          );
+        }
         const result = await fn(active, report);
         setNotice(successText(result));
         refresh();
@@ -726,9 +741,9 @@ export function useFairBatch(): FairBatchController {
         (result) =>
           result
             ? toMessage(
-                result,
-                `Approved ${token === 'base' ? config.baseSymbol : config.quoteSymbol}.`,
-              )
+              result,
+              `Approved ${token === 'base' ? config.baseSymbol : config.quoteSymbol}.`,
+            )
             : { kind: 'info', text: 'Already approved.' },
       ),
     [config, runAction],

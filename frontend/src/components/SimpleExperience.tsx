@@ -14,7 +14,12 @@ import type { ClaimableDto, LocalSecretVaultEntry, OrderSide } from '../types';
 import type { FairBatchController } from '../onchain/useFairBatch';
 import { detectSimpleStep } from '../onchain/useFairBatch';
 import { formatDuration, formatPrice, formatToken } from '../lib/format';
-import { FIRST_VISIT_INTRO, SIMPLE_COPY } from '../lib/glossary';
+import {
+  FIRST_VISIT_INTRO,
+  LOW_GAS_THRESHOLD_WEI,
+  PUBLIC_SEPOLIA_FAUCETS,
+  SIMPLE_COPY,
+} from '../lib/glossary';
 import { ProgressStrip } from './simple/ProgressStrip';
 import { SimpleSwapCard } from './simple/SimpleSwapCard';
 import { SimpleWaitingCard } from './simple/SimpleWaitingCard';
@@ -53,8 +58,16 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SimpleTab>('swap');
   const [introDismissed, setIntroDismissed] = useState<boolean>(() => readIntroDismissed());
+  const [mobileIntroExpanded, setMobileIntroExpanded] = useState<boolean>(false);
   const [forceShowSwapForm, setForceShowSwapForm] = useState<boolean>(false);
   const [lastCollected, setLastCollected] = useState<CollectedReceiptSummary | null>(null);
+
+  const handleTabChange = (nextTab: SimpleTab) => {
+    setActiveTab(nextTab);
+    if (fb.notice && fb.notice.kind !== 'error') {
+      fb.clearNotice();
+    }
+  };
 
   const snapshot = fb.snapshot;
   const state = snapshot?.state ?? null;
@@ -184,29 +197,91 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
     cooldownRemaining === 0 &&
     (faucet ? faucet.canClaim || nextClaimSecs <= fb.chainNow : true);
 
+  const lowGas = Boolean(
+    account &&
+      !fb.wrongNetwork &&
+      snapshot &&
+      snapshot.balances.eth < LOW_GAS_THRESHOLD_WEI,
+  );
+  const ethHuman = human(snapshot?.balances.eth, 18);
+
   return (
     <div className="mx-auto w-full max-w-xl space-y-4">
-      {/* Dismissible first-visit intro (max 3 lines) */}
+      {/* Dismissible first-visit intro: collapsed 1-line strip at <=480px so swap card stays above fold */}
       {!introDismissed && (
         <section
           aria-label="Welcome to FairBatch"
           data-testid="simple-intro-banner"
-          className="relative border border-ink bg-paper-bright px-4 py-3.5 pr-12 shadow-slip"
+          className="relative border border-ink bg-paper-bright px-3.5 py-2.5 pr-10 shadow-slip min-[481px]:px-4 min-[481px]:py-3.5 min-[481px]:pr-12"
         >
           <button
             type="button"
             onClick={handleDismissIntro}
             aria-label="Dismiss welcome message"
-            className="absolute right-2 top-2 inline-flex h-9 w-9 items-center justify-center text-ink-muted transition hover:text-ink"
+            className="absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center text-ink-muted transition hover:text-ink min-[481px]:right-2 min-[481px]:top-2 min-[481px]:h-9 min-[481px]:w-9"
           >
             <X className="h-4 w-4" />
           </button>
-          <h1 className="font-display text-base font-bold text-ink">
-            {FIRST_VISIT_INTRO.title}
-          </h1>
-          <div className="mt-1 space-y-1 text-sm leading-snug text-ink-soft">
-            {FIRST_VISIT_INTRO.lines.map((line) => (
-              <p key={line}>{line}</p>
+
+          {/* Compact 1-line strip for <= 480px */}
+          <div className="flex items-center justify-between gap-2 min-[481px]:hidden">
+            <p className="truncate font-display text-xs font-bold text-ink">
+              {FIRST_VISIT_INTRO.title} — one fair price every round
+            </p>
+            <button
+              type="button"
+              onClick={() => setMobileIntroExpanded((v) => !v)}
+              className="shrink-0 font-mono text-[11px] font-bold text-cobalt-700 underline decoration-dotted"
+            >
+              {mobileIntroExpanded ? 'Hide' : 'More'}
+            </button>
+          </div>
+
+          {/* Full intro on > 480px or when expanded on mobile */}
+          <div className={mobileIntroExpanded ? 'mt-2 block' : 'hidden min-[481px]:block'}>
+            <h1 className="hidden font-display text-base font-bold text-ink min-[481px]:block">
+              {FIRST_VISIT_INTRO.title}
+            </h1>
+            <div className="mt-1 space-y-1 text-sm leading-snug text-ink-soft">
+              {FIRST_VISIT_INTRO.lines.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Gas onboarding banner when Sepolia ETH < 0.002 */}
+      {lowGas && (
+        <section
+          aria-label="Sepolia gas notice"
+          data-testid="low-gas-notice"
+          className="flex flex-wrap items-start justify-between gap-3 border-l-2 border-brass-600 bg-brass-50 px-4 py-3 text-xs text-brass-900 sm:text-sm"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-brass-700" aria-hidden="true" />
+            <div className="space-y-1">
+              <p className="font-bold text-ink">
+                You need a little Sepolia ETH for gas ({formatToken(ethHuman, 4)} ETH in wallet)
+              </p>
+              <p className="leading-snug text-ink-soft">
+                Swaps and token claims need a tiny amount of free Sepolia ETH for network gas, and
+                private sealed orders lock a refundable <strong>0.0001 ETH</strong> deposit.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {PUBLIC_SEPOLIA_FAUCETS.map((f) => (
+              <a
+                key={f.url}
+                href={f.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-[32px] items-center gap-1 border border-brass-700 bg-paper-bright px-2.5 py-1 font-mono text-xs font-bold text-brass-900 transition hover:bg-brass-100"
+              >
+                <span>{f.name}</span>
+                <ExternalLink className="h-3 w-3" aria-hidden="true" />
+              </a>
             ))}
           </div>
         </section>
@@ -224,7 +299,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
             role="tab"
             data-testid="simple-tab-swap"
             aria-selected={activeTab === 'swap'}
-            onClick={() => setActiveTab('swap')}
+            onClick={() => handleTabChange('swap')}
             className={`tap-target px-5 font-display text-sm font-bold transition ${
               activeTab === 'swap'
                 ? 'bg-ink text-paper'
@@ -238,7 +313,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
             role="tab"
             data-testid="simple-tab-earn"
             aria-selected={activeTab === 'earn'}
-            onClick={() => setActiveTab('earn')}
+            onClick={() => handleTabChange('earn')}
             className={`tap-target px-5 font-display text-sm font-bold transition ${
               activeTab === 'earn'
                 ? 'bg-ink text-paper'

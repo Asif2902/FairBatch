@@ -10,6 +10,8 @@ import {
 import type { BatchSettlementDto, ClaimableDto } from '../../types';
 import { explorerTxUrl, type RuntimeConfig } from '../../onchain/config';
 import { formatPrice, formatToken, formatUsd } from '../../lib/format';
+import { PRO_TOOLTIPS } from '../../lib/glossary';
+import { InfoTooltip } from '../InfoTooltip';
 
 export interface CollectedReceiptSummary {
   hash: string;
@@ -28,7 +30,7 @@ interface SimpleCollectCardProps {
   onSwapAgain: () => void;
 }
 
-function summarizeReceipt(item: ClaimableDto, config: RuntimeConfig): string {
+function summarizeSingleReceipt(item: ClaimableDto, config: RuntimeConfig): string {
   if (item.status === 'OutOfMoneyRefund') {
     const inSym = item.side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
     const refunded =
@@ -55,6 +57,68 @@ function summarizeReceipt(item: ClaimableDto, config: RuntimeConfig): string {
     item.effective_price,
     2,
   )}. Everyone in this round got the same price.`;
+}
+
+function summarizeRoundReceipts(items: ClaimableDto[], config: RuntimeConfig): string {
+  if (items.length === 1) {
+    return summarizeSingleReceipt(items[0], config);
+  }
+
+  const filledSells = items.filter(
+    (i) => i.side === 'SellBase' && i.status !== 'OutOfMoneyRefund' && i.amount_filled > 0,
+  );
+  const filledBuys = items.filter(
+    (i) => i.side === 'BuyBase' && i.status !== 'OutOfMoneyRefund' && i.amount_filled > 0,
+  );
+
+  if (filledSells.length > 0 && filledBuys.length === 0) {
+    const totalSold = filledSells.reduce((acc, i) => acc + i.amount_filled, 0);
+    const totalReceived = filledSells.reduce((acc, i) => acc + i.payout_out, 0);
+    const parts = filledSells.map((i) => formatToken(i.amount_filled, 4, 2)).join(' + ');
+    const fairPrice = filledSells[0].effective_price;
+    return `You sold ${formatToken(totalSold, 4, 2)} ${config.baseSymbol} total, received ${formatPrice(
+      totalReceived,
+      2,
+    )} ${config.quoteSymbol} total (${parts} ${config.baseSymbol} → ${formatPrice(
+      totalReceived,
+      2,
+    )} ${config.quoteSymbol}) at fair price $${formatPrice(
+      fairPrice,
+      2,
+    )}. Everyone in this round got the same price.`;
+  }
+
+  if (filledBuys.length > 0 && filledSells.length === 0) {
+    const totalSoldQuote = filledBuys.reduce((acc, i) => acc + i.amount_filled, 0);
+    const totalReceivedBase = filledBuys.reduce((acc, i) => acc + i.payout_out, 0);
+    const parts = filledBuys.map((i) => formatPrice(i.amount_filled, 2)).join(' + ');
+    const fairPrice = filledBuys[0].effective_price;
+    return `You sold ${formatPrice(totalSoldQuote, 2)} ${config.quoteSymbol} total, received ${formatToken(
+      totalReceivedBase,
+      4,
+      2,
+    )} ${config.baseSymbol} total (${parts} ${config.quoteSymbol} → ${formatToken(
+      totalReceivedBase,
+      4,
+      2,
+    )} ${config.baseSymbol}) at fair price $${formatPrice(
+      fairPrice,
+      2,
+    )}. Everyone in this round got the same price.`;
+  }
+
+  const totalBaseOut = items.reduce(
+    (acc, i) => acc + (i.side === 'BuyBase' ? i.payout_out : i.refund_in),
+    0,
+  );
+  const totalQuoteOut = items.reduce(
+    (acc, i) => acc + (i.side === 'SellBase' ? i.payout_out : i.refund_in),
+    0,
+  );
+  return `You have ${items.length} completed orders ready to collect (${formatToken(
+    totalBaseOut,
+    4,
+  )} ${config.baseSymbol} + ${formatPrice(totalQuoteOut, 2)} ${config.quoteSymbol} total).`;
 }
 
 export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
@@ -134,8 +198,12 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
   if (unclaimed.length === 0) return null;
 
   const primary = unclaimed[0];
+  const sameRoundItems = unclaimed.filter((i) => i.batch_id === primary.batch_id);
+  const aggregatedItems = sameRoundItems.length > 1 ? sameRoundItems : unclaimed;
+  const distinctRounds = Array.from(new Set(unclaimed.map((i) => i.batch_id)));
+
   const primaryBatch = settledHistory.find((s) => s.batch_id === primary.batch_id);
-  // Show savings line ONLY when the corrected signed comparison math shows a real positive saving (> $0.01).
+  // Show savings line ONLY when the signed comparison math shows a real positive saving (> $0.01).
   const realSavingsQuote =
     primaryBatch && primaryBatch.comparison.user_value_saved_quote > 0.01
       ? primaryBatch.comparison.user_value_saved_quote
@@ -164,58 +232,87 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
           </span>
         </div>
         <h2 className="mt-2 font-display text-2xl font-bold text-ink">
-          Round #{primary.batch_id} finished!
+          {distinctRounds.length === 1
+            ? `Round #${primary.batch_id} finished!`
+            : `Rounds ${distinctRounds.map((id) => `#${id}`).join(', ')} finished!`}
         </h2>
-        <p className="mt-1.5 text-base leading-relaxed text-ink">
-          {summarizeReceipt(primary, config)}
+        <p
+          data-testid="simple-collect-summary"
+          className="mt-1.5 text-base leading-relaxed text-ink"
+        >
+          {summarizeRoundReceipts(aggregatedItems, config)}
         </p>
 
         {realSavingsQuote !== null && (
-          <div className="mt-3 inline-flex items-center gap-2 border border-pine-600/50 bg-paper-bright px-3 py-1.5 text-sm font-bold text-pine-800">
-            <ShieldCheck className="h-4 w-4 text-pine-700" aria-hidden="true" />
+          <div
+            data-testid="simple-simulated-saving"
+            className="mt-3 inline-flex flex-wrap items-center gap-1.5 border border-pine-600/50 bg-paper-bright px-3 py-1.5 text-xs font-bold text-pine-800 sm:text-sm"
+          >
+            <ShieldCheck className="h-4 w-4 shrink-0 text-pine-700" aria-hidden="true" />
             <span>
-              Round saved {formatUsd(realSavingsQuote)} vs a normal swap
+              Simulated saving vs a normal swap (0.30% x·y=k baseline):{' '}
+              {formatUsd(realSavingsQuote)}
             </span>
+            <InfoTooltip
+              label="Simulated saving baseline"
+              text={PRO_TOOLTIPS.simulatedSaving}
+            />
           </div>
         )}
       </div>
 
       <div className="space-y-4 p-5">
-        {unclaimed.length > 1 && (
-          <div className="space-y-2">
-            <div className="eyebrow">All ready orders</div>
-            {unclaimed.map((item) => {
-              const outSym =
-                item.side === 'SellBase' ? config.quoteSymbol : config.baseSymbol;
-              const inSym =
-                item.side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
-              return (
-                <div
-                  key={`${item.batch_id}-${item.order_id}`}
-                  className="flex flex-wrap items-center justify-between gap-2 border border-rule bg-paper-soft px-3.5 py-2.5 text-sm"
-                >
-                  <span className="font-bold text-ink">Round #{item.batch_id}</span>
-                  <span className="font-mono text-sm font-bold text-pine-800 tabular-nums">
-                    {item.payout_out > 0
-                      ? `${
-                          outSym === config.quoteSymbol
-                            ? formatPrice(item.payout_out, 2)
-                            : formatToken(item.payout_out, 4)
-                        } ${outSym}`
-                      : ''}
-                    {item.refund_in > 0
-                      ? `${item.payout_out > 0 ? ' + ' : ''}${
-                          inSym === config.quoteSymbol
-                            ? formatPrice(item.refund_in, 2)
-                            : formatToken(item.refund_in, 4)
-                        } ${inSym} refund`
-                      : ''}
+        <div className="space-y-2">
+          <div className="eyebrow">
+            {unclaimed.length > 1 ? 'All ready orders' : 'Order receipt'}
+          </div>
+          {unclaimed.map((item) => {
+            const outSym =
+              item.side === 'SellBase' ? config.quoteSymbol : config.baseSymbol;
+            const inSym =
+              item.side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
+            const soldAmount =
+              item.amount_filled > 0 ? item.amount_filled : item.amount_in;
+            const formattedSold =
+              inSym === config.quoteSymbol
+                ? formatPrice(soldAmount, 2)
+                : formatToken(soldAmount, 4, 2);
+
+            return (
+              <div
+                key={`${item.batch_id}-${item.order_id}`}
+                data-testid={`simple-collect-row-${item.batch_id}-${item.order_id}`}
+                className="flex flex-wrap items-center justify-between gap-2 border border-rule bg-paper-soft px-3.5 py-2.5 text-sm"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-ink">
+                    Round #{item.batch_id} · Order #{item.order_id}
+                  </span>
+                  <span className="font-mono text-xs text-ink-soft tabular-nums">
+                    Sold {formattedSold} {inSym}
                   </span>
                 </div>
-              );
-            })}
-          </div>
-        )}
+                <span className="font-mono text-sm font-bold text-pine-800 tabular-nums">
+                  →{' '}
+                  {item.payout_out > 0
+                    ? `${
+                        outSym === config.quoteSymbol
+                          ? formatPrice(item.payout_out, 2)
+                          : formatToken(item.payout_out, 4)
+                      } ${outSym}`
+                    : ''}
+                  {item.refund_in > 0
+                    ? `${item.payout_out > 0 ? ' + ' : ''}${
+                        inSym === config.quoteSymbol
+                          ? formatPrice(item.refund_in, 2)
+                          : formatToken(item.refund_in, 4)
+                      } ${inSym} refund`
+                    : ''}
+                </span>
+              </div>
+            );
+          })}
+        </div>
 
         <button
           type="button"

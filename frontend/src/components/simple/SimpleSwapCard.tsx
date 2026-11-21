@@ -357,11 +357,11 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
       {livePhase === 'Ready' && (
         <div
           data-testid="simple-ready-banner"
-          className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-vermilion-500 bg-vermilion-50 px-5 py-3.5"
+          className="flex flex-col gap-2.5 border-b-2 border-vermilion-500 bg-vermilion-50 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"
         >
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 font-mono text-xs font-bold uppercase tracking-label text-vermilion-800">
-              <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold uppercase tracking-label text-vermilion-800">
+              <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>Round #{state.batch_id} finished</span>
             </div>
             <p className="mt-1 text-sm leading-snug text-ink">
@@ -374,7 +374,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
               data-testid="simple-start-next-round"
               disabled={busy}
               onClick={() => void onStartNextRound()}
-              className="tap-target shrink-0 bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50"
+              className="tap-target w-full shrink-0 whitespace-nowrap bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50 sm:w-auto"
             >
               {busyAction === 'settle' ? 'Starting…' : SIMPLE_COPY.readyButton}
             </button>
@@ -701,10 +701,16 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                   <p className="leading-relaxed text-ink-soft">
                     {SIMPLE_COPY.sealedDepositNote}
                   </p>
-                  <div className="flex items-center justify-between gap-3 pt-1">
-                    <label htmlFor="simple-deposit-eth" className="font-bold text-ink">
-                      Refundable deposit (ETH)
-                    </label>
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <div>
+                      <label htmlFor="simple-deposit-eth" className="block font-bold text-ink">
+                        Refundable deposit (ETH)
+                      </label>
+                      <span className="font-mono text-[11px] text-ink-muted tabular-nums">
+                        ETH balance: {formatToken(human(balances?.eth, 18), 4)} ETH · min{' '}
+                        {Number(minBondWei) / 1e18} ETH
+                      </span>
+                    </div>
                     <input
                       id="simple-deposit-eth"
                       type="number"

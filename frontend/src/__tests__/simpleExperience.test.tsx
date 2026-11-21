@@ -379,4 +379,68 @@ describe('Simple mode end-to-end flows', () => {
       screen.getByText(/Client-side simulation — not an on-chain result/i),
     ).toBeInTheDocument();
   });
+
+  it('aggregates multiple ready orders in the same round and shows sold amount on each row', () => {
+    const sameRoundReceipts: ClaimableDto[] = [
+      {
+        batch_id: 11,
+        order_id: 0,
+        trader: ALICE,
+        label: 'Alice #1',
+        side: 'SellBase',
+        status: 'Filled',
+        amount_in: 0.1,
+        amount_filled: 0.1,
+        payout_out: 297.6,
+        refund_in: 0,
+        effective_price: 2976,
+        claimed: false,
+      },
+      {
+        batch_id: 11,
+        order_id: 1,
+        trader: ALICE,
+        label: 'Alice #2',
+        side: 'SellBase',
+        status: 'Filled',
+        amount_in: 0.05,
+        amount_filled: 0.05,
+        payout_out: 148.8,
+        refund_in: 0,
+        effective_price: 2976,
+        claimed: false,
+      },
+    ];
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: buildSnapshot({ claimable: sameRoundReceipts }),
+    });
+    render(<App />);
+
+    const summary = screen.getByTestId('simple-collect-summary');
+    expect(summary).toHaveTextContent(
+      /You sold 0\.15 fWETH total, received 446\.40 fUSDC total \(0\.10 \+ 0\.05 fWETH → 446\.40 fUSDC\)/i,
+    );
+    expect(screen.getByTestId('simple-collect-row-11-0')).toHaveTextContent(/Sold 0\.10 fWETH/i);
+    expect(screen.getByTestId('simple-collect-row-11-1')).toHaveTextContent(/Sold 0\.05 fWETH/i);
+  });
+
+  it('shows low Sepolia ETH gas onboarding notice (< 0.002 ETH) and clears non-error banners on tab switch', () => {
+    const lowEthSnap = buildSnapshot();
+    lowEthSnap.balances.eth = 500_000_000_000_000n; // 0.0005 ETH (< 0.002 ETH)
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: lowEthSnap,
+      notice: { kind: 'success', text: 'Order confirmed.' },
+    });
+    render(<App />);
+
+    const gasNotice = screen.getByTestId('low-gas-notice');
+    expect(gasNotice).toHaveTextContent(/You need a little Sepolia ETH for gas/i);
+    expect(gasNotice).toHaveTextContent(/0\.0001 ETH/i);
+
+    // Switching Swap -> Earn clears non-error notice
+    fireEvent.click(screen.getByTestId('simple-tab-earn'));
+    expect(controller.clearNotice).toHaveBeenCalledTimes(1);
+  });
 });
