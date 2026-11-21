@@ -22,6 +22,7 @@ import {
   SimpleCollectCard,
   type CollectedReceiptSummary,
 } from './simple/SimpleCollectCard';
+import { SimpleEarn } from './simple/SimpleEarn';
 
 const INTRO_DISMISSED_KEY = 'fairbatch.introDismissed.v1';
 
@@ -30,7 +31,6 @@ type SimpleTab = 'swap' | 'earn';
 interface SimpleExperienceProps {
   controller: FairBatchController;
   onOpenHowItWorks: () => void;
-  renderEarnTab?: () => React.ReactNode;
 }
 
 function readIntroDismissed(): boolean {
@@ -50,7 +50,6 @@ function human(raw: bigint | undefined, decimals: number): number {
 export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
   controller: fb,
   onOpenHowItWorks,
-  renderEarnTab,
 }) => {
   const [activeTab, setActiveTab] = useState<SimpleTab>('swap');
   const [introDismissed, setIntroDismissed] = useState<boolean>(() => readIntroDismissed());
@@ -261,8 +260,26 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
         </button>
       </div>
 
-      {activeTab === 'earn' && renderEarnTab ? (
-        renderEarnTab()
+      {activeTab === 'earn' && snapshot ? (
+        <SimpleEarn
+          config={fb.config}
+          reserves={snapshot.reserves}
+          balances={snapshot.balances}
+          lpLock={snapshot.lpLock}
+          chainNow={fb.chainNow}
+          account={account}
+          wrongNetwork={fb.wrongNetwork}
+          busyAction={fb.busyAction}
+          txStatus={fb.txStatus}
+          onConnect={fb.connect}
+          onSwitchNetwork={fb.switchNetwork}
+          onAddLiquidity={async (base, quote, lockSecs, minShares) => {
+            await fb.addLiquidity(base, quote, lockSecs, minShares);
+          }}
+          onRemoveLiquidity={async (shares, minBase, minQuote) => {
+            await fb.removeLiquidity(shares, minBase, minQuote);
+          }}
+        />
       ) : (
         <div className="space-y-4">
           {/* 4-step progress strip derived from on-chain state */}
