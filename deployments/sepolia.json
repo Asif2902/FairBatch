@@ -1,53 +1,53 @@
 {
     "network":  "sepolia",
     "chain_id":  11155111,
-    "deployed_at_utc":  "2026-11-20T10:55:20Z",
+    "deployed_at_utc":  "2026-11-20T18:03:09Z",
     "compiler":  "fe 26.5.0 (3dab95f) [sonatina]",
     "deployer":  "0x7d9Cb2994D86B6a4e65761B5d81DADa69ce54a7f",
     "explorer_base_url":  "https://sepolia.etherscan.io",
     "contracts":  {
                       "fair_batch":  {
-                                         "address":  "0xbfc03c5c2f74080d38fb68d268dceede423722e1",
-                                         "tx_hash":  "0x662b88e8791d19093b8a93e387a0b7caab9e340cc9c2e165c8694cdda1a742c9",
-                                         "block_number":  12174794,
-                                         "gas_used":  35023355,
-                                         "runtime_bytes":  22212,
-                                         "explorer_url":  "https://sepolia.etherscan.io/address/0xbfc03c5c2f74080d38fb68d268dceede423722e1"
+                                         "address":  "0x6fa21b7ada82e8b04fca51fdc60793c3fd80265f",
+                                         "tx_hash":  "0x6ed5ad0144aedeb3c5cd4e5d91d54ccda9d2d8b58d64a5467e757573d8c9ff91",
+                                         "block_number":  12176751,
+                                         "gas_used":  36300761,
+                                         "runtime_bytes":  23038,
+                                         "explorer_url":  "https://sepolia.etherscan.io/address/0x6fa21b7ada82e8b04fca51fdc60793c3fd80265f"
                                      },
                       "base_token":  {
                                          "symbol":  "fWETH",
                                          "decimals":  18,
                                          "deployed_test_token":  true,
-                                         "address":  "0xc3da3ef175fa0c960a8066f63bc944c8e05af873",
-                                         "tx_hash":  "0x39dd94ebe3876b39c49f967a38deb6d4900d47355c45a45d885dcf629716d992",
-                                         "block_number":  12174792,
-                                         "gas_used":  2192556,
-                                         "explorer_url":  "https://sepolia.etherscan.io/address/0xc3da3ef175fa0c960a8066f63bc944c8e05af873"
+                                         "address":  "0xe9903189bf3e418759feb26f11a7d1c99be0e556",
+                                         "tx_hash":  "0x5b3f18005b6d6344eef187eec18456300a1aaf26f0a1cb4241b527b9a21d990b",
+                                         "block_number":  12176749,
+                                         "gas_used":  2676774,
+                                         "explorer_url":  "https://sepolia.etherscan.io/address/0xe9903189bf3e418759feb26f11a7d1c99be0e556"
                                      },
                       "quote_token":  {
                                           "symbol":  "fUSDC",
                                           "decimals":  6,
                                           "deployed_test_token":  true,
-                                          "address":  "0xd663bf28330f9072037e7894f5021a26fb9cf53c",
-                                          "tx_hash":  "0x7b96aaa3c8914b47189a166454e9093b739277f5d1c97a92de813710cb9be14a",
-                                          "block_number":  12174793,
-                                          "gas_used":  2192556,
-                                          "explorer_url":  "https://sepolia.etherscan.io/address/0xd663bf28330f9072037e7894f5021a26fb9cf53c"
+                                          "address":  "0xbd2c54af6dd7e5e14d5b97d393eb2c8e2e8ebcca",
+                                          "tx_hash":  "0xd15e031b8141c028dcefdaeecbb2dce1366c976dca004b0f9a11ab290aba0fbe",
+                                          "block_number":  12176750,
+                                          "gas_used":  2676774,
+                                          "explorer_url":  "https://sepolia.etherscan.io/address/0xbd2c54af6dd7e5e14d5b97d393eb2c8e2e8ebcca"
                                       },
                       "faucet":  {
-                                     "address":  "0x145c788562f44bd093f573e398fcb40ab50241cf",
-                                     "tx_hash":  "0x6327f8ff36a8f5356b767dff6eb2f6bf7a3d18b257c08d038d7b7c9c6369168c",
-                                     "block_number":  12174795,
-                                     "gas_used":  2305147,
-                                     "runtime_bytes":  1353,
+                                     "address":  "0xe355220e8e9a650d082d49f130f0bfe344a792c7",
+                                     "tx_hash":  "0x8a2886ba04e1986c8257011ab23f596808d704374acd5f1753d0ad0238078b48",
+                                     "block_number":  12176752,
+                                     "gas_used":  2294323,
+                                     "runtime_bytes":  1346,
                                      "claim_base_raw":  "1000000000000000000",
                                      "claim_quote_raw":  "100000000",
                                      "cooldown_secs":  43200,
                                      "funded_base_raw":  "2000000000000000000000",
                                      "funded_quote_raw":  "1000000000000",
-                                     "fund_base_tx_hash":  "0xb235329dc1205593a5d9edd37e1ffec7b03f8d1d2acf0e68f271a2152a5511bf",
-                                     "fund_quote_tx_hash":  "0xc0ab58c382aeda9e7fbd83e54d9a1369395d10522bdefd83bc4b74d1f3c04d36",
-                                     "explorer_url":  "https://sepolia.etherscan.io/address/0x145c788562f44bd093f573e398fcb40ab50241cf"
+                                     "fund_base_tx_hash":  "0xbb3b600a737b14e67bd1d19603879d62aa28587fa6cb89729ed09c1ddd2f179c",
+                                     "fund_quote_tx_hash":  "0x13e3124ce8e3417b2af3b0a194a3e2a3be5f5f3435a4ae9664d1e9a5ce9f26cc",
+                                     "explorer_url":  "https://sepolia.etherscan.io/address/0xe355220e8e9a650d082d49f130f0bfe344a792c7"
                                  }
                   },
     "init_params":  {
@@ -61,11 +61,11 @@
                          "seeded":  true,
                          "reserve_base_raw":  "100000000000000000000",
                          "reserve_quote_raw":  "300000000000",
-                         "tx_hash":  "0xe7200718598f7f98af6961f411b999ac74cedb80e46ca2aef7d645e1ae008217",
-                         "gas_used":  701230
+                         "tx_hash":  "0xfd3f9db3779324372d0b3d3e1dcc79e3a82fa88f930ac5203c9ec931aff12065",
+                         "gas_used":  811614
                      },
     "onchain_verification":  {
-                                 "domain_separator":  "0x8631b1339393d53a790349c86fa55f2a48fc01fdbd0d22f3b8d121ba377bff18",
+                                 "domain_separator":  "0x5f0204041a131fe55ebf032359d28559fb9d9caeddf81c37e11fcb05fc6c8ef5",
                                  "active_batch_id":  1,
                                  "reserve_base_raw":  "100000000000000000000",
                                  "reserve_quote_raw":  "300000000000",

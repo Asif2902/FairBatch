@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     FairBatch Ethereum Sepolia Deployment, Faucet Funding & Reserve Seeding (`CHAIN_ID = 11155111`).
 
@@ -175,6 +175,71 @@ public static class FairBatchRlp {
         }
     }
 
+    public static string Keccak256Hex(byte[] input) {
+        ulong[] rc = new ulong[] {
+            0x0000000000000001UL, 0x0000000000008082UL, 0x800000000000808aUL, 0x8000000080008000UL,
+            0x000000000000808bUL, 0x0000000080000001UL, 0x8000000080008081UL, 0x8000000000008009UL,
+            0x000000000000008aUL, 0x0000000000000088UL, 0x0000000080008009UL, 0x000000008000000aUL,
+            0x000000008000808bUL, 0x800000000000008bUL, 0x8000000000008089UL, 0x8000000000008003UL,
+            0x8000000000008002UL, 0x8000000000000080UL, 0x000000000000800aUL, 0x800000008000000aUL,
+            0x8000000080008081UL, 0x8000000000008080UL, 0x0000000080000001UL, 0x8000000080008008UL
+        };
+        int[] r = new int[] {
+            0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14
+        };
+        int[] piln = new int[] {
+            10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1
+        };
+        int[] rotc = new int[] {
+            1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44
+        };
+        ulong[] st = new ulong[25];
+        int rate = 136;
+        int offset = 0;
+        int rem = input.Length;
+        byte[] block = new byte[rate];
+        while (rem >= rate) {
+            for (int i = 0; i < rate / 8; i++) st[i] ^= BitConverter.ToUInt64(input, offset + i * 8);
+            KeccakF1600(st, rc, piln, rotc);
+            offset += rate;
+            rem -= rate;
+        }
+        Array.Clear(block, 0, rate);
+        if (rem > 0) Buffer.BlockCopy(input, offset, block, 0, rem);
+        block[rem] ^= 0x01;
+        block[rate - 1] ^= 0x80;
+        for (int i = 0; i < rate / 8; i++) st[i] ^= BitConverter.ToUInt64(block, i * 8);
+        KeccakF1600(st, rc, piln, rotc);
+        byte[] outBytes = new byte[32];
+        for (int i = 0; i < 4; i++) Buffer.BlockCopy(BitConverter.GetBytes(st[i]), 0, outBytes, i * 8, 8);
+        return "0x" + BytesToHex(outBytes);
+    }
+
+    private static ulong RotL64(ulong x, int s) { return (x << s) | (x >> (64 - s)); }
+
+    private static void KeccakF1600(ulong[] st, ulong[] rc, int[] piln, int[] rotc) {
+        ulong[] bc = new ulong[5];
+        for (int round = 0; round < 24; round++) {
+            for (int i = 0; i < 5; i++) bc[i] = st[i] ^ st[i + 5] ^ st[i + 10] ^ st[i + 15] ^ st[i + 20];
+            for (int i = 0; i < 5; i++) {
+                ulong t = bc[(i + 4) % 5] ^ RotL64(bc[(i + 1) % 5], 1);
+                for (int j = 0; j < 25; j += 5) st[j + i] ^= t;
+            }
+            ulong t0 = st[1];
+            for (int i = 0; i < 24; i++) {
+                int j = piln[i];
+                bc[0] = st[j];
+                st[j] = RotL64(t0, rotc[i]);
+                t0 = bc[0];
+            }
+            for (int j = 0; j < 25; j += 5) {
+                for (int i = 0; i < 5; i++) bc[i] = st[j + i];
+                for (int i = 0; i < 5; i++) st[j + i] ^= (~bc[(i + 1) % 5]) & bc[(i + 2) % 5];
+            }
+            st[0] ^= rc[round];
+        }
+    }
+
     public static string BuildUnsignedEip1559PreimageHex(
         BigInteger chainId, BigInteger nonce, BigInteger maxPriorityFee, BigInteger maxFee,
         BigInteger gasLimit, string toHex, BigInteger valueWei, string dataHex
@@ -239,7 +304,7 @@ function New-SignedEip1559RawTx(
     $signingPreimageHex = [FairBatchRlp]::BuildUnsignedEip1559PreimageHex(
         $ChainId, $Nonce, $MaxPriorityFeeWei, $MaxFeeWei, $GasLimit, $ToAddressHex, $ValueWei, $DataHex
     )
-    $txDigest = ($signingPreimageHex | & $CastBin keccak).Trim()
+    $txDigest = [FairBatchRlp]::Keccak256Hex([FairBatchRlp]::HexToBytes($signingPreimageHex))
     $sigHex = (& $CastBin wallet sign --no-hash --private-key $PrivateKeyHex $txDigest).Trim()
     return [FairBatchRlp]::BuildSignedEip1559RawTxHex(
         $ChainId, $Nonce, $MaxPriorityFeeWei, $MaxFeeWei, $GasLimit, $ToAddressHex, $ValueWei, $DataHex, $sigHex
@@ -386,11 +451,24 @@ $DeployerAddr = (& $CastBin wallet address --private-key $DeployerKey).Trim()
 Write-Host ("  Deployer Account    : {0}" -f $DeployerAddr) -ForegroundColor Green
 
 function Invoke-Rpc([string]$Method, [string]$RawParamsJson = "[]") {
-    $out = ($RawParamsJson | & $CastBin rpc --rpc-url $RpcUrl --raw $Method)
-    if ($LASTEXITCODE -ne 0) {
-        throw "RPC call '$Method' failed against endpoint."
+    $body = "{`"jsonrpc`":`"2.0`",`"id`":1,`"method`":`"$Method`",`"params`":$RawParamsJson}"
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        try {
+            $resp = Invoke-RestMethod -Uri $RpcUrl -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
+            if ($null -ne $resp.PSObject.Properties["error"] -and $null -ne $resp.error) {
+                throw "RPC error for '$Method': $($resp.error | ConvertTo-Json -Compress)"
+            }
+            if ($null -eq $resp.result) { return "null" }
+            if ($resp.result -is [string]) { return "`"$($resp.result)`"" }
+            return ($resp.result | ConvertTo-Json -Depth 10 -Compress)
+        } catch {
+            if ($attempt -lt 4) {
+                Start-Sleep -Seconds 2
+            } else {
+                throw "RPC call '$Method' failed against endpoint: $($_.Exception.Message)"
+            }
+        }
     }
-    return ("$out").Trim()
 }
 
 Write-Host ""
@@ -435,23 +513,7 @@ function Estimate-TxGasLimit(
     } else {
         "[{`"from`":`"$DeployerAddr`",`"to`":`"$ToAddr`",`"data`":`"$DataHex`"}]"
     }
-    $estHex = ""
-    for ($retry = 0; $retry -lt 6; $retry++) {
-        $prevPref = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        $rawOut = ($callObj | & $CastBin rpc --rpc-url $RpcUrl --raw eth_estimateGas 2>$null)
-        $code = $LASTEXITCODE
-        $ErrorActionPreference = $prevPref
-        if ($code -eq 0 -and -not [string]::IsNullOrWhiteSpace("$rawOut")) {
-            $estHex = ("$rawOut").Trim().Trim('"')
-            break
-        }
-        if ($retry -lt 5) {
-            Start-Sleep -Seconds 2
-        } else {
-            $estHex = (Invoke-Rpc "eth_estimateGas" $callObj).Trim('"')
-        }
-    }
+    $estHex = (Invoke-Rpc "eth_estimateGas" $callObj).Trim('"')
     $estGas = [uint64](Parse-HexBigInt $estHex)
     $withPct = [uint64](($estGas * 115) / 100)
     $withPad = $estGas + [uint64]200000

@@ -5,12 +5,12 @@
     "rpcUrl":  "https://ethereum-sepolia-rpc.publicnode.com",
     "explorerUrl":  "https://sepolia.etherscan.io",
     "deployer":  "0x7d9Cb2994D86B6a4e65761B5d81DADa69ce54a7f",
-    "deploymentBlock":  12174794,
+    "deploymentBlock":  12176751,
     "contracts":  {
-                      "fairBatch":  "0xbfc03c5c2f74080d38fb68d268dceede423722e1",
-                      "baseToken":  "0xc3da3ef175fa0c960a8066f63bc944c8e05af873",
-                      "quoteToken":  "0xd663bf28330f9072037e7894f5021a26fb9cf53c",
-                      "faucet":  "0x145c788562f44bd093f573e398fcb40ab50241cf"
+                      "fairBatch":  "0x6fa21b7ada82e8b04fca51fdc60793c3fd80265f",
+                      "baseToken":  "0xe9903189bf3e418759feb26f11a7d1c99be0e556",
+                      "quoteToken":  "0xbd2c54af6dd7e5e14d5b97d393eb2c8e2e8ebcca",
+                      "faucet":  "0xe355220e8e9a650d082d49f130f0bfe344a792c7"
                   },
     "tokens":  {
                    "base":  {
