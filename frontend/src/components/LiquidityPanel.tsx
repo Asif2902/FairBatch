@@ -8,20 +8,23 @@ import {
   Scale,
   Unlock,
 } from 'lucide-react';
-import { formatUnits } from 'viem';
+import { formatUnits, parseUnits } from 'viem';
 import type { RuntimeConfig } from '../onchain/config';
 import type { LiquidityLockState, RawReserves, WalletBalances } from '../onchain/state';
 import { formatDuration, formatPrice, formatToken } from '../lib/format';
+import { PRO_TOOLTIPS } from '../lib/glossary';
 import { useNow } from '../lib/useNow';
+import { InfoTooltip } from './InfoTooltip';
 
 type LiquidityMode = 'add' | 'remove';
 
-const LOCK_PRESETS: Array<{ label: string; seconds: number }> = [
+const LOCK_PRESETS: Array<{ label: string; seconds: number; custom?: boolean }> = [
   { label: 'No lock', seconds: 0 },
   { label: '1 hour', seconds: 3_600 },
   { label: '12 hours', seconds: 43_200 },
   { label: '1 day', seconds: 86_400 },
   { label: '7 days', seconds: 604_800 },
+  { label: 'Custom', seconds: -1, custom: true },
 ];
 
 interface LiquidityPanelProps {
@@ -35,8 +38,13 @@ interface LiquidityPanelProps {
     amountBase: string,
     amountQuote: string,
     lockDurationSecs?: number,
+    minShares?: bigint,
   ) => Promise<void>;
-  onRemoveLiquidity: (shares: string) => Promise<void>;
+  onRemoveLiquidity: (
+    shares: string,
+    minBase?: bigint,
+    minQuote?: bigint,
+  ) => Promise<void>;
 }
 
 function human(raw: bigint, decimals: number): number {
@@ -63,9 +71,17 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   const [baseInput, setBaseInput] = useState<string>('1');
   const [quoteInput, setQuoteInput] = useState<string>('3000');
   const [lockDurationSecs, setLockDurationSecs] = useState<number>(0);
+  const [customLockMode, setCustomLockMode] = useState<boolean>(false);
+  const [customLockHours, setCustomLockHours] = useState<string>('2');
+  const [slippagePct, setSlippagePct] = useState<string>('1');
   const [sharesInput, setSharesInput] = useState<string>('');
   const [localError, setLocalError] = useState<string | null>(null);
   const nowSecs = useNow();
+
+  const effectiveLockSecs = customLockMode
+    ? Math.max(0, Math.floor((Number(customLockHours) || 0) * 3_600))
+    : lockDurationSecs;
+  const slipFactor = Math.max(0, 1 - Math.min(50, Math.max(0, Number(slippagePct) || 0)) / 100);
 
   const rx = human(reserves.reserveBase, config.baseDecimals);
   const ry = human(reserves.reserveQuote, config.quoteDecimals);
@@ -121,7 +137,19 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
       return;
     }
     try {
-      await onAddLiquidity(baseInput, quoteInput, lockDurationSecs);
+      let minShares: bigint | undefined;
+      if (estimatedShares !== null && estimatedShares > 0 && slipFactor < 1) {
+        try {
+          minShares = parseUnits(trimAmount(estimatedShares * slipFactor, 12) || '0', 18);
+        } catch {
+          minShares = 0n;
+        }
+      }
+      if (minShares !== undefined) {
+        await onAddLiquidity(baseInput, quoteInput, effectiveLockSecs, minShares);
+      } else {
+        await onAddLiquidity(baseInput, quoteInput, effectiveLockSecs);
+      }
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Add liquidity failed');
     }
@@ -148,7 +176,19 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
       return;
     }
     try {
-      await onRemoveLiquidity(sharesInput);
+      if (removePreview && slipFactor < 1) {
+        const minBase = parseUnits(
+          trimAmount(removePreview.base * slipFactor, Math.min(config.baseDecimals, 12)) || '0',
+          config.baseDecimals,
+        );
+        const minQuote = parseUnits(
+          trimAmount(removePreview.quote * slipFactor, Math.min(config.quoteDecimals, 6)) || '0',
+          config.quoteDecimals,
+        );
+        await onRemoveLiquidity(sharesInput, minBase, minQuote);
+      } else {
+        await onRemoveLiquidity(sharesInput);
+      }
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Remove liquidity failed');
     }
@@ -162,11 +202,12 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
             <Droplets className="h-3 w-3 text-plum-600" aria-hidden="true" />
             <span className="eyebrow">Passive reserves</span>
           </div>
-          <h2 className="mt-1 font-display text-xl font-bold leading-tight tracking-tight text-ink">
-            FM-AMM liquidity desk
+          <h2 className="mt-1 flex items-center gap-1.5 font-display text-xl font-bold leading-tight tracking-tight text-ink">
+            <span>FM-AMM liquidity desk</span>
+            <InfoTooltip label="FM-AMM" text={PRO_TOOLTIPS.fmAmm} />
           </h2>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-muted">
-            Internal, non-transferable LP shares with optional time-locking on deposits.
+          <p className="mt-0.5 text-sm leading-relaxed text-ink-muted">
+            Internal, non-transferable LP shares with optional time-locking and slippage bounds.
           </p>
         </div>
         <div className="flex border border-rule-strong bg-paper-soft p-0.5">
@@ -174,7 +215,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
             type="button"
             onClick={() => setMode('add')}
             aria-pressed={mode === 'add'}
-            className={`px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] transition ${
+            className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase transition ${
               mode === 'add' ? 'bg-ink text-paper' : 'text-ink-muted hover:text-ink'
             }`}
           >
@@ -184,7 +225,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
             type="button"
             onClick={() => setMode('remove')}
             aria-pressed={mode === 'remove'}
-            className={`px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] transition ${
+            className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase transition ${
               mode === 'remove' ? 'bg-ink text-paper' : 'text-ink-muted hover:text-ink'
             }`}
           >
@@ -195,7 +236,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
 
       <div className="grid gap-px border-b border-rule bg-rule sm:grid-cols-4">
         <div className="bg-paper-bright p-3">
-          <div className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+          <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
             Pool {config.baseSymbol}
           </div>
           <div className="mt-1 font-mono text-sm font-bold text-ink tabular-nums">
@@ -203,7 +244,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
           </div>
         </div>
         <div className="bg-paper-bright p-3">
-          <div className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+          <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
             Pool {config.quoteSymbol}
           </div>
           <div className="mt-1 font-mono text-sm font-bold text-ink tabular-nums">
@@ -211,7 +252,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
           </div>
         </div>
         <div className="bg-paper-bright p-3">
-          <div className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+          <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
             Spot
           </div>
           <div className="mt-1 font-mono text-sm font-bold text-vermilion-700 tabular-nums">
@@ -219,7 +260,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
           </div>
         </div>
         <div className="bg-paper-bright p-3">
-          <div className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
+          <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
             Your LP share
           </div>
           <div className="mt-1 font-mono text-sm font-bold text-plum-700 tabular-nums">
@@ -231,7 +272,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
       {lockActive && (
         <div
           data-testid="lp-lock-banner"
-          className="flex flex-wrap items-center justify-between gap-2 border-b border-rule bg-brass-50/70 px-4 py-2 font-mono text-[9.5px] text-brass-900"
+          className="flex flex-wrap items-center justify-between gap-2 border-b border-rule bg-brass-50 px-4 py-2.5 font-mono text-xs text-brass-900"
         >
           <span className="inline-flex items-center gap-1.5 font-bold">
             <Lock className="h-3 w-3 text-brass-700" aria-hidden="true" />
@@ -290,34 +331,43 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
               </div>
             </div>
 
-            <div className="border border-rule bg-paper-soft p-2.5">
+            <div className="border border-rule bg-paper-soft p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 font-mono text-[8.5px] font-bold uppercase tracking-label text-ink-soft">
-                  {lockDurationSecs > 0 ? (
-                    <Lock className="h-3 w-3 text-brass-700" aria-hidden="true" />
+                <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold uppercase tracking-label text-ink-soft">
+                  {effectiveLockSecs > 0 ? (
+                    <Lock className="h-3.5 w-3.5 text-brass-700" aria-hidden="true" />
                   ) : (
-                    <Unlock className="h-3 w-3 text-pine-700" aria-hidden="true" />
+                    <Unlock className="h-3.5 w-3.5 text-pine-700" aria-hidden="true" />
                   )}
                   Liquidity lock (optional)
                 </span>
-                <span className="font-mono text-[8.5px] text-ink-muted">
-                  {lockDurationSecs > 0
-                    ? `Locks new shares for ${formatDuration(lockDurationSecs)}`
+                <span className="font-mono text-xs text-ink-muted">
+                  {effectiveLockSecs > 0
+                    ? `Locks new shares for ${formatDuration(effectiveLockSecs)}`
                     : 'Flexible · withdraw anytime'}
                 </span>
               </div>
-              <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label="Optional liquidity lock duration">
+              <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Optional liquidity lock duration">
                 {LOCK_PRESETS.map((preset) => {
-                  const selected = lockDurationSecs === preset.seconds;
+                  const selected = preset.custom
+                    ? customLockMode
+                    : !customLockMode && lockDurationSecs === preset.seconds;
                   return (
                     <button
-                      key={preset.seconds}
+                      key={preset.label}
                       type="button"
                       aria-pressed={selected}
-                      onClick={() => setLockDurationSecs(preset.seconds)}
-                      className={`border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] transition ${
+                      onClick={() => {
+                        if (preset.custom) {
+                          setCustomLockMode(true);
+                        } else {
+                          setCustomLockMode(false);
+                          setLockDurationSecs(preset.seconds);
+                        }
+                      }}
+                      className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${
                         selected
-                          ? preset.seconds > 0
+                          ? preset.seconds !== 0
                             ? 'border-brass-700 bg-brass-600 text-paper'
                             : 'border-ink bg-ink text-paper'
                           : 'border-rule-strong bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
@@ -328,18 +378,49 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                   );
                 })}
               </div>
+              {customLockMode && (
+                <div className="mt-2.5 flex items-center gap-2">
+                  <label htmlFor="pro-custom-lock-hours" className="font-mono text-xs text-ink-muted">
+                    Lock duration (hours):
+                  </label>
+                  <input
+                    id="pro-custom-lock-hours"
+                    type="number"
+                    min="0.1"
+                    step="any"
+                    value={customLockHours}
+                    onChange={(e) => setCustomLockHours(e.target.value)}
+                    className="w-24 border border-rule-strong bg-paper-bright px-2 py-1 font-mono text-sm font-bold text-ink"
+                  />
+                </div>
+              )}
+              <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-2">
+                <label htmlFor="pro-lp-slippage" className="font-mono text-xs text-ink-muted">
+                  Max slippage tolerance (%):
+                </label>
+                <input
+                  id="pro-lp-slippage"
+                  type="number"
+                  min="0"
+                  max="50"
+                  step="0.5"
+                  value={slippagePct}
+                  onChange={(e) => setSlippagePct(e.target.value)}
+                  className="w-20 border border-rule-strong bg-paper-bright px-2 py-1 text-right font-mono text-xs font-bold text-ink"
+                />
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <button
                 type="button"
                 onClick={matchPoolRatio}
-                className="inline-flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-cobalt-700 underline decoration-dotted underline-offset-2 transition hover:text-cobalt-800"
+                className="inline-flex min-h-[36px] items-center gap-1 font-mono text-xs font-bold uppercase text-cobalt-700 underline decoration-dotted underline-offset-2 transition hover:text-cobalt-800"
               >
-                <Scale className="h-3 w-3" />
+                <Scale className="h-3.5 w-3.5" />
                 Match pool ratio
               </button>
-              <span className="font-mono text-[9px] text-ink-muted tabular-nums">
+              <span className="font-mono text-xs text-ink-muted tabular-nums">
                 {estimatedShares !== null
                   ? `≈ ${formatToken(estimatedShares, 4)} LP shares`
                   : 'LP shares mint pro-rata'}
@@ -350,9 +431,9 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
               type="submit"
               data-testid="lp-add-submit"
               disabled={!account || busy}
-              className="inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-3 py-2.5 font-display text-sm font-bold text-paper transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-3 py-2.5 font-display text-sm font-bold text-paper transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {lockDurationSecs > 0 ? (
+              {effectiveLockSecs > 0 ? (
                 <Lock className="h-4 w-4" aria-hidden="true" />
               ) : (
                 <ArrowDownToLine className="h-4 w-4" aria-hidden="true" />
@@ -362,14 +443,14 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                   ? 'Connect a wallet to add liquidity'
                   : busyAction === 'add-liquidity'
                     ? 'Adding liquidity…'
-                    : lockDurationSecs > 0
-                      ? `Add & lock liquidity (${formatDuration(lockDurationSecs)})`
+                    : effectiveLockSecs > 0
+                      ? `Add & lock liquidity (${formatDuration(effectiveLockSecs)})`
                       : 'Add liquidity'}
               </span>
             </button>
-            <p className="font-mono text-[8.5px] leading-relaxed text-ink-faint">
-              FairBatch mints min(sharesX, sharesY). Locking is optional — unlocked shares remain
-              withdrawable anytime.
+            <p className="text-xs leading-relaxed text-ink-muted">
+              FairBatch mints min(sharesX, sharesY) guarded by minShares slippage bounds.
+              Locking is optional — unlocked shares remain withdrawable anytime.
             </p>
           </form>
         ) : (

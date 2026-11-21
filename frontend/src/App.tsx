@@ -23,6 +23,7 @@ import { ClaimsPanel } from './components/ClaimsPanel';
 import { ContractConfigModal } from './components/ContractConfigModal';
 import { FeArchitectureModal } from './components/FeArchitectureModal';
 import { HowItWorksModal } from './components/HowItWorksModal';
+import { SandwichSimulationModal } from './components/SandwichSimulationModal';
 import { SIMPLE_COPY } from './lib/glossary';
 
 const MODE_STORAGE_KEY = 'fairbatch.uiMode.v1';
@@ -45,6 +46,7 @@ export const App: React.FC = () => {
   const [isContractModalOpen, setIsContractModalOpen] = useState<boolean>(false);
   const [isFeModalOpen, setIsFeModalOpen] = useState<boolean>(false);
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState<boolean>(false);
+  const [isSimulationModalOpen, setIsSimulationModalOpen] = useState<boolean>(false);
 
   const handleModeChange = (next: UiMode) => {
     setMode(next);
@@ -127,7 +129,7 @@ export const App: React.FC = () => {
         onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
         onOpenFeModal={() => setIsFeModalOpen(true)}
         onOpenContractModal={() => setIsContractModalOpen(true)}
-        onOpenSimulationModal={() => setIsHowItWorksOpen(true)}
+        onOpenSimulationModal={() => setIsSimulationModalOpen(true)}
       />
 
       <main className="mx-auto w-full max-w-[1560px] flex-1 px-4 py-5 lg:px-8">
@@ -274,6 +276,9 @@ export const App: React.FC = () => {
                   onSubmitDirect={async (params) => {
                     await fb.submitDirect(params);
                   }}
+                  onSettleAndSubmitDirect={async (params) => {
+                    await fb.settleAndSubmitDirect(params);
+                  }}
                   onSealCommit={async (params) => {
                     await fb.sealCommit(params);
                   }}
@@ -289,7 +294,8 @@ export const App: React.FC = () => {
                 <BatchConsole
                   batch={snapshot.batch}
                   phase={fb.livePhase}
-                  config={fb.config}
+                  chainNow={fb.chainNow}
+                  orderCount={state.orders.length}
                   account={fb.account}
                   commitments={snapshot.allCommitments}
                   busyAction={fb.busyAction}
@@ -318,6 +324,7 @@ export const App: React.FC = () => {
                   baseSymbol={fb.config.baseSymbol}
                   quoteSymbol={fb.config.quoteSymbol}
                   onSelectViewBatch={setSelectedViewBatchId}
+                  onOpenSimulationModal={() => setIsSimulationModalOpen(true)}
                 />
               </div>
             </div>
@@ -331,11 +338,11 @@ export const App: React.FC = () => {
                   lpLock={snapshot.lpLock}
                   account={fb.account}
                   busyAction={fb.busyAction}
-                  onAddLiquidity={async (amountBase, amountQuote, lockDurationSecs) => {
-                    await fb.addLiquidity(amountBase, amountQuote, lockDurationSecs);
+                  onAddLiquidity={async (amountBase, amountQuote, lockDurationSecs, minShares) => {
+                    await fb.addLiquidity(amountBase, amountQuote, lockDurationSecs, minShares);
                   }}
-                  onRemoveLiquidity={async (shares) => {
-                    await fb.removeLiquidity(shares);
+                  onRemoveLiquidity={async (shares, minBase, minQuote) => {
+                    await fb.removeLiquidity(shares, minBase, minQuote);
                   }}
                 />
               </div>
@@ -390,6 +397,15 @@ export const App: React.FC = () => {
       <FeArchitectureModal
         isOpen={isFeModalOpen}
         onClose={() => setIsFeModalOpen(false)}
+      />
+
+      <SandwichSimulationModal
+        isOpen={isSimulationModalOpen}
+        rx={state?.reserves.rx ?? 100}
+        ry={state?.reserves.ry ?? 300_000}
+        baseSymbol={fb.config.baseSymbol}
+        quoteSymbol={fb.config.quoteSymbol}
+        onClose={() => setIsSimulationModalOpen(false)}
       />
     </div>
   );

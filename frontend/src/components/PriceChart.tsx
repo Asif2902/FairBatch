@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Crosshair, GitMerge, Info } from 'lucide-react';
 import type { BatchSettlementDto, CurvePointDto } from '../types';
 import { formatPrice, formatToken } from '../lib/format';
+import { PRO_TOOLTIPS } from '../lib/glossary';
+import { InfoTooltip } from './InfoTooltip';
 
 interface PriceChartProps {
   settlement: BatchSettlementDto;
@@ -203,30 +205,31 @@ export const PriceChart: React.FC<PriceChartProps> = ({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="eyebrow flex items-center gap-1.5">
-              <Crosshair className="h-3 w-3 text-vermilion-600" aria-hidden="true" />
-              Clearing chart
+              <Crosshair className="h-3.5 w-3.5 text-vermilion-600" aria-hidden="true" />
+              <span>Clearing chart</span>
+              <InfoTooltip label="Clearing price p*" text={PRO_TOOLTIPS.pStar} />
             </span>
             <span
-              className={`border px-1.5 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-label ${
+              className={`border px-2 py-0.5 font-mono text-xs font-bold uppercase ${
                 isLivePreview
                   ? 'border-cobalt-600/40 bg-cobalt-50 text-cobalt-700'
                   : 'border-pine-600/40 bg-pine-50 text-pine-700'
               }`}
             >
               {isLivePreview
-                ? 'Live batch preview'
+                ? 'Current queue (live preview)'
                 : `Settled · Batch #${settlement.batch_id}`}
             </span>
           </div>
           <h2 className="mt-1 font-display text-xl font-bold leading-tight tracking-tight text-ink">
             Supply, demand &amp; the clearing price
           </h2>
-          <p className="mt-0.5 text-[11px] text-ink-muted">
+          <p className="mt-0.5 text-sm text-ink-muted">
             Sorted seller supply S(p) × buyer demand D(p) + FM-AMM liquidity absorption.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1 font-mono text-[9px] uppercase tracking-[0.06em] text-ink-muted">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1 font-mono text-xs uppercase text-ink-muted">
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2 w-2 bg-pine-500" />
             <span>Supply S(p)</span>
@@ -569,13 +572,13 @@ export const PriceChart: React.FC<PriceChartProps> = ({
       {/* Closed-form formula readout */}
       <div className="bg-paper-soft px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[10.5px] text-ink-muted tabular-nums">
-            <Info className="h-3 w-3 shrink-0 self-center text-cobalt-600" aria-hidden="true" />
-            <span className="text-[8.5px] uppercase tracking-label text-ink-faint">
-              Closed form
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-xs text-ink-muted tabular-nums">
+            <Info className="h-3.5 w-3.5 shrink-0 self-center text-cobalt-600" aria-hidden="true" />
+            <span className="text-xs font-bold uppercase tracking-label text-ink-muted">
+              {isLivePreview ? 'Current queue p*' : 'Settled p*'}
             </span>
             <span className="text-ink-soft">
-              p* = (R_y + 2·D_y) / (R_x + 2·S_x) = ({formatPrice(settlement.reserves_before.ry, 0)} + 2×
+              = (R_y + 2·D_y) / (R_x + 2·S_x) = ({formatPrice(settlement.reserves_before.ry, 0)} + 2×
               {formatPrice(settlement.total_buy_quote_eligible, 0)}) / (
               {formatToken(settlement.reserves_before.rx, 2)} + 2×
               {formatToken(settlement.total_sell_base_eligible, 2)}) =
@@ -588,14 +591,15 @@ export const PriceChart: React.FC<PriceChartProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-3 font-mono text-[10px] text-ink-soft tabular-nums">
-            <span className="inline-flex items-center gap-1 border border-cobalt-600/30 bg-cobalt-50 px-1.5 py-0.5 text-cobalt-700">
-              <GitMerge className="h-3 w-3" />
+          <div className="flex items-center gap-2 font-mono text-xs text-ink-soft tabular-nums">
+            <span className="inline-flex items-center gap-1 border border-cobalt-600/30 bg-cobalt-50 px-2 py-0.5 text-cobalt-700">
+              <GitMerge className="h-3.5 w-3.5" />
               <span>
                 CoW P2P {formatToken(settlement.cow_matched_base, 2)} {baseSymbol} ·{' '}
                 {formatPrice(settlement.cow_ratio_pct, 1)}%
               </span>
             </span>
+            <InfoTooltip label="CoW matching" text={PRO_TOOLTIPS.cow} />
           </div>
         </div>
       </div>

@@ -23,6 +23,8 @@ import {
   generateRandomSaltHex,
 } from '../lib/keccak';
 import { formatPrice, formatToken, shortenAddress } from '../lib/format';
+import { PRO_TOOLTIPS } from '../lib/glossary';
+import { InfoTooltip } from './InfoTooltip';
 
 type TicketTab = 'direct' | 'commit_reveal' | 'eip712';
 
@@ -35,6 +37,11 @@ interface OrderTicketProps {
   minBondWei: bigint;
   onConnect: () => Promise<void>;
   onSubmitDirect: (params: {
+    side: OrderSide;
+    amountIn: string;
+    limitPrice: string;
+  }) => Promise<void>;
+  onSettleAndSubmitDirect?: (params: {
     side: OrderSide;
     amountIn: string;
     limitPrice: string;
@@ -64,6 +71,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   minBondWei,
   onConnect,
   onSubmitDirect,
+  onSettleAndSubmitDirect,
   onSealCommit,
   onRevealCommit,
   onSignIntent,
@@ -194,12 +202,21 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
       return;
     }
     try {
-      await onSubmitDirect({
-        side,
-        amountIn: amountInput,
-        limitPrice: limitPriceInput,
-      });
-      setLocalFeedback('Direct limit order confirmed on-chain.');
+      if (state.phase === 'Ready' && onSettleAndSubmitDirect) {
+        await onSettleAndSubmitDirect({
+          side,
+          amountIn: amountInput,
+          limitPrice: limitPriceInput,
+        });
+        setLocalFeedback('Settled previous batch & placed direct order in new batch.');
+      } else {
+        await onSubmitDirect({
+          side,
+          amountIn: amountInput,
+          limitPrice: limitPriceInput,
+        });
+        setLocalFeedback('Direct limit order confirmed on-chain.');
+      }
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Order failed');
     }
@@ -532,17 +549,23 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
           </div>
         </div>
 
-        {/* Clearing preview */}
+        {/* Clearing preview (Bug 1d: explicitly labeled With your order vs Current queue) */}
         {preview && (
           <div className="border-t border-dashed border-rule-strong pt-3">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="eyebrow">Projected uniform price</span>
+              <span className="eyebrow flex items-center gap-1">
+                <span>With your order (projected p*)</span>
+                <InfoTooltip label="Clearing price p*" text={PRO_TOOLTIPS.pStar} />
+              </span>
               <span className="font-mono text-base font-bold text-vermilion-600 tabular-nums">
                 ${formatPrice(preview.projectedClearingPrice, 2)}
               </span>
             </div>
-            <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[11px]">
-              <span className="text-ink-muted">Estimated fill</span>
+            <div className="mt-1.5 flex items-baseline justify-between gap-2 text-xs text-ink-muted">
+              <span className="flex items-center gap-1">
+                <span>Estimated fill</span>
+                <InfoTooltip label="Pro-rata fill" text={PRO_TOOLTIPS.proRata} />
+              </span>
               <span className="text-right font-mono font-semibold text-ink tabular-nums">
                 {preview.myFill?.status === 'Filled'
                   ? `100% → ${formatToken(preview.myFill.payout_out, 2)} ${
@@ -558,7 +581,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             <div className="mt-2 flex items-center gap-2">
               <div className="clearing-line flex-1" />
               <span className="serial shrink-0">
-                p* = {formatPrice(preview.projectedClearingPrice, 2)}
+                with order p* = ${formatPrice(preview.projectedClearingPrice, 2)}
               </span>
             </div>
           </div>
@@ -569,13 +592,19 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
           <form onSubmit={handleDirectSubmit}>
             <button
               type="submit"
-              disabled={state.phase !== 'Open' || busyAction !== null}
-              className="group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-paper shadow-glow-vermilion transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={
+                (state.phase !== 'Open' &&
+                  !(state.phase === 'Ready' && Boolean(onSettleAndSubmitDirect))) ||
+                busyAction !== null
+              }
+              className="tap-target group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-paper transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <span className="font-display text-sm font-bold tracking-tight">
-                {state.phase !== 'Open'
-                  ? 'Direct orders need the open window'
-                  : `Submit direct ${side === 'SellBase' ? 'sell' : 'buy'} order`}
+                {state.phase === 'Ready' && onSettleAndSubmitDirect
+                  ? `Settle & submit direct ${side === 'SellBase' ? 'sell' : 'buy'} order`
+                  : state.phase !== 'Open'
+                    ? 'Direct orders close during Reveal — use EIP-712 tab'
+                    : `Submit direct ${side === 'SellBase' ? 'sell' : 'buy'} order`}
               </span>
               <Send
                 className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
@@ -589,27 +618,31 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
         {activeTab === 'commit_reveal' && (
           <div className="space-y-3">
             <form onSubmit={handleCommitSubmit} className="space-y-3">
-              <div className="border border-brass-500/50 bg-brass-50/60 p-3">
+              <div className="border border-brass-500/50 bg-brass-50 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] font-bold uppercase tracking-label text-brass-700">
+                  <span className="font-mono text-xs font-bold uppercase tracking-label text-brass-800">
                     Salt · 32-byte secret
                   </span>
                   <button
                     type="button"
                     onClick={() => setSalt(generateRandomSaltHex())}
-                    className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-brass-700 underline decoration-dotted underline-offset-2 hover:text-brass-800"
+                    className="inline-flex items-center gap-1 font-mono text-xs font-semibold text-brass-800 underline decoration-dotted underline-offset-2 hover:text-ink"
                   >
-                    <RefreshCw className="h-3 w-3" />
+                    <RefreshCw className="h-3.5 w-3.5" />
                     <span>New salt</span>
                   </button>
                 </div>
-                <div className="mt-2 truncate border border-brass-500/30 bg-paper-bright px-2.5 py-1.5 font-mono text-[10px] text-ink-soft">
+                <div className="mt-2 truncate border border-brass-500/30 bg-paper-bright px-2.5 py-1.5 font-mono text-xs text-ink-soft">
                   {salt}
                 </div>
 
                 <div className="mt-2.5 flex items-center justify-between gap-2">
-                  <label htmlFor="bond-eth-input" className="text-[11px] text-ink-muted">
-                    Reveal bond
+                  <label
+                    htmlFor="bond-eth-input"
+                    className="flex items-center gap-1 text-xs font-bold text-ink-muted"
+                  >
+                    <span>Reveal bond</span>
+                    <InfoTooltip label="Reveal bond" text={PRO_TOOLTIPS.revealBond} />
                   </label>
                   <div className="flex items-center gap-1.5">
                     <input

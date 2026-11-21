@@ -455,7 +455,12 @@ describe('FairBatch on-chain terminal', () => {
     fireEvent.click(screen.getByTestId('lp-add-submit'));
 
     await waitFor(() => {
-      expect(controller.addLiquidity).toHaveBeenCalledWith('1', '3000', 43_200);
+      expect(controller.addLiquidity).toHaveBeenCalledWith(
+        '1',
+        '3000',
+        43_200,
+        expect.any(BigInt),
+      );
     });
   });
 
