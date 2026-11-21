@@ -597,7 +597,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   !(state.phase === 'Ready' && Boolean(onSettleAndSubmitDirect))) ||
                 busyAction !== null
               }
-              className="tap-target group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-paper transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
+              className="tap-target group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <span className="font-display text-sm font-bold tracking-tight">
                 {state.phase === 'Ready' && onSettleAndSubmitDirect

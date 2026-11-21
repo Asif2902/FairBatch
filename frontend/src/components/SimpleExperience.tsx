@@ -315,7 +315,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                       href="https://metamask.io/download/"
                       target="_blank"
                       rel="noreferrer"
-                      className="tap-target inline-flex items-center justify-center gap-2 bg-vermilion-500 px-4 font-display text-sm font-bold text-paper transition hover:bg-vermilion-600"
+                      className="tap-target inline-flex items-center justify-center gap-2 bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600"
                     >
                       <span>Install MetaMask</span>
                       <ExternalLink className="h-4 w-4" />
@@ -350,7 +350,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                     data-testid="simple-switch-network-button"
                     disabled={busy}
                     onClick={() => void fb.switchNetwork()}
-                    className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-vermilion-600 disabled:opacity-50"
+                    className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50"
                   >
                     {busy ? (
                       <>
@@ -378,7 +378,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                     data-testid="simple-connect-button"
                     disabled={busy}
                     onClick={() => void fb.connect()}
-                    className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-vermilion-600 disabled:opacity-50"
+                    className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50"
                   >
                     {busy ? (
                       <>
@@ -435,7 +435,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                   data-testid="simple-faucet-button"
                   disabled={busy || !faucetReady}
                   onClick={() => void fb.claimFaucet()}
-                  className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {fb.busyAction === 'faucet' ? (
                     <>

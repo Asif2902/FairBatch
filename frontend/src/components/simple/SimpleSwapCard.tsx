@@ -374,7 +374,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
               data-testid="simple-start-next-round"
               disabled={busy}
               onClick={() => void onStartNextRound()}
-              className="tap-target shrink-0 bg-vermilion-500 px-4 font-display text-sm font-bold text-paper transition hover:bg-vermilion-600 disabled:opacity-50"
+              className="tap-target shrink-0 bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50"
             >
               {busyAction === 'settle' ? 'Starting…' : SIMPLE_COPY.readyButton}
             </button>
@@ -417,7 +417,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                     type="button"
                     disabled={busy}
                     onClick={() => void onRevealCommit(secret)}
-                    className="tap-target bg-brass-600 px-4 font-display text-sm font-bold text-paper transition hover:bg-brass-700 disabled:opacity-50"
+                    className="tap-target bg-brass-600 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-brass-700 disabled:opacity-50"
                   >
                     {busyAction === 'reveal' ? 'Revealing…' : 'Reveal now'}
                   </button>
@@ -794,7 +794,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
           type="submit"
           data-testid="simple-swap-button"
           disabled={busy || sealedBlockedInFinalizing || (Boolean(account) && !wrongNetwork && (!validAmount || insufficientBalance))}
-          className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-45"
+          className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-45"
         >
           {busy ? (
             <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />

@@ -11,7 +11,7 @@ export const FIRST_VISIT_INTRO = {
   title: 'Swap without sandwich bots',
   lines: [
     'FairBatch groups swaps into short rounds and gives everyone in the round the exact same fair price.',
-    'Because order order does not matter inside a round, front-running bots cannot squeeze your trade.',
+    'Because arrival order does not matter inside a round, front-running bots cannot squeeze your trade.',
     'You are on the Ethereum Sepolia testnet — grab free test tokens below to try a full swap in under a minute.',
   ],
 } as const;

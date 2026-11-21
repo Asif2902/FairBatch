@@ -135,7 +135,7 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
               onClick={() => onSelectViewBatch(hist.batch_id)}
               className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${
                 selectedViewBatchId === hist.batch_id
-                  ? 'border-pine-700 bg-pine-600 text-paper'
+                  ? 'border-pine-700 bg-pine-600 text-[#FBF8F0]'
                   : 'border-rule bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
               }`}
             >

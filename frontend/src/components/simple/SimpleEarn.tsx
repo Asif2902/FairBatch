@@ -522,7 +522,7 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
             type="submit"
             data-testid="simple-earn-add-button"
             disabled={busy}
-            className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busyAction === 'add-liquidity' ? (
               <>

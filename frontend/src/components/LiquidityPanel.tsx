@@ -431,7 +431,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
               type="submit"
               data-testid="lp-add-submit"
               disabled={!account || busy}
-              className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-3 py-2.5 font-display text-sm font-bold text-paper transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-3 py-2.5 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {effectiveLockSecs > 0 ? (
                 <Lock className="h-4 w-4" aria-hidden="true" />

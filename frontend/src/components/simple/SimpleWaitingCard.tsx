@@ -217,7 +217,7 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
                     type="button"
                     disabled={busy || livePhase !== 'Reveal'}
                     onClick={() => void onRevealCommit(secret)}
-                    className="tap-target inline-flex items-center gap-2 bg-brass-600 px-4 font-display text-sm font-bold text-paper transition hover:bg-brass-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="tap-target inline-flex items-center gap-2 bg-brass-600 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-brass-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Eye className="h-4 w-4" aria-hidden="true" />
                     <span>
@@ -241,7 +241,7 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
             data-testid="simple-finalize-round"
             disabled={busy}
             onClick={() => void onSettleRound()}
-            className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busyAction === 'settle' ? (
               <>

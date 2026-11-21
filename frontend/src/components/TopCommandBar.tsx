@@ -159,12 +159,12 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
     <header className="sticky top-0 z-40 h-12 border-b border-ink bg-paper-bright sm:h-14">
       <div className="mx-auto flex h-full max-w-[1560px] items-center justify-between gap-2 px-3 sm:px-4 lg:px-8">
         {/* Left: brand + Simple | Pro toggle */}
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
           <div className="flex shrink-0 items-center gap-2">
             <span className="flex h-7 w-7 items-center justify-center border border-ink bg-ink text-paper sm:h-8 sm:w-8">
               <ShieldCheck className="h-4 w-4" aria-hidden="true" />
             </span>
-            <span className="font-display text-base font-bold tracking-tight text-ink sm:text-lg">
+            <span className="hidden font-display text-base font-bold tracking-tight text-ink sm:inline sm:text-lg">
               FairBatch
             </span>
           </div>
@@ -179,7 +179,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
               data-testid="mode-simple-button"
               aria-pressed={mode === 'simple'}
               onClick={() => onModeChange('simple')}
-              className={`min-h-[32px] px-2.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
+              className={`min-h-[30px] px-2 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
                 mode === 'simple'
                   ? 'bg-ink text-paper'
                   : 'text-ink-muted hover:text-ink'
@@ -192,7 +192,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
               data-testid="mode-pro-button"
               aria-pressed={mode === 'pro'}
               onClick={() => onModeChange('pro')}
-              className={`min-h-[32px] px-2.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
+              className={`min-h-[30px] px-2 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
                 mode === 'pro'
                   ? 'bg-ink text-paper'
                   : 'text-ink-muted hover:text-ink'
@@ -267,7 +267,12 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                 ) : (
                   <span className="h-2 w-2 rounded-full bg-pine-500" />
                 )}
-                <span>{wrongNetwork ? 'Wrong network' : shortenAddress(account)}</span>
+                <span className="sm:hidden">
+                  {wrongNetwork ? 'Network' : `${account.slice(0, 4)}…${account.slice(-3)}`}
+                </span>
+                <span className="hidden sm:inline">
+                  {wrongNetwork ? 'Wrong network' : shortenAddress(account)}
+                </span>
                 <ChevronDown className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
               </button>
             )}
@@ -323,7 +328,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                       setWalletMenuOpen(false);
                       void onSwitchNetwork();
                     }}
-                    className="tap-target mt-2.5 inline-flex w-full items-center justify-center gap-2 border border-vermilion-600 bg-vermilion-500 px-3 font-sans text-xs font-bold text-paper transition hover:bg-vermilion-600"
+                    className="tap-target mt-2.5 inline-flex w-full items-center justify-center gap-2 border border-vermilion-600 bg-vermilion-500 px-3 font-sans text-xs font-bold text-[#FBF8F0] transition hover:bg-vermilion-600"
                   >
                     <AlertTriangle className="h-4 w-4" />
                     <span>Switch to Sepolia</span>

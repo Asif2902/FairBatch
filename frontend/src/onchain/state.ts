@@ -289,16 +289,27 @@ async function fetchReceipt(
 ): Promise<RawReceipt> {
   const key = receiptKey(config, batchId, orderId);
   const cached = receiptCache.get(key);
-  if (cached) return cached;
+  if (cached?.settled) return cached;
 
   const client = getPublicClient(config);
-  const raw = (await client.readContract({
-    address: config.fairBatch,
-    abi: fairBatchAbi,
-    functionName: 'getOrderReceipt',
-    args: [BigInt(batchId), BigInt(orderId)],
-  })) as unknown as RawReceipt;
-  receiptCache.set(key, raw);
+  const readOnce = async () =>
+    (await client.readContract({
+      address: config.fairBatch,
+      abi: fairBatchAbi,
+      functionName: 'getOrderReceipt',
+      args: [BigInt(batchId), BigInt(orderId)],
+    })) as unknown as RawReceipt;
+
+  let raw = await readOnce();
+  // Guard against load-balanced RPC replicas lagging 1 block behind `BatchSettled`:
+  // retry briefly and NEVER cache an unsettled receipt for a settled batch.
+  if (!raw.settled) {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    raw = await readOnce();
+  }
+  if (raw.settled) {
+    receiptCache.set(key, raw);
+  }
   return raw;
 }
 
@@ -885,7 +896,13 @@ export async function loadOnchainSnapshot(
 
     let comparison = emptyComparison(clearingPrice);
     try {
-      const simulated = computeBatchSettlement(batchId, rxBefore, ryBefore, orders);
+      const settledOrders =
+        receipts.length === orders.length
+          ? orders
+          : orders.filter((o) =>
+              receipts.some((r) => Number(r.orderId) === o.order_id),
+            );
+      const simulated = computeBatchSettlement(batchId, rxBefore, ryBefore, settledOrders);
       const signedDiff = computeSignedTraderValueDiff(
         executionReceipts,
         simulated.comparison.amm_receipts,

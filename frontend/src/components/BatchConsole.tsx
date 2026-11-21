@@ -91,10 +91,10 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
     phase === 'Open'
       ? 'border-ink bg-ink text-paper'
       : phase === 'Reveal'
-        ? 'border-brass-600 bg-brass-600 text-paper'
+        ? 'border-brass-600 bg-brass-600 text-[#FBF8F0]'
         : phase === 'Ready'
-          ? 'border-vermilion-600 bg-vermilion-500 text-paper'
-          : 'border-pine-700 bg-pine-600 text-paper';
+          ? 'border-vermilion-600 bg-vermilion-500 text-[#FBF8F0]'
+          : 'border-pine-700 bg-pine-600 text-[#FBF8F0]';
 
   return (
     <section aria-label="Batch clock and settlement console" className="ledger-panel overflow-hidden">
@@ -182,7 +182,7 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
               data-testid="settle-batch-button"
               disabled={!account || busy}
               onClick={() => void onSettle()}
-              className="tap-target inline-flex w-full items-center justify-center gap-2 border border-pine-700 bg-pine-600 px-3.5 font-display text-sm font-bold text-paper transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="tap-target inline-flex w-full items-center justify-center gap-2 border border-pine-700 bg-pine-600 px-3.5 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
               <span>

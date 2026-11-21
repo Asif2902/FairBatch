@@ -136,7 +136,7 @@ export const ClaimsPanel: React.FC<ClaimsPanelProps> = ({
                     ? 'No unclaimed receipts for the connected wallet'
                     : 'Claim every unclaimed receipt for this wallet in one transaction'
               }
-              className="inline-flex min-h-[36px] items-center gap-1.5 border border-pine-700 bg-pine-600 px-3 font-mono text-xs font-bold uppercase text-paper transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex min-h-[36px] items-center gap-1.5 border border-pine-700 bg-pine-600 px-3 font-mono text-xs font-bold uppercase text-[#FBF8F0] transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Layers className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Multicall My Claims ({myUnclaimed.length})</span>

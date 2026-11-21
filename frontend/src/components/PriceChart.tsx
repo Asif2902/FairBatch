@@ -585,7 +585,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({
             </span>
             <span
               data-testid="uniform-clearing-price-readout"
-              className="border border-vermilion-600 bg-vermilion-500 px-2 py-0.5 font-bold text-paper"
+              className="border border-vermilion-600 bg-vermilion-500 px-2 py-0.5 font-bold text-[#FBF8F0]"
             >
               ${formatPrice(settlement.clearing_price, 2)} {quoteSymbol}/{baseSymbol}
             </span>

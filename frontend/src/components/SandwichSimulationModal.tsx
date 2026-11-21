@@ -77,7 +77,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
       >
         <div className="flex items-start justify-between gap-4 border-b-2 border-ink bg-paper px-5 py-4">
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-ink bg-plum-600 text-paper">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-ink bg-plum-600 text-[#FBF8F0]">
               <FlaskConical className="h-5 w-5" aria-hidden="true" />
             </div>
             <div>
@@ -126,7 +126,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                   }}
                   className={`tap-target border font-sans text-xs font-bold transition ${
                     side === 'SellBase'
-                      ? 'border-vermilion-600 bg-vermilion-500 text-paper'
+                      ? 'border-vermilion-600 bg-vermilion-500 text-[#FBF8F0]'
                       : 'border-rule-strong bg-paper-bright text-ink-soft'
                   }`}
                 >
@@ -141,7 +141,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                   }}
                   className={`tap-target border font-sans text-xs font-bold transition ${
                     side === 'BuyBase'
-                      ? 'border-pine-700 bg-pine-600 text-paper'
+                      ? 'border-pine-700 bg-pine-600 text-[#FBF8F0]'
                       : 'border-rule-strong bg-paper-bright text-ink-soft'
                   }`}
                 >

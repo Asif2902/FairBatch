@@ -222,7 +222,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
           data-testid="simple-collect-button"
           disabled={busy}
           onClick={() => void handleCollect()}
-          className="tap-target inline-flex w-full items-center justify-center gap-2 bg-pine-600 px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="tap-target inline-flex w-full items-center justify-center gap-2 bg-pine-600 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? (
             <>
