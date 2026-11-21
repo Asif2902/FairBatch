@@ -261,18 +261,59 @@ function makeController(
   } as unknown as FairBatchController;
 }
 
-vi.mock('../onchain/useFairBatch', () => ({
-  useFairBatch: () => controller,
-}));
+vi.mock('../onchain/useFairBatch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../onchain/useFairBatch')>();
+  return {
+    ...actual,
+    useFairBatch: () => controller,
+  };
+});
 
 describe('FairBatch on-chain terminal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    try {
+      localStorage.clear();
+    } catch {
+      // ignore if unavailable
+    }
     controller = makeController();
   });
 
+  function renderPro() {
+    const view = render(<App />);
+    fireEvent.click(screen.getByTestId('mode-pro-button'));
+    return view;
+  }
+
+  it('defaults to Simple mode with progress strip, plain swap card, and Ready-round banner', async () => {
+    controller = makeController({
+      account: ALICE,
+      snapshot: makeSnapshot('Ready', ALICE),
+    });
+    const { rerender } = render(<App />);
+
+    expect(screen.getByTestId('mode-simple-button')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('simple-progress-strip')).toBeInTheDocument();
+    // Alice has an unclaimed receipt in CLAIMS -> Step 4 Collect card is shown first
+    expect(screen.getByTestId('simple-collect-card')).toBeInTheDocument();
+
+    // Without unclaimed receipts, Alice sees the Ready banner & Swap card
+    const cleanSnap = makeSnapshot('Ready', ALICE);
+    cleanSnap.claimable = [];
+    cleanSnap.orders = [];
+    cleanSnap.state.orders = [];
+    cleanSnap.commitments = [];
+    controller = makeController({ account: ALICE, snapshot: cleanSnap });
+    rerender(<App />);
+    expect(screen.getByTestId('simple-ready-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('simple-swap-button')).toHaveTextContent(
+      /Start next round & Swap/i,
+    );
+  });
+
   it('renders the live batch, reserves and clearing preview from chain snapshot', () => {
-    render(<App />);
+    renderPro();
     const settlement = computeBatchSettlement(BATCH_ID, 100, 300_000, ORDERS);
 
     expect(screen.getByTestId('batch-id-badge')).toHaveTextContent(
@@ -298,7 +339,7 @@ describe('FairBatch on-chain terminal', () => {
       account: ALICE,
       snapshot: makeSnapshot('Ready', ALICE),
     });
-    render(<App />);
+    renderPro();
 
     const settleButton = screen.getByTestId('settle-batch-button');
     expect(settleButton).not.toBeDisabled();
@@ -310,7 +351,7 @@ describe('FairBatch on-chain terminal', () => {
   });
 
   it('keeps settlement locked while the commit window is still open', () => {
-    render(<App />);
+    renderPro();
     expect(screen.queryByTestId('settle-batch-button')).not.toBeInTheDocument();
     expect(
       screen.getByText(/Settlement opens after the reveal window/i),
@@ -319,7 +360,7 @@ describe('FairBatch on-chain terminal', () => {
 
   it('submits a sealed commitment through the connected wallet', async () => {
     controller = makeController({ account: ALICE });
-    render(<App />);
+    renderPro();
 
     fireEvent.click(screen.getByRole('tab', { name: /Commit-Reveal/i }));
     fireEvent.click(
@@ -344,7 +385,7 @@ describe('FairBatch on-chain terminal', () => {
 
   it('lets only the connected owner claim settled receipts', async () => {
     controller = makeController({ account: ALICE });
-    render(<App />);
+    renderPro();
 
     expect(screen.getByText('Other wallet')).toBeInTheDocument();
     expect(
@@ -370,7 +411,7 @@ describe('FairBatch on-chain terminal', () => {
 
   it('claims 1 fWETH + 100 fUSDC from the Sepolia faucet and enforces cooldown display', async () => {
     controller = makeController({ account: ALICE });
-    const { rerender } = render(<App />);
+    const { rerender } = renderPro();
 
     const claimBtn = screen.getByTestId('faucet-claim-button');
     expect(claimBtn).toBeEnabled();
@@ -405,7 +446,7 @@ describe('FairBatch on-chain terminal', () => {
         },
       }),
     });
-    render(<App />);
+    renderPro();
 
     expect(screen.getByTestId('lp-lock-banner')).toHaveTextContent(/40\.00 shares locked/i);
     expect(screen.getByTestId('lp-lock-banner')).toHaveTextContent(/60\.00 withdrawable now/i);
@@ -419,7 +460,7 @@ describe('FairBatch on-chain terminal', () => {
   });
 
   it('renders the read-only Sepolia deployment modal from config/deployment.json with no local fork controls', () => {
-    render(<App />);
+    renderPro();
 
     fireEvent.click(screen.getByTestId('header-more-menu'));
     fireEvent.click(

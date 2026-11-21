@@ -11,6 +11,7 @@ import type { ClaimableDto, LocalSecretVaultEntry } from './types';
 import { explorerTxUrl } from './onchain/config';
 import { useFairBatch } from './onchain/useFairBatch';
 import { TopCommandBar, type UiMode } from './components/TopCommandBar';
+import { SimpleExperience } from './components/SimpleExperience';
 import { ProStatsRow } from './components/ProStatsRow';
 import { AccountPanel } from './components/AccountPanel';
 import { BatchConsole } from './components/BatchConsole';
@@ -39,8 +40,7 @@ function readInitialMode(defaultMode: UiMode): UiMode {
 
 export const App: React.FC = () => {
   const fb = useFairBatch();
-  // Commit 3 adds SimpleExperience and switches defaultMode to 'simple'.
-  const [mode, setMode] = useState<UiMode>(() => readInitialMode('pro'));
+  const [mode, setMode] = useState<UiMode>(() => readInitialMode('simple'));
   const [selectedViewBatchId, setSelectedViewBatchId] = useState<number | 'live'>('live');
   const [isContractModalOpen, setIsContractModalOpen] = useState<boolean>(false);
   const [isFeModalOpen, setIsFeModalOpen] = useState<boolean>(false);
@@ -221,7 +221,14 @@ export const App: React.FC = () => {
           </section>
         )}
 
-        {snapshot && state && displayedSettlement && (
+        {snapshot && state && displayedSettlement && mode === 'simple' && (
+          <SimpleExperience
+            controller={fb}
+            onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
+          />
+        )}
+
+        {snapshot && state && displayedSettlement && mode === 'pro' && (
           <>
             <ProStatsRow
               config={fb.config}
