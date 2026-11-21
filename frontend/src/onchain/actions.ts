@@ -191,20 +191,35 @@ async function approveToken(
   });
   onStatus?.(`Waiting for ${symbol ?? 'token'} approval…`);
   await waitForSuccess(config, hash, onStatus);
-  // Wait briefly for load-balanced RPC replicas to reflect the new allowance.
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const visible = await client
-      .readContract({
-        address: token,
-        abi: erc20Abi,
-        functionName: 'allowance',
-        args: [account, spender],
-      })
-      .catch(() => 0n);
-    if (visible >= amount) break;
-    await new Promise((resolve) => setTimeout(resolve, 900));
-  }
   return hash;
+}
+
+/**
+ * Retries `fn` briefly if a wallet's RPC replica lags 1 block behind a just-mined
+ * `approve()` transaction and throws a transient `Insufficient allowance` during gas estimation.
+ */
+async function withPostApproveRetry<T>(
+  justApproved: boolean,
+  fn: () => Promise<T>,
+  onStatus?: StatusReporter,
+): Promise<T> {
+  if (!justApproved) return fn();
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Insufficient allowance') && attempt < 2) {
+        onStatus?.('Syncing token approval across Sepolia nodes…');
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
 }
 
 export async function ensureInputAllowance(
@@ -282,14 +297,19 @@ export async function submitDirectOrder(
       : 'Sending your order…',
   );
   const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
-    address: config.fairBatch,
-    abi: fairBatchAbi,
-    functionName: 'submitDirectOrder',
-    args: [sideU8(params.side), amountRaw, limitRaw],
-    account,
-    chain: getChain(config),
-  });
+  const hash = await withPostApproveRetry(
+    Boolean(approved),
+    () =>
+      wallet.writeContract({
+        address: config.fairBatch,
+        abi: fairBatchAbi,
+        functionName: 'submitDirectOrder',
+        args: [sideU8(params.side), amountRaw, limitRaw],
+        account,
+        chain: getChain(config),
+      }),
+    onStatus,
+  );
   onStatus?.('Confirming your order on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderSubmitted');
@@ -329,23 +349,6 @@ export async function settleAndSubmitDirect(
 
   const client = getPublicClient(config);
 
-  // If approval just mined, give load-balanced Sepolia RPC replicas a brief moment
-  // so `allowance` is visible on whichever replica handles eth_estimateGas.
-  if (approved) {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const seenAllowance = await client
-        .readContract({
-          address: inputToken(config, params.side),
-          abi: erc20Abi,
-          functionName: 'allowance',
-          args: [account, config.fairBatch],
-        })
-        .catch(() => 0n);
-      if (seenAllowance >= amountRaw) break;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-  }
-
   // Only skip `settleBatch()` if another caller already settled this round into `Open`.
   let stillNeedsSettle = true;
   try {
@@ -371,14 +374,19 @@ export async function settleAndSubmitDirect(
       : 'Starting next round & sending your order in one transaction…',
   );
   const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
-    address: config.fairBatch,
-    abi: fairBatchAbi,
-    functionName: 'multicall',
-    args: [calls],
-    account,
-    chain: getChain(config),
-  });
+  const hash = await withPostApproveRetry(
+    Boolean(approved),
+    () =>
+      wallet.writeContract({
+        address: config.fairBatch,
+        abi: fairBatchAbi,
+        functionName: 'multicall',
+        args: [calls],
+        account,
+        chain: getChain(config),
+      }),
+    onStatus,
+  );
   onStatus?.('Confirming new round & order on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
   const orderEvents = decodeEvents(receipt, 'OrderSubmitted');
@@ -604,25 +612,30 @@ export async function submitSignedIntent(
       : 'Submitting signed order to the current round…',
   );
   const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
-    address: config.fairBatch,
-    abi: fairBatchAbi,
-    functionName: 'submitSignedIntent',
-    args: [
-      {
-        trader: getAddress(artifact.trader),
-        side: sideU8(artifact.side),
-        amountIn: amountRaw,
-        limitPrice: limitRaw,
-        batchId: BigInt(artifact.batch_id),
-        nonce: BigInt(artifact.nonce),
-        deadline: BigInt(artifact.deadline),
-      },
-      artifact.signature as `0x${string}`,
-    ],
-    account,
-    chain: getChain(config),
-  });
+  const hash = await withPostApproveRetry(
+    Boolean(approved),
+    () =>
+      wallet.writeContract({
+        address: config.fairBatch,
+        abi: fairBatchAbi,
+        functionName: 'submitSignedIntent',
+        args: [
+          {
+            trader: getAddress(artifact.trader),
+            side: sideU8(artifact.side),
+            amountIn: amountRaw,
+            limitPrice: limitRaw,
+            batchId: BigInt(artifact.batch_id),
+            nonce: BigInt(artifact.nonce),
+            deadline: BigInt(artifact.deadline),
+          },
+          artifact.signature as `0x${string}`,
+        ],
+        account,
+        chain: getChain(config),
+      }),
+    onStatus,
+  );
   onStatus?.('Confirming signed order on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderSubmitted');
