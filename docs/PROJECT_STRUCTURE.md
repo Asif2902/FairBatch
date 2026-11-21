@@ -45,7 +45,7 @@ FairBatch/
 │       ├── onchain/                     # viem client, ABI, event indexer, snapshot builder, tx actions & secret vault
 │       ├── components/                  # OrderTicket, LiquidityPanel, BatchConsole, ClaimsPanel, PriceChart, AccountPanel...
 │       ├── lib/                         # Pure TS clearing helpers, formatting & keccak
-│       └── __tests__/                   # 17 Vitest unit & component tests
+│       └── __tests__/                   # 35 Vitest unit & component tests
 │
 ├── backend/                             # Optional Off-Chain Rust Reference Solver & MEV Comparison Tool (Not Core Contribution)
 │   ├── README.md                        # Scope note & reference test commands
@@ -61,7 +61,8 @@ FairBatch/
 └── docs/                                # Engineering & Visual Design Documentation
     ├── PROJECT_STRUCTURE.md             # This file
     ├── RESEARCH_AND_FEASIBILITY.md      # Mathematical proofs (T1–T5) & Cancun EVM opcode analysis
-    └── design/                          # Clearing Ledger design philosophy & visual specimens
+    ├── design/                          # Clearing Ledger design philosophy & visual specimens
+    └── screenshots/                     # Simple, Ready, Waiting, Result, Earn, Pro & 380px mobile captures
 ```
 
 ---
@@ -118,7 +119,7 @@ Recorded in [`config/deployment.json`](../config/deployment.json) and [`deployme
 | **`fUSDC` (`6` decimals)** | `0xbd2c54af6dd7e5e14d5b97d393eb2c8e2e8ebcca` | `0xd15e031b8141c028dcefdaeecbb2dce1366c976dca004b0f9a11ab290aba0fbe` | `12176750` | `2,676,774` | [View Token](https://sepolia.etherscan.io/address/0xbd2c54af6dd7e5e14d5b97d393eb2c8e2e8ebcca) |
 | **`FairBatch` Exchange** | `0x6fa21b7ada82e8b04fca51fdc60793c3fd80265f` | `0x6ed5ad0144aedeb3c5cd4e5d91d54ccda9d2d8b58d64a5467e757573d8c9ff91` | `12176751` | `36,300,761` | [View Contract](https://sepolia.etherscan.io/address/0x6fa21b7ada82e8b04fca51fdc60793c3fd80265f) |
 | **`Faucet` (`1 fWETH + 100 fUSDC / 12h`)** | `0xe355220e8e9a650d082d49f130f0bfe344a792c7` | `0x8a2886ba04e1986c8257011ab23f596808d704374acd5f1753d0ad0238078b48` | `12176752` | `2,294,323` | [View Faucet](https://sepolia.etherscan.io/address/0xe355220e8e9a650d082d49f130f0bfe344a792c7) |
-| **`seedReserves(100e18, 300000e6)`** | `R_x = 100 fWETH`, `R_y = 300,000 fUSDC` | `0xfd3f9db3779324372d0b3d3e1dcc79e3a82fa88f930ac5203c9ec931aff12065` | `Mined` | `811,614` | [View Seed Tx](https://sepolia.etherscan.io/tx/0xfd3f9db3779324372d0b3d3e1dcc79e3a82fa88f930ac5203c9ec931aff12065) |
+| **`seedReserves(100e18, 300000e6)`** | `R_x = 100 fWETH`, `R_y = 300,000 fUSDC` | `0xfd3f9db3779324372d0b3d3e1dcc79e3a82fa88f930ac5203c9ec931aff12065` | `12176759` | `811,614` | [View Seed Tx](https://sepolia.etherscan.io/tx/0xfd3f9db3779324372d0b3d3e1dcc79e3a82fa88f930ac5203c9ec931aff12065) |
 
 - **Deployer Account:** [`0x7d9Cb2994D86B6a4e65761B5d81DADa69ce54a7f`](https://sepolia.etherscan.io/address/0x7d9Cb2994D86B6a4e65761B5d81DADa69ce54a7f)
 - **Verified `domainSeparator()`:** `0x5f0204041a131fe55ebf032359d28559fb9d9caeddf81c37e11fcb05fc6c8ef5` (`23,038` deployed runtime bytes)
