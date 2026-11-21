@@ -126,9 +126,10 @@ flowchart TB
 | [`deployments/sepolia.json`](./deployments/sepolia.json) | Full Sepolia deployment manifest with tx hashes, block numbers, gas usage, and Etherscan links. |
 | [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**41 Vitest tests**). |
 | [`keeper/`](./keeper) | **Optional** TypeScript + `viem` permissionless settlement keeper (`5s` grace, empty-round throttle), slasher (`60s` grace), and EIP-712 intent relayer (`POST /relay/intent`) (**10 Vitest tests**, see [`keeper/README.md`](./keeper/README.md)). |
+| [`deploy.sh`](./deploy.sh) & [`deploy/`](./deploy) | One-script Ubuntu 22.04/24.04 & Debian 12 server deployment (Caddy HTTPS + same-origin `/keeper/*` proxy, hardened systemd keeper, atomic releases, rollback & DNS wizard — see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)). |
 | [`backend/`](./backend) | Optional Rust reference solver & sequential-AMM MEV simulator (**30 Cargo tests**, see [`backend/README.md`](./backend/README.md)). |
 | [`scripts/`](./scripts) | PowerShell deployment and verification scripts (`deploy_sepolia.ps1`, `prepare_deployment.ps1`, `check_setup.ps1`). |
-| [`docs/`](./docs) | [`PROJECT_STRUCTURE.md`](./docs/PROJECT_STRUCTURE.md), [`RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`design/CLEARING_LEDGER.md`](./docs/design/CLEARING_LEDGER.md), and [`screenshots/`](./docs/screenshots). |
+| [`docs/`](./docs) | [`DEPLOYMENT.md`](./docs/DEPLOYMENT.md), [`PROJECT_STRUCTURE.md`](./docs/PROJECT_STRUCTURE.md), [`RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`design/CLEARING_LEDGER.md`](./docs/design/CLEARING_LEDGER.md), and [`screenshots/`](./docs/screenshots). |
 
 ---
 
@@ -205,6 +206,8 @@ npm run dry-run   # Safe read-only mode against Sepolia (no private key required
 ```
 
 To connect the frontend to a local or hosted keeper, start the frontend with `VITE_KEEPER_URL=http://localhost:3002 npm run dev`.
+
+For one-script production VPS deployment (Ubuntu 22.04/24.04 or Debian 12 with Caddy HTTPS, same-origin `/keeper/*` proxy, hardened systemd unit, and atomic `--update` / `--rollback`), run `./deploy.sh` and see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
 
 ### 5. Optional Off-Chain Rust Reference Verifier (`backend/`)
 

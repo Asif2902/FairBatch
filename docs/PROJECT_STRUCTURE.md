@@ -53,6 +53,15 @@ FairBatch/
 │   ├── .env.example                     # Safe env template (empty KEEPER_PRIVATE_KEY)
 │   └── src/                             # config.ts, decision.ts, service.ts, relayer.ts, abi.ts, index.ts & 10 Vitest tests
 │
+├── deploy.sh                            # One-script Ubuntu 22.04/24.04 & Debian 12 server deployer (Caddy + systemd + DNS wizard)
+├── deploy/                              # Server deployment templates, stdin address helper & Bash unit/E2E tests
+│   ├── env.example                      # Production /etc/fairbatch/fairbatch.env template (# REQUIRED annotations)
+│   ├── Caddyfile.ip.tmpl                # HTTP IP-mode Caddy template (same-origin /keeper/* proxy + SPA /docs fallback)
+│   ├── Caddyfile.domain.tmpl            # Automatic HTTPS domain Caddy template (+ optional www 308 redirect)
+│   ├── fairbatch-keeper.service.tmpl    # Hardened systemd unit (NoNewPrivileges, ProtectSystem=strict, 127.0.0.1)
+│   ├── lib/derive_address.mjs           # Zero-dep stdin -> EIP-55 public address deriver (never exposes key in ps/argv)
+│   └── tests/test_deploy.sh             # Pure Bash unit tests + mocked Ubuntu 24.04 E2E flow
+│
 ├── backend/                             # Optional Off-Chain Rust Reference Solver & MEV Comparison Tool (Not Core Contribution)
 │   ├── README.md                        # Scope note & reference test commands
 │   ├── Cargo.toml                       # `fairbatch-backend` crate
@@ -65,6 +74,7 @@ FairBatch/
 │   └── deploy_sepolia.ps1               # Sepolia deployer (`-DryRun` & live broadcast) with pure-C# EIP-1559 + Keccak-256
 │
 └── docs/                                # Engineering & Visual Design Documentation
+    ├── DEPLOYMENT.md                    # Server deployment guide (deploy.sh, DNS/Cloudflare, rollback, security)
     ├── PROJECT_STRUCTURE.md             # This file
     ├── RESEARCH_AND_FEASIBILITY.md      # Mathematical proofs (T1–T5) & Cancun EVM opcode analysis
     ├── design/                          # Clearing Ledger design philosophy & visual specimens
