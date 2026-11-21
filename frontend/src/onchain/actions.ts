@@ -191,6 +191,19 @@ async function approveToken(
   });
   onStatus?.(`Waiting for ${symbol ?? 'token'} approval…`);
   await waitForSuccess(config, hash, onStatus);
+  // Wait briefly for load-balanced RPC replicas to reflect the new allowance.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const visible = await client
+      .readContract({
+        address: token,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [account, spender],
+      })
+      .catch(() => 0n);
+    if (visible >= amount) break;
+    await new Promise((resolve) => setTimeout(resolve, 900));
+  }
   return hash;
 }
 
@@ -315,31 +328,40 @@ export async function settleAndSubmitDirect(
   ];
 
   const client = getPublicClient(config);
-  let canMulticall = true;
-  try {
-    await client.simulateContract({
-      address: config.fairBatch,
-      abi: fairBatchAbi,
-      functionName: 'multicall',
-      args: [calls],
-      account,
-    });
-  } catch (simErr) {
-    const msg = simErr instanceof Error ? simErr.message : '';
-    // If another caller already started the next round, submit directly into it.
-    if (
-      msg.includes('Reveal window still active') ||
-      msg.includes('Batch already settled') ||
-      msg.includes('Commit window')
-    ) {
-      canMulticall = false;
-    } else {
-      // Otherwise let multicall or direct surface the real revert cleanly
-      canMulticall = false;
+
+  // If approval just mined, give load-balanced Sepolia RPC replicas a brief moment
+  // so `allowance` is visible on whichever replica handles eth_estimateGas.
+  if (approved) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const seenAllowance = await client
+        .readContract({
+          address: inputToken(config, params.side),
+          abi: erc20Abi,
+          functionName: 'allowance',
+          args: [account, config.fairBatch],
+        })
+        .catch(() => 0n);
+      if (seenAllowance >= amountRaw) break;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
   }
 
-  if (!canMulticall) {
+  // Only skip `settleBatch()` if another caller already settled this round into `Open`.
+  let stillNeedsSettle = true;
+  try {
+    const freshBatch = (await client.readContract({
+      address: config.fairBatch,
+      abi: fairBatchAbi,
+      functionName: 'currentBatch',
+    })) as { phase: number };
+    if (freshBatch.phase === 0) {
+      stillNeedsSettle = false;
+    }
+  } catch {
+    // Keep multicall path if read fails
+  }
+
+  if (!stillNeedsSettle) {
     return submitDirectOrder(config, account, params, onStatus);
   }
 
