@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownUp,
   CheckCircle2,
@@ -10,6 +10,7 @@ import {
   Send,
   ShieldAlert,
 } from 'lucide-react';
+import { formatUnits } from 'viem';
 import type {
   LocalSecretVaultEntry,
   OrderSide,
@@ -17,6 +18,7 @@ import type {
   StateResponse,
 } from '../types';
 import type { RuntimeConfig } from '../onchain/config';
+import type { WalletBalances } from '../onchain/state';
 import { computeBatchSettlement } from '../lib/clearingMath';
 import {
   computeLocalCommitmentHash,
@@ -32,6 +34,7 @@ interface OrderTicketProps {
   state: StateResponse;
   config: RuntimeConfig;
   account: string | null;
+  balances?: WalletBalances | null;
   localSecrets: LocalSecretVaultEntry[];
   busyAction: string | null;
   minBondWei: bigint;
@@ -66,6 +69,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   state,
   config,
   account,
+  balances = null,
   localSecrets,
   busyAction,
   minBondWei,
@@ -98,6 +102,29 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const amountNum = Number.parseFloat(amountInput) || 0;
   const limitPriceNum = Number.parseFloat(limitPriceInput) || 0;
   const bondEthNum = Number.parseFloat(bondEthInput) || 0.001;
+
+  const baseBalanceHuman = balances ? Number(formatUnits(balances.base, config.baseDecimals)) : 0;
+  const quoteBalanceHuman = balances ? Number(formatUnits(balances.quote, config.quoteDecimals)) : 0;
+  const ethBalanceHuman = balances ? Number(formatUnits(balances.eth, 18)) : 0;
+  const activePayBalance = side === 'SellBase' ? baseBalanceHuman : quoteBalanceHuman;
+  const activePaySymbol = side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
+
+  useEffect(() => {
+    if (!localFeedback) return;
+    const timer = window.setTimeout(() => setLocalFeedback(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [localFeedback]);
+
+  const handleSetMax = () => {
+    if (activePayBalance <= 0) return;
+    const maxDecimals = side === 'SellBase' ? 4 : 2;
+    const formatted = activePayBalance
+      .toFixed(maxDecimals)
+      .replace(/(\.\d*?)0+$/, '$1')
+      .replace(/\.$/, '');
+    setAmountInput(formatted);
+    setSignedArtifact(null);
+  };
 
   const traderLabel = account ? shortenAddress(account) : 'Wallet not connected';
 
@@ -468,11 +495,32 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
 
         {/* Amount */}
         <div>
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
             <label htmlFor="ticket-amount-input" className="eyebrow">
               You pay
             </label>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span
+                data-testid="order-ticket-balance"
+                className="font-mono text-[11px] text-ink-muted tabular-nums"
+              >
+                Balance:{' '}
+                <strong className="text-ink">
+                  {side === 'SellBase'
+                    ? formatToken(activePayBalance, 4)
+                    : formatPrice(activePayBalance, 2)}{' '}
+                  {activePaySymbol}
+                </strong>
+              </span>
+              <button
+                type="button"
+                data-testid="order-ticket-max"
+                onClick={handleSetMax}
+                disabled={activePayBalance <= 0}
+                className="border border-rule-strong bg-paper-bright px-1.5 py-0.5 font-mono text-[10px] font-bold text-vermilion-700 transition hover:border-vermilion-600 disabled:opacity-40"
+              >
+                Max
+              </button>
               {(side === 'SellBase'
                 ? ['1.0', '2.5', '5.0']
                 : ['3000', '7500', '15000']
@@ -636,14 +684,22 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   {salt}
                 </div>
 
-                <div className="mt-2.5 flex items-center justify-between gap-2">
-                  <label
-                    htmlFor="bond-eth-input"
-                    className="flex items-center gap-1 text-xs font-bold text-ink-muted"
-                  >
-                    <span>Reveal bond</span>
-                    <InfoTooltip label="Reveal bond" text={PRO_TOOLTIPS.revealBond} />
-                  </label>
+                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <label
+                      htmlFor="bond-eth-input"
+                      className="flex items-center gap-1 text-xs font-bold text-ink-muted"
+                    >
+                      <span>Reveal bond (min 0.0001 ETH)</span>
+                      <InfoTooltip label="Reveal bond" text={PRO_TOOLTIPS.revealBond} />
+                    </label>
+                    <div
+                      data-testid="order-ticket-eth-balance"
+                      className="mt-0.5 font-mono text-[10px] text-ink-muted tabular-nums"
+                    >
+                      ETH Balance: <strong className="text-ink">{formatToken(ethBalanceHuman, 4)} ETH</strong>
+                    </div>
+                  </div>
                   <div className="flex items-center gap-1.5">
                     <input
                       id="bond-eth-input"

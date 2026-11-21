@@ -87,6 +87,8 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   const ry = human(reserves.reserveQuote, config.quoteDecimals);
   const totalShares = human(reserves.totalShares, 18);
   const userShares = human(balances?.lpShares ?? 0n, 18);
+  const baseBal = balances ? human(balances.base, config.baseDecimals) : 0;
+  const quoteBal = balances ? human(balances.quote, config.quoteDecimals) : 0;
   const spot = rx > 0 ? ry / rx : 0;
   const poolSharePct = totalShares > 0 ? (userShares / totalShares) * 100 : 0;
 
@@ -215,9 +217,8 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
             type="button"
             onClick={() => setMode('add')}
             aria-pressed={mode === 'add'}
-            className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase transition ${
-              mode === 'add' ? 'bg-ink text-paper' : 'text-ink-muted hover:text-ink'
-            }`}
+            className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase transition ${mode === 'add' ? 'bg-ink text-paper' : 'text-ink-muted hover:text-ink'
+              }`}
           >
             Add
           </button>
@@ -225,9 +226,8 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
             type="button"
             onClick={() => setMode('remove')}
             aria-pressed={mode === 'remove'}
-            className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase transition ${
-              mode === 'remove' ? 'bg-ink text-paper' : 'text-ink-muted hover:text-ink'
-            }`}
+            className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase transition ${mode === 'remove' ? 'bg-ink text-paper' : 'text-ink-muted hover:text-ink'
+              }`}
           >
             Remove
           </button>
@@ -292,9 +292,26 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
           <form onSubmit={handleAdd} className="space-y-3">
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="ledger-inset px-3 py-2">
-                <label htmlFor="lp-base-input" className="eyebrow block">
-                  {config.baseSymbol} deposit
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <label htmlFor="lp-base-input" className="eyebrow block">
+                    {config.baseSymbol} deposit
+                  </label>
+                  <div className="flex items-center gap-1.5 font-mono text-[10px] text-ink-muted tabular-nums">
+                    <span data-testid="lp-add-base-balance">
+                      Balance: <strong className="text-ink">{formatToken(baseBal, 4)}</strong>
+                    </span>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      data-testid="lp-add-base-max"
+                      disabled={baseBal <= 0}
+                      onClick={() => setBaseInput(trimAmount(baseBal, 4))}
+                      className="font-bold text-plum-700 underline decoration-dotted hover:text-ink disabled:opacity-40"
+                    >
+                      Max
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-1 flex items-baseline gap-1.5">
                   <input
                     id="lp-base-input"
@@ -311,9 +328,26 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                 </div>
               </div>
               <div className="ledger-inset px-3 py-2">
-                <label htmlFor="lp-quote-input" className="eyebrow block">
-                  {config.quoteSymbol} deposit
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <label htmlFor="lp-quote-input" className="eyebrow block">
+                    {config.quoteSymbol} deposit
+                  </label>
+                  <div className="flex items-center gap-1.5 font-mono text-[10px] text-ink-muted tabular-nums">
+                    <span data-testid="lp-add-quote-balance">
+                      Balance: <strong className="text-ink">{formatPrice(quoteBal, 2)}</strong>
+                    </span>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      data-testid="lp-add-quote-max"
+                      disabled={quoteBal <= 0}
+                      onClick={() => setQuoteInput(trimAmount(quoteBal, 2))}
+                      className="font-bold text-plum-700 underline decoration-dotted hover:text-ink disabled:opacity-40"
+                    >
+                      Max
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-1 flex items-baseline gap-1.5">
                   <input
                     id="lp-quote-input"
@@ -365,13 +399,12 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                           setLockDurationSecs(preset.seconds);
                         }
                       }}
-                      className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${
-                        selected
-                          ? preset.seconds !== 0
-                            ? 'border-brass-700 bg-brass-600 text-paper'
-                            : 'border-ink bg-ink text-paper'
-                          : 'border-rule-strong bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
-                      }`}
+                      className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${selected
+                        ? preset.seconds !== 0
+                          ? 'border-brass-700 bg-brass-600 text-paper'
+                          : 'border-ink bg-ink text-paper'
+                        : 'border-rule-strong bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
+                        }`}
                     >
                       {preset.label}
                     </button>
@@ -456,17 +489,31 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
         ) : (
           <form onSubmit={handleRemove} className="space-y-3">
             <div className="ledger-inset px-3 py-2">
-              <div className="flex items-baseline justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <label htmlFor="lp-shares-input" className="eyebrow">
                   LP shares to burn
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setSharesInput(trimAmount(unlockedShares, 18))}
-                  className="font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-plum-700 underline decoration-dotted underline-offset-2"
+                <div
+                  data-testid="lp-remove-shares-balance"
+                  className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-ink-muted tabular-nums"
                 >
-                  Max unlocked ({formatToken(unlockedShares, 2)})
-                </button>
+                  <span>
+                    Balance: <strong className="text-ink">{formatToken(userShares, 2)}</strong>
+                  </span>
+                  <span>·</span>
+                  <span>
+                    Unlocked: <strong className="text-ink">{formatToken(unlockedShares, 2)}</strong>
+                  </span>
+                  <span>·</span>
+                  <button
+                    type="button"
+                    data-testid="lp-remove-max-unlocked"
+                    onClick={() => setSharesInput(trimAmount(unlockedShares, 18))}
+                    className="font-bold uppercase tracking-[0.06em] text-plum-700 underline decoration-dotted underline-offset-2"
+                  >
+                    Max unlocked ({formatToken(unlockedShares, 2)})
+                  </button>
+                </div>
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
                 <input
@@ -493,9 +540,9 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
               <span className="text-right font-mono font-bold text-ink tabular-nums">
                 {removePreview
                   ? `${formatToken(removePreview.base, 3)} ${config.baseSymbol} + ${formatPrice(
-                      removePreview.quote,
-                      2,
-                    )} ${config.quoteSymbol}`
+                    removePreview.quote,
+                    2,
+                  )} ${config.quoteSymbol}`
                   : '—'}
               </span>
             </div>

@@ -1,5 +1,5 @@
-import React from 'react';
-import { ExternalLink } from 'lucide-react';
+import React, { useState } from 'react';
+import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import type { BatchPhase, StateResponse } from '../types';
 import type { RawBatchInfo } from '../onchain/state';
 import { explorerAddressUrl, type RuntimeConfig } from '../onchain/config';
@@ -34,6 +34,8 @@ export const ProStatsRow: React.FC<ProStatsRowProps> = ({
   wrongNetwork,
   loading,
 }) => {
+  const [showDetails, setShowDetails] = useState(false);
+
   const connectionLabel = loading
     ? 'Syncing on-chain ledger'
     : wrongNetwork
@@ -47,9 +49,9 @@ export const ProStatsRow: React.FC<ProStatsRowProps> = ({
   return (
     <section
       aria-label="Pool reserves and batch overview"
-      className="mb-5 border border-rule bg-paper-bright shadow-slip"
+      className="mb-4 border border-rule bg-paper-bright shadow-slip"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule bg-paper-soft px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 sm:px-4">
         <div className="flex flex-wrap items-center gap-2">
           <span
             data-testid="batch-id-badge"
@@ -67,6 +69,30 @@ export const ProStatsRow: React.FC<ProStatsRowProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1 border border-rule bg-paper-soft px-2 py-0.5 font-mono text-xs tabular-nums">
+            <span className="text-ink-muted">R_x:</span>
+            <strong data-testid="reserve-rx" className="text-ink">
+              {formatToken(state.reserves.rx, 2)} {config.baseSymbol}
+            </strong>
+            <InfoTooltip label="Reserve R_x" text={PRO_TOOLTIPS.rx} />
+          </span>
+
+          <span className="inline-flex items-center gap-1 border border-rule bg-paper-soft px-2 py-0.5 font-mono text-xs tabular-nums">
+            <span className="text-ink-muted">R_y:</span>
+            <strong data-testid="reserve-ry" className="text-ink">
+              {formatPrice(state.reserves.ry, 0)} {config.quoteSymbol}
+            </strong>
+            <InfoTooltip label="Reserve R_y" text={PRO_TOOLTIPS.ry} />
+          </span>
+
+          <span className="inline-flex items-center gap-1 border border-rule bg-paper-soft px-2 py-0.5 font-mono text-xs tabular-nums">
+            <span className="text-ink-muted">Spot:</span>
+            <strong data-testid="pool-spot-price" className="text-vermilion-700">
+              ${formatPrice(state.reserves.spot_price, 2)}
+            </strong>
+            <InfoTooltip label="Pool Spot" text={PRO_TOOLTIPS.spot} />
+          </span>
+
           <span
             data-testid="connection-status-badge"
             className={`inline-flex items-center gap-1.5 border px-2 py-0.5 font-mono text-xs font-bold ${
@@ -101,59 +127,68 @@ export const ProStatsRow: React.FC<ProStatsRowProps> = ({
               <ExternalLink className="h-3 w-3" aria-hidden="true" />
             </a>
           )}
+
+          <button
+            type="button"
+            data-testid="pro-reserves-details-toggle"
+            aria-expanded={showDetails}
+            onClick={() => setShowDetails((v) => !v)}
+            className="inline-flex items-center gap-1 border border-rule-strong bg-paper-soft px-2 py-0.5 font-mono text-xs font-bold text-ink-soft transition hover:border-ink hover:text-ink"
+          >
+            <span>{showDetails ? 'Hide details' : 'Show details'}</span>
+            {showDetails ? (
+              <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-px bg-rule lg:grid-cols-4">
-        <div className="bg-paper-bright px-4 py-3">
-          <div className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
-            <span>Reserve R_x</span>
-            <InfoTooltip label="Reserve R_x" text={PRO_TOOLTIPS.rx} />
+      {showDetails && (
+        <div
+          data-testid="pro-reserves-details-panel"
+          className="grid grid-cols-2 gap-px border-t border-rule bg-rule lg:grid-cols-4"
+        >
+          <div className="bg-paper-bright px-4 py-2.5">
+            <div className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
+              <span>LP Invariant k</span>
+              <InfoTooltip label="LP Invariant k" text={PRO_TOOLTIPS.k} />
+            </div>
+            <div className="mt-0.5 font-mono text-sm font-bold text-plum-700 tabular-nums">
+              {formatInvariant(state.reserves.k_invariant)}
+            </div>
           </div>
-          <div
-            data-testid="reserve-rx"
-            className="mt-1 font-mono text-base font-bold text-ink tabular-nums"
-          >
-            {formatToken(state.reserves.rx, 2)} {config.baseSymbol}
-          </div>
-        </div>
 
-        <div className="bg-paper-bright px-4 py-3">
-          <div className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
-            <span>Reserve R_y</span>
-            <InfoTooltip label="Reserve R_y" text={PRO_TOOLTIPS.ry} />
+          <div className="bg-paper-bright px-4 py-2.5">
+            <div className="font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
+              Commit / Reveal Windows
+            </div>
+            <div className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums">
+              {state.commit_duration_secs}s / {state.reveal_duration_secs}s
+            </div>
           </div>
-          <div
-            data-testid="reserve-ry"
-            className="mt-1 font-mono text-base font-bold text-ink tabular-nums"
-          >
-            {formatPrice(state.reserves.ry, 0)} {config.quoteSymbol}
-          </div>
-        </div>
 
-        <div className="bg-paper-bright px-4 py-3">
-          <div className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
-            <span>Pool Spot</span>
-            <InfoTooltip label="Pool Spot" text={PRO_TOOLTIPS.spot} />
+          <div className="bg-paper-bright px-4 py-2.5">
+            <div className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
+              <span>Min Reveal Bond</span>
+              <InfoTooltip label="Reveal bond" text={PRO_TOOLTIPS.revealBond} />
+            </div>
+            <div className="mt-0.5 font-mono text-sm font-bold text-brass-800 tabular-nums">
+              {(Number(config.minBondWei) / 1e18).toFixed(4)} ETH
+            </div>
           </div>
-          <div
-            data-testid="pool-spot-price"
-            className="mt-1 font-mono text-base font-bold text-vermilion-700 tabular-nums"
-          >
-            ${formatPrice(state.reserves.spot_price, 2)}
-          </div>
-        </div>
 
-        <div className="bg-paper-bright px-4 py-3">
-          <div className="flex items-center gap-1 font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
-            <span>LP Invariant k</span>
-            <InfoTooltip label="LP Invariant k" text={PRO_TOOLTIPS.k} />
-          </div>
-          <div className="mt-1 font-mono text-base font-bold text-plum-700 tabular-nums">
-            {formatInvariant(state.reserves.k_invariant)}
+          <div className="bg-paper-bright px-4 py-2.5">
+            <div className="font-mono text-xs font-bold uppercase tracking-label text-ink-muted">
+              Max Batch Capacity
+            </div>
+            <div className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums">
+              {state.orders.length + Number(batch.commitCount)} / 64 slots
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </section>
   );
 };

@@ -5,8 +5,11 @@ import {
   ExternalLink,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
+  Sparkles,
   Wallet,
 } from 'lucide-react';
+import { formatUnits } from 'viem';
 import type { ClaimableDto, LocalSecretVaultEntry } from './types';
 import { explorerTxUrl } from './onchain/config';
 import { useFairBatch } from './onchain/useFairBatch';
@@ -23,10 +26,16 @@ import { ClaimsPanel } from './components/ClaimsPanel';
 import { ContractConfigModal } from './components/ContractConfigModal';
 import { FeArchitectureModal } from './components/FeArchitectureModal';
 import { HowItWorksModal } from './components/HowItWorksModal';
-import { SandwichSimulationModal } from './components/SandwichSimulationModal';
-import { SIMPLE_COPY } from './lib/glossary';
+import { formatPrice, formatToken } from './lib/format';
+import {
+  LOW_GAS_THRESHOLD_WEI,
+  PUBLIC_SEPOLIA_FAUCETS,
+  SIMPLE_COPY,
+} from './lib/glossary';
 
 const MODE_STORAGE_KEY = 'fairbatch.uiMode.v1';
+
+export type ProSectionTab = 'all' | 'trade' | 'liquidity' | 'audit' | 'claims';
 
 function readInitialMode(defaultMode: UiMode): UiMode {
   try {
@@ -39,21 +48,36 @@ function readInitialMode(defaultMode: UiMode): UiMode {
   return defaultMode;
 }
 
+function human(raw: bigint | undefined, decimals: number): number {
+  if (raw === undefined) return 0;
+  return Number(formatUnits(raw, decimals));
+}
+
 export const App: React.FC = () => {
   const fb = useFairBatch();
   const [mode, setMode] = useState<UiMode>(() => readInitialMode('simple'));
+  const [proSection, setProSection] = useState<ProSectionTab>('all');
   const [selectedViewBatchId, setSelectedViewBatchId] = useState<number | 'live'>('live');
   const [isContractModalOpen, setIsContractModalOpen] = useState<boolean>(false);
   const [isFeModalOpen, setIsFeModalOpen] = useState<boolean>(false);
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState<boolean>(false);
-  const [isSimulationModalOpen, setIsSimulationModalOpen] = useState<boolean>(false);
 
   const handleModeChange = (next: UiMode) => {
     setMode(next);
+    if (fb.notice && fb.notice.kind !== 'error') {
+      fb.clearNotice();
+    }
     try {
       localStorage.setItem(MODE_STORAGE_KEY, next);
     } catch {
       // ignore storage failure
+    }
+  };
+
+  const handleProSectionChange = (next: ProSectionTab) => {
+    setProSection(next);
+    if (fb.notice && fb.notice.kind !== 'error') {
+      fb.clearNotice();
     }
   };
 
@@ -105,6 +129,23 @@ export const App: React.FC = () => {
 
   const notice = fb.notice;
   const txUrl = notice?.hash ? explorerTxUrl(fb.config, notice.hash) : null;
+  const lowGas = Boolean(
+    fb.account &&
+      !fb.wrongNetwork &&
+      snapshot &&
+      snapshot.balances.eth < LOW_GAS_THRESHOLD_WEI,
+  );
+  const ethHuman = human(snapshot?.balances.eth, 18);
+  const baseHuman = human(snapshot?.balances.base, fb.config.baseDecimals);
+  const quoteHuman = human(snapshot?.balances.quote, fb.config.quoteDecimals);
+  const lpSharesHuman = human(snapshot?.balances.lpShares, 18);
+  const baseApproved = Boolean(snapshot?.allowances && snapshot.allowances.base > 0n);
+  const quoteApproved = Boolean(snapshot?.allowances && snapshot.allowances.quote > 0n);
+
+  const showTradeSection = proSection === 'all' || proSection === 'trade';
+  const showLiquiditySection = proSection === 'all' || proSection === 'liquidity';
+  const showAuditSection = proSection === 'all' || proSection === 'audit';
+  const showClaimsSection = proSection === 'all' || proSection === 'claims';
 
   return (
     <div className="flex min-h-screen flex-col text-ink">
@@ -129,20 +170,20 @@ export const App: React.FC = () => {
         onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
         onOpenFeModal={() => setIsFeModalOpen(true)}
         onOpenContractModal={() => setIsContractModalOpen(true)}
-        onOpenSimulationModal={() => setIsSimulationModalOpen(true)}
+        onOpenSimulationModal={() => setIsHowItWorksOpen(true)}
       />
 
       <main className="mx-auto w-full max-w-[1560px] flex-1 px-4 py-5 lg:px-8">
         {notice && (
           <div
             role="status"
-            className={`mb-4 flex flex-wrap items-center justify-between gap-3 border-l-2 px-3.5 py-2.5 text-sm font-medium ${
-              notice.kind === 'error'
-                ? 'border-vermilion-500 bg-vermilion-50 text-vermilion-800'
-                : notice.kind === 'info'
-                  ? 'border-cobalt-500 bg-cobalt-50 text-cobalt-800'
-                  : 'border-pine-600 bg-pine-50 text-pine-800'
-            }`}
+            data-testid="app-notice-banner"
+            className={`mb-4 flex flex-wrap items-center justify-between gap-3 border-l-2 px-3.5 py-2.5 text-sm font-medium ${notice.kind === 'error'
+              ? 'border-vermilion-500 bg-vermilion-50 text-vermilion-800'
+              : notice.kind === 'info'
+                ? 'border-cobalt-500 bg-cobalt-50 text-cobalt-800'
+                : 'border-pine-600 bg-pine-50 text-pine-800'
+              }`}
           >
             <div className="flex min-w-0 items-center gap-2">
               {notice.kind === 'error' ? (
@@ -232,6 +273,168 @@ export const App: React.FC = () => {
 
         {snapshot && state && displayedSettlement && mode === 'pro' && (
           <>
+            {/* Always-visible Pro balance row + approval status + "New here? Switch to Simple" */}
+            <section
+              aria-label="Wallet balances and token approvals"
+              data-testid="pro-balance-row"
+              className="mb-4 border border-ink bg-paper-bright shadow-slip"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule bg-paper-soft px-3.5 py-2 sm:px-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="eyebrow">Wallet balances &amp; approvals</span>
+                  {!fb.account && (
+                    <span className="font-mono text-xs text-ink-muted">
+                      (Connect wallet to view live balances)
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  data-testid="pro-switch-to-simple-link"
+                  onClick={() => handleModeChange('simple')}
+                  className="inline-flex items-center gap-1 font-sans text-xs font-bold text-cobalt-700 underline decoration-dotted underline-offset-4 transition hover:text-ink"
+                >
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>New here? Switch to Simple</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-px bg-rule sm:grid-cols-4">
+                <div className="bg-paper-bright px-3.5 py-2.5">
+                  <div className="font-mono text-[11px] uppercase tracking-label text-ink-muted">
+                    Sepolia ETH
+                  </div>
+                  <div
+                    data-testid="pro-balance-eth"
+                    className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums"
+                  >
+                    {formatToken(ethHuman, 4)} ETH
+                  </div>
+                  <div className="mt-0.5 font-mono text-[10px] text-ink-muted">
+                    {lowGas ? 'Low gas (< 0.002 ETH)' : 'Gas & 0.0001 ETH deposit'}
+                  </div>
+                </div>
+
+                <div className="bg-paper-bright px-3.5 py-2.5">
+                  <div className="font-mono text-[11px] uppercase tracking-label text-ink-muted">
+                    {fb.config.baseSymbol}
+                  </div>
+                  <div
+                    data-testid="pro-balance-base"
+                    className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums"
+                  >
+                    {formatToken(baseHuman, 4)} {fb.config.baseSymbol}
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-ink-muted">
+                    {baseApproved ? (
+                      <>
+                        <CheckCircle2 className="h-3 w-3 text-pine-600" aria-hidden="true" />
+                        <span data-testid="pro-approval-base" className="text-pine-700 font-bold">
+                          Approved
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="h-3 w-3 text-brass-600" aria-hidden="true" />
+                        <span data-testid="pro-approval-base">Not approved</span>
+                        {fb.account && (
+                          <button
+                            type="button"
+                            disabled={fb.busyAction !== null}
+                            onClick={() => void fb.approve('base')}
+                            className="ml-1 font-bold text-cobalt-700 underline decoration-dotted hover:text-ink disabled:opacity-40"
+                          >
+                            Approve
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-paper-bright px-3.5 py-2.5">
+                  <div className="font-mono text-[11px] uppercase tracking-label text-ink-muted">
+                    {fb.config.quoteSymbol}
+                  </div>
+                  <div
+                    data-testid="pro-balance-quote"
+                    className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums"
+                  >
+                    {formatPrice(quoteHuman, 2)} {fb.config.quoteSymbol}
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-ink-muted">
+                    {quoteApproved ? (
+                      <>
+                        <CheckCircle2 className="h-3 w-3 text-pine-600" aria-hidden="true" />
+                        <span data-testid="pro-approval-quote" className="text-pine-700 font-bold">
+                          Approved
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="h-3 w-3 text-brass-600" aria-hidden="true" />
+                        <span data-testid="pro-approval-quote">Not approved</span>
+                        {fb.account && (
+                          <button
+                            type="button"
+                            disabled={fb.busyAction !== null}
+                            onClick={() => void fb.approve('quote')}
+                            className="ml-1 font-bold text-cobalt-700 underline decoration-dotted hover:text-ink disabled:opacity-40"
+                          >
+                            Approve
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-paper-bright px-3.5 py-2.5">
+                  <div className="font-mono text-[11px] uppercase tracking-label text-ink-muted">
+                    LP Shares
+                  </div>
+                  <div
+                    data-testid="pro-balance-lp"
+                    className="mt-0.5 font-mono text-sm font-bold text-plum-700 tabular-nums"
+                  >
+                    {formatToken(lpSharesHuman, 2)} shares
+                  </div>
+                  <div className="mt-0.5 font-mono text-[10px] text-ink-muted">
+                    FM-AMM passive pool
+                  </div>
+                </div>
+              </div>
+
+              {lowGas && (
+                <div
+                  data-testid="low-gas-notice"
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-rule bg-brass-50 px-3.5 py-2 text-xs text-brass-900"
+                >
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-brass-700" />
+                    <span>
+                      You need a little Sepolia ETH for gas (and 0.0001 ETH deposit for sealed
+                      orders).
+                    </span>
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {PUBLIC_SEPOLIA_FAUCETS.map((f) => (
+                      <a
+                        key={f.url}
+                        href={f.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 border border-brass-700 bg-paper-bright px-2 py-0.5 font-mono text-[11px] font-bold text-brass-900 hover:bg-brass-100"
+                      >
+                        <span>{f.name}</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+
             <ProStatsRow
               config={fb.config}
               state={state}
@@ -243,72 +446,115 @@ export const App: React.FC = () => {
               loading={fb.loading}
             />
 
-            <div className="grid items-start gap-5 lg:grid-cols-12">
-              <div className="min-w-0 space-y-4 lg:col-span-4">
-                <AccountPanel
-                  config={fb.config}
-                  account={fb.account}
-                  walletChainId={fb.walletChainId}
-                  wrongNetwork={fb.wrongNetwork}
-                  balances={snapshot.balances}
-                  allowances={snapshot.allowances}
-                  faucet={snapshot.faucet}
-                  busyAction={fb.busyAction}
-                  faucetEnabled={fb.config.tokenFaucetEnabled}
-                  onConnect={fb.connect}
-                  onDisconnect={fb.disconnect}
-                  onClaimFaucet={async () => {
-                    await fb.claimFaucet();
-                  }}
-                  onApprove={async (token) => {
-                    await fb.approve(token);
-                  }}
-                />
+            {/* Pro workspace section tabs: Trade | Liquidity | Round audit | Claims & slashing */}
+            <div
+              role="tablist"
+              aria-label="Pro workspace sections"
+              data-testid="pro-section-tabs"
+              className="mb-4 flex flex-wrap gap-1 border border-rule-strong bg-paper-soft p-1"
+            >
+              {(
+                [
+                  { id: 'all', label: 'All panels' },
+                  { id: 'trade', label: 'Trade' },
+                  { id: 'liquidity', label: 'Liquidity' },
+                  { id: 'audit', label: 'Round audit' },
+                  { id: 'claims', label: 'Claims & slashing' },
+                ] as ReadonlyArray<{ id: ProSectionTab; label: string }>
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  data-testid={`pro-tab-${tab.id}`}
+                  aria-selected={proSection === tab.id}
+                  onClick={() => handleProSectionChange(tab.id)}
+                  className={`min-h-[34px] px-3 font-mono text-xs font-bold uppercase transition ${
+                    proSection === tab.id
+                      ? 'bg-ink text-paper'
+                      : 'text-ink-muted hover:bg-paper-bright hover:text-ink'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
 
-                <OrderTicket
-                  state={{ ...state, phase: fb.livePhase }}
-                  config={fb.config}
-                  account={fb.account}
-                  localSecrets={fb.secretVault}
-                  busyAction={fb.busyAction}
-                  minBondWei={snapshot.minBondWei}
-                  onConnect={fb.connect}
-                  onSubmitDirect={async (params) => {
-                    await fb.submitDirect(params);
-                  }}
-                  onSettleAndSubmitDirect={async (params) => {
-                    await fb.settleAndSubmitDirect(params);
-                  }}
-                  onSealCommit={async (params) => {
-                    await fb.sealCommit(params);
-                  }}
-                  onRevealCommit={handleReveal}
-                  onSignIntent={fb.signIntent}
-                  onSubmitIntent={async (artifact) => {
-                    await fb.submitIntent(artifact);
-                  }}
-                />
+            {/* SECTION 1 — TRADE: Order slip and Round clock first, compact Wallet & Faucet card */}
+            {showTradeSection && (
+              <div className="grid items-start gap-5 lg:grid-cols-12">
+                <div className="min-w-0 space-y-4 lg:col-span-5">
+                  <OrderTicket
+                    state={{ ...state, phase: fb.livePhase }}
+                    config={fb.config}
+                    account={fb.account}
+                    balances={snapshot.balances}
+                    localSecrets={fb.secretVault}
+                    busyAction={fb.busyAction}
+                    minBondWei={snapshot.minBondWei}
+                    onConnect={fb.connect}
+                    onSubmitDirect={async (params) => {
+                      await fb.submitDirect(params);
+                    }}
+                    onSettleAndSubmitDirect={async (params) => {
+                      await fb.settleAndSubmitDirect(params);
+                    }}
+                    onSealCommit={async (params) => {
+                      await fb.sealCommit(params);
+                    }}
+                    onRevealCommit={handleReveal}
+                    onSignIntent={fb.signIntent}
+                    onSubmitIntent={async (artifact) => {
+                      await fb.submitIntent(artifact);
+                    }}
+                  />
+                </div>
+
+                <div className="min-w-0 space-y-4 lg:col-span-7">
+                  <BatchConsole
+                    batch={snapshot.batch}
+                    phase={fb.livePhase}
+                    chainNow={fb.chainNow}
+                    orderCount={state.orders.length}
+                    account={fb.account}
+                    commitments={snapshot.allCommitments}
+                    busyAction={fb.busyAction}
+                    refreshing={fb.refreshing}
+                    onSettle={async () => {
+                      await handleSettle();
+                    }}
+                    onSlash={async (batchId, commitId) => {
+                      await fb.slash(batchId, commitId);
+                    }}
+                    onRefresh={fb.refresh}
+                  />
+
+                  <AccountPanel
+                    config={fb.config}
+                    account={fb.account}
+                    walletChainId={fb.walletChainId}
+                    wrongNetwork={fb.wrongNetwork}
+                    balances={snapshot.balances}
+                    allowances={snapshot.allowances}
+                    faucet={snapshot.faucet}
+                    busyAction={fb.busyAction}
+                    faucetEnabled={fb.config.tokenFaucetEnabled}
+                    onConnect={fb.connect}
+                    onDisconnect={fb.disconnect}
+                    onClaimFaucet={async () => {
+                      await fb.claimFaucet();
+                    }}
+                    onApprove={async (token) => {
+                      await fb.approve(token);
+                    }}
+                  />
+                </div>
               </div>
+            )}
 
-              <div className="min-w-0 space-y-5 lg:col-span-8">
-                <BatchConsole
-                  batch={snapshot.batch}
-                  phase={fb.livePhase}
-                  chainNow={fb.chainNow}
-                  orderCount={state.orders.length}
-                  account={fb.account}
-                  commitments={snapshot.allCommitments}
-                  busyAction={fb.busyAction}
-                  refreshing={fb.refreshing}
-                  onSettle={async () => {
-                    await handleSettle();
-                  }}
-                  onSlash={async (batchId, commitId) => {
-                    await fb.slash(batchId, commitId);
-                  }}
-                  onRefresh={fb.refresh}
-                />
-
+            {/* SECTION 2 — ROUND AUDIT: Clearing chart & MEV comparison */}
+            {showAuditSection && (
+              <div className="mt-5 space-y-5">
                 <PriceChart
                   settlement={displayedSettlement}
                   isLivePreview={selectedViewBatchId === 'live'}
@@ -324,41 +570,86 @@ export const App: React.FC = () => {
                   baseSymbol={fb.config.baseSymbol}
                   quoteSymbol={fb.config.quoteSymbol}
                   onSelectViewBatch={setSelectedViewBatchId}
-                  onOpenSimulationModal={() => setIsSimulationModalOpen(true)}
                 />
               </div>
-            </div>
+            )}
 
-            <div className="mt-5 grid items-start gap-5 lg:grid-cols-12">
-              <div className="min-w-0 lg:col-span-5">
-                <LiquidityPanel
-                  config={fb.config}
-                  reserves={snapshot.reserves}
-                  balances={snapshot.balances}
-                  lpLock={snapshot.lpLock}
-                  account={fb.account}
-                  busyAction={fb.busyAction}
-                  onAddLiquidity={async (amountBase, amountQuote, lockDurationSecs, minShares) => {
-                    await fb.addLiquidity(amountBase, amountQuote, lockDurationSecs, minShares);
-                  }}
-                  onRemoveLiquidity={async (shares, minBase, minQuote) => {
-                    await fb.removeLiquidity(shares, minBase, minQuote);
-                  }}
-                />
-              </div>
+            {/* SECTION 3 & 4 — LIQUIDITY + CLAIMS & SLASHING */}
+            {(showLiquiditySection || showClaimsSection) && (
+              <div className="mt-5 grid items-start gap-5 lg:grid-cols-12">
+                {showLiquiditySection && (
+                  <div
+                    className={`min-w-0 ${
+                      showClaimsSection ? 'lg:col-span-5' : 'lg:col-span-12'
+                    }`}
+                  >
+                    <LiquidityPanel
+                      config={fb.config}
+                      reserves={snapshot.reserves}
+                      balances={snapshot.balances}
+                      lpLock={snapshot.lpLock}
+                      account={fb.account}
+                      busyAction={fb.busyAction}
+                      onAddLiquidity={async (
+                        amountBase,
+                        amountQuote,
+                        lockDurationSecs,
+                        minShares,
+                      ) => {
+                        await fb.addLiquidity(
+                          amountBase,
+                          amountQuote,
+                          lockDurationSecs,
+                          minShares,
+                        );
+                      }}
+                      onRemoveLiquidity={async (shares, minBase, minQuote) => {
+                        await fb.removeLiquidity(shares, minBase, minQuote);
+                      }}
+                    />
+                  </div>
+                )}
 
-              <div className="min-w-0 lg:col-span-7">
-                <ClaimsPanel
-                  claimable={snapshot.claimable}
-                  config={fb.config}
-                  account={fb.account}
-                  busyAction={fb.busyAction}
-                  onClaimSingle={handleClaimSingle}
-                  onClaimMany={handleSettleMany}
-                  onConnect={fb.connect}
-                />
+                {showClaimsSection && (
+                  <div
+                    className={`min-w-0 ${
+                      showLiquiditySection ? 'lg:col-span-7' : 'lg:col-span-12'
+                    }`}
+                  >
+                    {proSection === 'claims' && (
+                      <div className="mb-5">
+                        <BatchConsole
+                          batch={snapshot.batch}
+                          phase={fb.livePhase}
+                          chainNow={fb.chainNow}
+                          orderCount={state.orders.length}
+                          account={fb.account}
+                          commitments={snapshot.allCommitments}
+                          busyAction={fb.busyAction}
+                          refreshing={fb.refreshing}
+                          onSettle={async () => {
+                            await handleSettle();
+                          }}
+                          onSlash={async (batchId, commitId) => {
+                            await fb.slash(batchId, commitId);
+                          }}
+                          onRefresh={fb.refresh}
+                        />
+                      </div>
+                    )}
+                    <ClaimsPanel
+                      claimable={snapshot.claimable}
+                      config={fb.config}
+                      account={fb.account}
+                      busyAction={fb.busyAction}
+                      onClaimSingle={handleClaimSingle}
+                      onClaimMany={handleSettleMany}
+                      onConnect={fb.connect}
+                    />
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </>
         )}
       </main>
@@ -397,15 +688,6 @@ export const App: React.FC = () => {
       <FeArchitectureModal
         isOpen={isFeModalOpen}
         onClose={() => setIsFeModalOpen(false)}
-      />
-
-      <SandwichSimulationModal
-        isOpen={isSimulationModalOpen}
-        rx={state?.reserves.rx ?? 100}
-        ry={state?.reserves.ry ?? 300_000}
-        baseSymbol={fb.config.baseSymbol}
-        quoteSymbol={fb.config.quoteSymbol}
-        onClose={() => setIsSimulationModalOpen(false)}
       />
     </div>
   );

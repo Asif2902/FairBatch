@@ -1,6 +1,8 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Award,
+  ChevronDown,
+  ChevronUp,
   Flame,
   FlaskConical,
   GitMerge,
@@ -56,6 +58,7 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
   onOpenSimulationModal,
 }) => {
   const { comparison } = settlement;
+  const [showReceiptsTable, setShowReceiptsTable] = useState<boolean>(false);
 
   // Defensive deduplication of historical settled batch tabs (fixes 1b).
   const uniqueSettledTabs = useMemo(() => {
@@ -120,11 +123,10 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
           <button
             type="button"
             onClick={() => onSelectViewBatch('live')}
-            className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${
-              selectedViewBatchId === 'live'
-                ? 'border-ink bg-ink text-paper'
-                : 'border-rule bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
-            }`}
+            className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${selectedViewBatchId === 'live'
+              ? 'border-ink bg-ink text-paper'
+              : 'border-rule bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
+              }`}
           >
             Current queue (#{activeBatchId})
           </button>
@@ -133,11 +135,10 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
               key={hist.batch_id}
               type="button"
               onClick={() => onSelectViewBatch(hist.batch_id)}
-              className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${
-                selectedViewBatchId === hist.batch_id
-                  ? 'border-pine-700 bg-pine-600 text-[#FBF8F0]'
-                  : 'border-rule bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
-              }`}
+              className={`min-h-[36px] border px-2.5 font-mono text-xs font-bold uppercase transition ${selectedViewBatchId === hist.batch_id
+                ? 'border-pine-700 bg-pine-600 text-[#FBF8F0]'
+                : 'border-rule bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
+                }`}
             >
               Settled #{hist.batch_id}
             </button>
@@ -168,11 +169,10 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
               <div className="serial">SEQ. AMM</div>
               <div
                 data-testid="amm-mev-profit"
-                className={`font-display text-xl font-bold leading-none ${
-                  comparison.amm_sandwich_profit_quote > 0.01
-                    ? 'text-vermilion-700'
-                    : 'text-ink-muted'
-                }`}
+                className={`font-display text-xl font-bold leading-none ${comparison.amm_sandwich_profit_quote > 0.01
+                  ? 'text-vermilion-700'
+                  : 'text-ink-muted'
+                  }`}
               >
                 {formatUsd(comparison.amm_sandwich_profit_quote, 2)}
               </div>
@@ -191,20 +191,22 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
 
         <div className="relative bg-paper-bright p-3.5">
           <span
-            className={`absolute inset-x-0 top-0 h-[2px] ${
-              isPositiveSaving
-                ? 'bg-pine-600'
-                : isNegativeDiff
-                  ? 'bg-brass-600'
-                  : 'bg-rule-strong'
-            }`}
+            className={`absolute inset-x-0 top-0 h-[2px] ${isPositiveSaving
+              ? 'bg-pine-600'
+              : isNegativeDiff
+                ? 'bg-brass-600'
+                : 'bg-rule-strong'
+              }`}
           />
           <div className="flex items-center justify-between gap-1">
             <span className="eyebrow flex items-center gap-1">
-              <span>vs. Seq. AMM (no bot)</span>
-              <InfoTooltip label="FM-AMM clearing" text={PRO_TOOLTIPS.fmAmm} />
+              <span>Simulated saving vs a normal swap (0.30% x·y=k baseline)</span>
+              <InfoTooltip
+                label="Simulated saving baseline"
+                text={PRO_TOOLTIPS.simulatedSaving}
+              />
             </span>
-            <Award className="h-4 w-4 text-pine-700" aria-hidden="true" />
+            <Award className="h-4 w-4 shrink-0 text-pine-700" aria-hidden="true" />
           </div>
           <div
             data-testid="user-value-saved"
@@ -213,20 +215,25 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                 ? 'text-pine-700'
                 : isNegativeDiff
                   ? 'text-brass-800'
-                  : 'text-ink'
+                  : 'text-ink-muted'
             }`}
           >
-            {isPositiveSaving ? `+${formatUsd(signedDiff, 2)}` : formatUsd(signedDiff, 2)}
+            {isPositiveSaving
+              ? `+${formatUsd(signedDiff, 2)}`
+              : isNegativeDiff
+                ? `Δ ${formatUsd(signedDiff, 2)} (no net saving)`
+                : 'No difference ($0.00)'}
           </div>
           <div className="mt-1.5 font-mono text-xs leading-snug text-ink-muted tabular-nums">
             {isLive ? 'Current queue p*' : 'Settled p*'} $
             {formatPrice(comparison.fairbatch_uniform_price, 2)} vs AMM avg $
             {formatPrice(comparison.amm_victim_avg_price, 2)}
           </div>
-          {isNegativeDiff && (
+          {!isPositiveSaving && (
             <p className="mt-1 text-xs leading-snug text-ink-muted">
-              One-sided flow without a sandwich bot: FM-AMM clears at the post-trade marginal
-              price so LPs retain LVR and all traders share one price.
+              {isNegativeDiff
+                ? 'One-sided flow without a sandwich bot: FM-AMM clears at the post-trade marginal price so LPs retain LVR and all traders share one uniform price.'
+                : 'No saving on this round against a 0.30% sequential swap without a sandwich attacker.'}
             </p>
           )}
         </div>
@@ -278,12 +285,28 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
         </div>
       </div>
 
-      {/* Per-trader comparison table in its own overflow-x scroll container */}
-      <div className="flex items-center justify-between gap-2 border-t border-rule bg-paper-soft px-4 py-1.5 font-mono text-xs uppercase tracking-label text-ink-muted xl:hidden">
-        <span>Execution receipts</span>
-        <span className="text-vermilion-700">Swipe table →</span>
+      {/* Collapsible per-trader comparison table in its own overflow-x scroll container */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rule bg-paper-soft px-4 py-2 font-mono text-xs">
+        <span className="uppercase tracking-label text-ink-muted">
+          Execution receipts ({comparison.fairbatch_receipts.length})
+        </span>
+        <button
+          type="button"
+          data-testid="pro-receipts-details-toggle"
+          aria-expanded={showReceiptsTable}
+          onClick={() => setShowReceiptsTable((v) => !v)}
+          className="inline-flex items-center gap-1 border border-rule-strong bg-paper-bright px-2.5 py-1 font-mono text-xs font-bold text-ink-soft transition hover:border-ink hover:text-ink"
+        >
+          <span>{showReceiptsTable ? 'Hide details' : 'Show details'}</span>
+          {showReceiptsTable ? (
+            <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+        </button>
       </div>
-      <div className="overflow-x-auto border-t border-rule">
+      {showReceiptsTable && (
+      <div data-testid="pro-receipts-details-panel" className="overflow-x-auto border-t border-rule">
         <table className="w-full min-w-[780px] border-collapse text-left text-xs">
           <thead className="bg-ink text-paper">
             <tr className="font-mono text-xs uppercase tracking-label">
@@ -344,9 +367,8 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                           <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-pine-600" />
                         )}
                         <span
-                          className={`font-semibold ${
-                            fb.is_attacker ? 'text-vermilion-800' : 'text-ink'
-                          }`}
+                          className={`font-semibold ${fb.is_attacker ? 'text-vermilion-800' : 'text-ink'
+                            }`}
                         >
                           {fb.label}
                         </span>
@@ -364,11 +386,10 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                     </td>
                     <td className="px-3 py-2.5 text-right text-ink-muted">
                       {amm && amm.amount_out > 0
-                        ? `${
-                            outUnit === quoteSymbol
-                              ? formatPrice(amm.amount_out, 2)
-                              : formatToken(amm.amount_out, 4)
-                          } ${outUnit}`
+                        ? `${outUnit === quoteSymbol
+                          ? formatPrice(amm.amount_out, 2)
+                          : formatToken(amm.amount_out, 4)
+                        } ${outUnit}`
                         : '—'}
                     </td>
                     <td className="px-3 py-2.5 text-right font-bold text-pine-700">
@@ -385,11 +406,10 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
                     </td>
                     <td className="px-3 py-2.5 text-right font-semibold text-ink">
                       {fb.amount_out > 0
-                        ? `${
-                            outUnit === quoteSymbol
-                              ? formatPrice(fb.amount_out, 2)
-                              : formatToken(fb.amount_out, 4)
-                          } ${outUnit}`
+                        ? `${outUnit === quoteSymbol
+                          ? formatPrice(fb.amount_out, 2)
+                          : formatToken(fb.amount_out, 4)
+                        } ${outUnit}`
                         : `0.00 ${outUnit}`}
                     </td>
                     <td className="px-3 py-2.5 text-right text-brass-700">
@@ -404,6 +424,7 @@ export const MevComparison: React.FC<MevComparisonProps> = ({
           </tbody>
         </table>
       </div>
+      )}
     </section>
   );
 };

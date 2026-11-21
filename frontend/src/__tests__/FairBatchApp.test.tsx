@@ -498,4 +498,53 @@ describe('FairBatch on-chain terminal', () => {
       `https://sepolia.etherscan.io/tx/0x${'ab'.repeat(32)}`,
     );
   });
+
+  it('displays Pro balance row, per-input Balance + Max, collapsible details, and section tabs', () => {
+    controller = makeController({ account: ALICE });
+    renderPro();
+
+    // Top balance row with approval status
+    expect(screen.getByTestId('pro-balance-row')).toBeInTheDocument();
+    expect(screen.getByTestId('pro-balance-eth')).toHaveTextContent('1.00 ETH');
+    expect(screen.getByTestId('pro-balance-base')).toHaveTextContent('5.00 fWETH');
+    expect(screen.getByTestId('pro-balance-quote')).toHaveTextContent('20,000.00 fUSDC');
+    expect(screen.getByTestId('pro-balance-lp')).toHaveTextContent('100.00 shares');
+    expect(screen.getByTestId('pro-approval-base')).toHaveTextContent('Approved');
+    expect(screen.getByTestId('pro-approval-quote')).toHaveTextContent('Approved');
+
+    // Order slip Balance + Max follows sell/buy direction
+    expect(screen.getByTestId('order-ticket-balance')).toHaveTextContent('Balance: 5.00 fWETH');
+    fireEvent.click(screen.getByTestId('order-ticket-max'));
+    expect(screen.getByLabelText(/You pay/i)).toHaveValue(5);
+
+    fireEvent.click(screen.getByRole('button', { name: /Buy fWETH/i }));
+    expect(screen.getByTestId('order-ticket-balance')).toHaveTextContent('Balance: 20,000.00 fUSDC');
+
+    // Commit-reveal tab shows ETH balance next to 0.0001 ETH deposit
+    fireEvent.click(screen.getByRole('tab', { name: /Commit-Reveal/i }));
+    expect(screen.getByTestId('order-ticket-eth-balance')).toHaveTextContent('ETH Balance: 1.00 ETH');
+
+    // LP Add shows both balances + Max; LP Remove shows total & unlocked shares
+    expect(screen.getByTestId('lp-add-base-balance')).toHaveTextContent('Balance: 5.00');
+    expect(screen.getByTestId('lp-add-quote-balance')).toHaveTextContent('Balance: 20,000.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByTestId('lp-remove-shares-balance')).toHaveTextContent('Balance: 100.00');
+    expect(screen.getByTestId('lp-remove-shares-balance')).toHaveTextContent('Unlocked: 100.00');
+
+    // Secondary details are collapsed by default behind "Show details"
+    expect(screen.queryByTestId('pro-reserves-details-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pro-formula-details-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pro-receipts-details-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pro-reserves-details-toggle'));
+    expect(screen.getByTestId('pro-reserves-details-panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pro-formula-details-toggle'));
+    expect(screen.getByTestId('pro-formula-details-panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pro-receipts-details-toggle'));
+    expect(screen.getByTestId('pro-receipts-details-panel')).toBeInTheDocument();
+
+    // "New here? Switch to Simple" link switches back to Simple mode
+    fireEvent.click(screen.getByTestId('pro-switch-to-simple-link'));
+    expect(screen.getByTestId('mode-simple-button')).toHaveAttribute('aria-pressed', 'true');
+  });
 });
