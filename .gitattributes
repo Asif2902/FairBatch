@@ -1,2 +1,4 @@
 *.fe text eol=lf
 *.sh text eol=lf
+deploy/* text eol=lf
+deploy/**/* text eol=lf

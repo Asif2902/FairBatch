@@ -7,6 +7,7 @@ import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
 import { computeBatchSettlement } from '../lib/clearingMath';
 import App from '../App';
 import { SimpleExperience } from '../components/SimpleExperience';
+import { useKeeperStatus } from '../onchain/useKeeperStatus';
 
 const ALICE = '0x9AFe5CeF11fC10756faef213f7A30D9873B5d372';
 const BATCH_ID = 10;
@@ -585,5 +586,40 @@ describe('Simple mode end-to-end flows', () => {
 
     fireEvent.click(retryBtn);
     await waitFor(() => expect(submitIntent).toHaveBeenCalledTimes(1));
+  });
+
+  it('supports same-origin relative /keeper proxy path in useKeeperStatus without CORS or domain rebuild', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          status: 'ok',
+          lowBalance: false,
+          dryRun: false,
+          graceSeconds: 5,
+          relayerEnabled: true,
+          relayGraceSeconds: 5,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const Probe = () => {
+      const ks = useKeeperStatus('/keeper');
+      return (
+        <div data-testid="keeper-probe">
+          {ks.keeperUrl}|{String(ks.healthy)}|{String(ks.relayerHealthy)}
+        </div>
+      );
+    };
+
+    render(<Probe />);
+    await waitFor(() =>
+      expect(screen.getByTestId('keeper-probe')).toHaveTextContent('/keeper|true|true'),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/keeper/health',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    fetchSpy.mockRestore();
   });
 });
