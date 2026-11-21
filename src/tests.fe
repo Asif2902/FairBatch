@@ -267,7 +267,9 @@ contract TraderActor uses (call: mut Call) {
             )
         }
 
-        SetTokenBlacklisted { token, account, blocked } -> bool uses (mut call) {
+        SetTokenBlacklisted { token, account, blocked } -> bool
+        uses (mut call)
+        {
             call.call(
                 addr: token,
                 gas: 300_000,
@@ -3496,14 +3498,15 @@ fn evm_revert_faucet_double_claim_during_cooldown() uses (evm: mut Evm) {
 
 #[test]
 fn effect_lp_lock_expiry_before_and_after_unlock() {
-    let empty_lock = LiquidityLock {
-        locked_shares: 0,
-        unlock_time: Timestamp::from_seconds(0),
-    }
+    let empty_lock = LiquidityLock { locked_shares: 0, unlock_time: Timestamp::from_seconds(0) }
 
     // Lock 400 shares for 1 hour starting at t = 1,000 -> unlock_time = 4,600
     let lock1 = with (BatchClock = MockClock { ts: Timestamp::from_seconds(1_000) }) {
-        compute_updated_lock(cur: empty_lock, minted: 400, lock_duration: seconds(3_600))
+        compute_updated_lock(
+            cur: empty_lock,
+            minted: 400,
+            lock_duration: seconds(3_600),
+        )
     }
     assert!(lock1.locked_shares == 400)
     assert!(lock1.unlock_time == Timestamp::from_seconds(4_600))
@@ -3531,10 +3534,7 @@ fn effect_lp_lock_expiry_before_and_after_unlock() {
 
 #[test(should_revert)]
 fn effect_revert_lp_lock_rejects_locked_shares_before_unlock() {
-    let lock = LiquidityLock {
-        locked_shares: 400,
-        unlock_time: Timestamp::from_seconds(4_600),
-    }
+    let lock = LiquidityLock { locked_shares: 400, unlock_time: Timestamp::from_seconds(4_600) }
     // Owned = 1,000 -> only 600 unlocked; withdrawing 601 before t = 4,600 reverts!
     with (BatchClock = MockClock { ts: Timestamp::from_seconds(4_599) }) {
         let _ = assert_removable_shares(owned: 1_000, shares: 601, lock)
@@ -3546,7 +3546,9 @@ fn effect_faucet_cooldown_before_and_after_with_mock_clock() {
     let cooldown = seconds(43_200) // 12 hours
 
     // Never claimed before: immediately eligible at t = 10,000
-    let (claimed_at, next_at) = with (BatchClock = MockClock { ts: Timestamp::from_seconds(10_000) }) {
+    let (claimed_at, next_at) = with (
+        BatchClock = MockClock { ts: Timestamp::from_seconds(10_000) },
+    ) {
         let st = evaluate_faucet_status(prev: Timestamp::from_seconds(0), cooldown)
         assert!(st.can_claim)
         assert_faucet_claimable(prev: Timestamp::from_seconds(0), cooldown)
@@ -3562,7 +3564,9 @@ fn effect_faucet_cooldown_before_and_after_with_mock_clock() {
     }
 
     // At exact cooldown expiry (t = 53,200): eligible again!
-    let (second_at, second_next) = with (BatchClock = MockClock { ts: Timestamp::from_seconds(53_200) }) {
+    let (second_at, second_next) = with (
+        BatchClock = MockClock { ts: Timestamp::from_seconds(53_200) },
+    ) {
         let st = evaluate_faucet_status(prev: claimed_at, cooldown)
         assert!(st.can_claim)
         assert_faucet_claimable(prev: claimed_at, cooldown)
@@ -3900,7 +3904,9 @@ fn evm_revert_commit_cap_at_65th_commit() uses (evm: mut Evm) {
 }
 
 #[test(should_revert, balance = 10_000_000_000_000_000_000)]
-fn evm_revert_direct_order_blocked_by_reserved_commit_slot() uses (evm: mut Evm) {
+fn evm_revert_direct_order_blocked_by_reserved_commit_slot()
+uses (evm: mut Evm)
+{
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 251)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 252)
     let fb = evm
@@ -4164,7 +4170,9 @@ fn evm_revert_eip712_wrong_batch_id() uses (evm: mut Evm) {
 }
 
 #[test(balance = 10_000_000_000_000_000_000)]
-fn evm_liquidity_first_deposit_min_liquidity_and_unused_side_refund() uses (evm: mut Evm) {
+fn evm_liquidity_first_deposit_min_liquidity_and_unused_side_refund()
+uses (evm: mut Evm)
+{
     let weth = evm.create2<MockERC20>(value: Wei::zero(), args: (18,), salt: 291)
     let usdc = evm.create2<MockERC20>(value: Wei::zero(), args: (6,), salt: 292)
     let fb = evm
@@ -4666,7 +4674,9 @@ fn pure_clearing_equal_prices_and_tiny_amounts_rounding() {
     assert!(out_eq.fills[0].payout_out == 9_000_000_000)
     assert!(out_eq.fills[1].amount_filled == 9_000_000_000)
     assert!(out_eq.fills[1].payout_out == 3 * WAD)
-    assert!(out_eq.reserve_base_after_raw == rx && out_eq.reserve_quote_after_raw == ry)
+    assert!(
+        out_eq.reserve_base_after_raw == rx && out_eq.reserve_quote_after_raw == ry,
+    )
 
     // 2. Non-crossing orders in hybrid pool (both OTM against spot $3,000):
     //    Seller asks $3,500, Buyer bids $2,500 -> 0 fills, 100% refunds, spot preserved!
@@ -4699,9 +4709,15 @@ fn pure_clearing_equal_prices_and_tiny_amounts_rounding() {
         orders: no_cross.as_slice(),
     )
     assert!(out_nc.clearing_price == Wad::from_int(3_000))
-    assert!(out_nc.fills[0].amount_filled == 0 && out_nc.fills[0].refund_in == 2 * WAD)
-    assert!(out_nc.fills[1].amount_filled == 0 && out_nc.fills[1].refund_in == 5_000_000_000)
-    assert!(out_nc.reserve_base_after_raw == rx && out_nc.reserve_quote_after_raw == ry)
+    assert!(
+        out_nc.fills[0].amount_filled == 0 && out_nc.fills[0].refund_in == 2 * WAD,
+    )
+    assert!(
+        out_nc.fills[1].amount_filled == 0 && out_nc.fills[1].refund_in == 5_000_000_000,
+    )
+    assert!(
+        out_nc.reserve_base_after_raw == rx && out_nc.reserve_quote_after_raw == ry,
+    )
 
     // 3. Equal limit prices in Pure P2P with asymmetric volumes (pro-rata rationing at p* = 3,000)
     var p2p_eq: MemVec<Order> = MemVec::new()
@@ -4733,8 +4749,12 @@ fn pure_clearing_equal_prices_and_tiny_amounts_rounding() {
         orders: p2p_eq.as_slice(),
     )
     assert!(out_p2p.clearing_price == Wad::from_int(3_000))
-    assert!(out_p2p.fills[0].amount_filled == 3 * WAD && out_p2p.fills[0].refund_in == 7 * WAD)
-    assert!(out_p2p.fills[1].amount_filled == 9_000_000_000 && out_p2p.fills[1].payout_out == 3 * WAD)
+    assert!(
+        out_p2p.fills[0].amount_filled == 3 * WAD && out_p2p.fills[0].refund_in == 7 * WAD,
+    )
+    assert!(
+        out_p2p.fills[1].amount_filled == 9_000_000_000 && out_p2p.fills[1].payout_out == 3 * WAD,
+    )
 
     // 4. Tiny non-dust amount on 18d/6d (1_000 raw micro-USDC = $0.001 buys ~333_333_333_333 wei fWETH)
     var tiny: MemVec<Order> = MemVec::new()

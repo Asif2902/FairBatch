@@ -377,7 +377,7 @@ $FaucetInitHex       = (Get-Content -Raw $FaucetBinPath).Trim() -replace "^0x", 
 $FaucetRuntimeHex    = (Get-Content -Raw $FaucetRuntimePath).Trim() -replace "^0x", ""
 
 Write-Host "========================================================================" -ForegroundColor Cyan
-Write-Host (" FairBatch Sepolia Deployment Pipeline — Chain ID: {0} ({1})" -f $TargetChainId, $(if ($DryRun) { "OFFLINE DRY-RUN" } else { "LIVE BROADCAST" })) -ForegroundColor Cyan
+Write-Host (" FairBatch Sepolia Deployment Pipeline -- Chain ID: {0} ({1})" -f $TargetChainId, $(if ($DryRun) { "OFFLINE DRY-RUN" } else { "LIVE BROADCAST" })) -ForegroundColor Cyan
 Write-Host "========================================================================" -ForegroundColor Cyan
 Write-Host ("  Env File            : {0} ({1})" -f $EnvFile, $(if (Test-Path $EnvFile) { "loaded" } else { "using defaults" }))
 Write-Host ("  Batch Windows       : Commit={0}s | Reveal={1}s | MinBond={2} wei" -f $CommitWindowSecs, $RevealWindowSecs, $MinBondWei)

@@ -48,7 +48,7 @@ if (-not (Get-Command $CastBin -ErrorAction SilentlyContinue)) {
 
 Write-Host "========================================================================" -ForegroundColor Cyan
 Write-Host " FairBatch Sepolia Readiness & Calldata Builder (OFFLINE DRY-RUN)" -ForegroundColor Cyan
-Write-Host " Safety Mode : STRICTLY OFFLINE — ZERO RPC CALLS OR BROADCASTS" -ForegroundColor Green
+Write-Host " Safety Mode : STRICTLY OFFLINE -- ZERO RPC CALLS OR BROADCASTS" -ForegroundColor Green
 Write-Host "========================================================================" -ForegroundColor Cyan
 Write-Host " Target Network    : Ethereum Sepolia Testnet (Chain ID: 11155111)"
 Write-Host " Required EVM Fork : Cancun / Pectra (EIP-1153 TLOAD/TSTORE active)"
@@ -75,7 +75,7 @@ if ((Test-Path $FairBatchBinPath) -and (Test-Path $FairBatchRuntimePath)) {
     Write-Host ("  FairBatch.bin         : {0} bytes" -f $InitBytes)
     Write-Host ("  FairBatch.runtime.bin : {0} bytes ({1}% of 24,576-byte EIP-170 limit)" -f $RuntimeBytes, $Eip170Pct)
 
-    $Disasm = ($RuntimeHex | & $CastBin disassemble) -split "`r?`n"
+    $Disasm = (cmd /c "`"$CastBin`" disassemble < `"$FairBatchRuntimePath`"") -split "`r?`n"
     $Push0Count  = ($Disasm | Select-String -Pattern "\bPUSH0\b").Count
     $McopyCount  = ($Disasm | Select-String -Pattern "\bMCOPY\b").Count
     $TloadCount  = ($Disasm | Select-String -Pattern "\bTLOAD\b").Count
