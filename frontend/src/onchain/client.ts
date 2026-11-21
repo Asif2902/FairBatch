@@ -2,6 +2,7 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
+  fallback,
   getAddress,
   http,
   type Address,
@@ -17,11 +18,26 @@ let cachedPublic:
   | null = null;
 
 export function getPublicClient(config: RuntimeConfig): PublicClient {
-  const key = `${config.chainId}:${config.rpcUrl}`;
+  const urls = config.rpcUrls?.length ? config.rpcUrls : [config.rpcUrl];
+  const key = `${config.chainId}:${urls.join('|')}`;
   if (cachedPublic?.key === key) return cachedPublic.client;
+
+  const transports = urls.map((url) =>
+    http(url, {
+      timeout: 20_000,
+      retryCount: 2,
+      retryDelay: 500,
+    }),
+  );
+
+  const transport =
+    transports.length > 1
+      ? fallback(transports, { rank: false, retryCount: 2, retryDelay: 600 })
+      : transports[0];
+
   const client = createPublicClient({
     chain: getChain(config),
-    transport: http(config.rpcUrl, { timeout: 30_000 }),
+    transport,
   });
   cachedPublic = { key, client };
   return client;
@@ -44,7 +60,7 @@ function walletClientFor(config: RuntimeConfig, account?: Address): ConfiguredWa
   const provider = getInjectedProvider();
   if (!provider) {
     throw new Error(
-      'No EIP-1193 wallet detected. Install MetaMask, Rabby, or another injected wallet to trade on-chain.',
+      'No Ethereum wallet detected. Install MetaMask or Rabby to trade on Ethereum Sepolia.',
     );
   }
   return createWalletClient({
@@ -54,7 +70,10 @@ function walletClientFor(config: RuntimeConfig, account?: Address): ConfiguredWa
   });
 }
 
-async function ensureWalletChain(client: ConfiguredWalletClient, config: RuntimeConfig): Promise<void> {
+async function ensureWalletChain(
+  client: ConfiguredWalletClient,
+  config: RuntimeConfig,
+): Promise<void> {
   const current = await client.getChainId();
   if (current === config.chainId) return;
   const chain = getChain(config);
@@ -64,10 +83,16 @@ async function ensureWalletChain(client: ConfiguredWalletClient, config: Runtime
     try {
       await client.addChain({ chain });
     } catch {
-      // Some wallets report the chain as already known; retry the switch below.
+      // Some wallets report the chain as already known; retry switch below.
     }
     await client.switchChain({ id: config.chainId });
   }
+}
+
+export async function switchWalletToSepolia(config: RuntimeConfig): Promise<number> {
+  const client = walletClientFor(config);
+  await ensureWalletChain(client, config);
+  return client.getChainId();
 }
 
 export async function connectInjectedWallet(config: RuntimeConfig): Promise<Address> {

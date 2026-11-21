@@ -16,7 +16,8 @@ import type {
 import {
   buildSupplyDemandCurves,
   computeBatchSettlement,
-} from '../lib/fallbackEngine';
+  computeSignedTraderValueDiff,
+} from '../lib/clearingMath';
 import { shortenAddress } from '../lib/format';
 import { erc20Abi, fairBatchAbi, faucetAbi } from './abi';
 import { getPublicClient } from './client';
@@ -115,6 +116,10 @@ export interface OnchainSnapshot {
   claimable: ClaimableDto[];
   settledHistory: BatchSettlementDto[];
   activeSettlement: BatchSettlementDto;
+  /** Latest on-chain block timestamp (seconds) fetched with this snapshot. */
+  blockTimestamp: number;
+  /** Estimated `chainNow - wallNow` offset in seconds at snapshot fetch time. */
+  chainTimeOffsetSecs: number;
   lastUpdated: number;
 }
 
@@ -142,6 +147,37 @@ export function mapPhase(rawPhase: number): BatchPhase {
     default:
       return 'Open';
   }
+}
+
+/**
+ * Mirrors `evaluate_batch_phase` in `src/lib.fe` so the UI never freezes on
+ * `00:00` when the commit or reveal deadline passes between RPC polls:
+ *   - `settled` (phase === 3) -> 'Settled'
+ *   - `now <= commitDeadline` -> 'Open'
+ *   - `now <= revealDeadline` -> 'Reveal'
+ *   - `now >  revealDeadline` -> 'Ready'
+ */
+export function deriveLivePhase(batch: RawBatchInfo, nowSecs: number): BatchPhase {
+  if (batch.phase === 3) return 'Settled';
+  const commitDl = Number(batch.commitDeadline);
+  const revealDl = Number(batch.revealDeadline);
+  const start = Number(batch.startTime);
+  if (commitDl === start && revealDl === start) {
+    return mapPhase(batch.phase);
+  }
+  if (nowSecs <= commitDl) return 'Open';
+  if (nowSecs <= revealDl) return 'Reveal';
+  return 'Ready';
+}
+
+export function remainingSecondsForPhase(
+  batch: RawBatchInfo,
+  phase: BatchPhase,
+  nowSecs: number,
+): number {
+  if (phase === 'Open') return Math.max(0, Number(batch.commitDeadline) - nowSecs);
+  if (phase === 'Reveal') return Math.max(0, Number(batch.revealDeadline) - nowSecs);
+  return 0;
 }
 
 export function phaseLabel(phase: BatchPhase): string {
@@ -403,11 +439,156 @@ function emptyComparison(clearingPrice: number): ComparisonDto {
   };
 }
 
-function remainingSeconds(batch: RawBatchInfo, phase: BatchPhase): number {
-  const now = Math.floor(Date.now() / 1000);
-  if (phase === 'Open') return Math.max(0, Number(batch.commitDeadline) - now);
-  if (phase === 'Reveal') return Math.max(0, Number(batch.revealDeadline) - now);
-  return 0;
+export interface IndexedEvents {
+  ordersByBatch: Map<number, ChainOrder[]>;
+  commitmentsByBatch: Map<number, ChainCommitment[]>;
+  revealedCommits: Set<string>;
+  slashedCommits: Set<string>;
+  claimedOrders: Set<string>;
+  settledEvents: FairBatchEvent[];
+}
+
+/**
+ * Indexes and deduplicates FairBatch logs by canonical on-chain IDs:
+ *   - orders: `(batch_id, order_id)`
+ *   - commitments: `(batch_id, commit_id)`
+ *   - settlements: `batch_id`
+ */
+export function indexFairBatchEvents(
+  events: FairBatchEvent[],
+  config: RuntimeConfig,
+): IndexedEvents {
+  const orderMapsByBatch = new Map<number, Map<number, ChainOrder>>();
+  const commitMapsByBatch = new Map<number, Map<number, ChainCommitment>>();
+  const revealedCommits = new Set<string>();
+  const slashedCommits = new Set<string>();
+  const claimedOrders = new Set<string>();
+  const settledByBatch = new Map<number, FairBatchEvent>();
+
+  for (const event of events) {
+    if (event.eventName === 'OrderSubmitted') {
+      const order = buildOrder(config, event, asNumber(event.args.mode));
+      const map = orderMapsByBatch.get(order.batch_id) ?? new Map<number, ChainOrder>();
+      if (!map.has(order.order_id)) map.set(order.order_id, order);
+      orderMapsByBatch.set(order.batch_id, map);
+    } else if (event.eventName === 'OrderRevealed') {
+      const order = buildOrder(config, event, 1);
+      const map = orderMapsByBatch.get(order.batch_id) ?? new Map<number, ChainOrder>();
+      if (!map.has(order.order_id)) map.set(order.order_id, order);
+      orderMapsByBatch.set(order.batch_id, map);
+      const commitId = asBig(event.args.commitId);
+      revealedCommits.add(`${order.batch_id}:${commitId}`);
+    } else if (event.eventName === 'OrderCommitted') {
+      const batchId = Number(asBig(event.args.batchId));
+      const commitId = Number(asBig(event.args.commitId));
+      const trader = asAddress(event.args.trader);
+      const bond = asBig(event.args.bond);
+      const map = commitMapsByBatch.get(batchId) ?? new Map<number, ChainCommitment>();
+      if (!map.has(commitId)) {
+        map.set(commitId, {
+          batch_id: batchId,
+          commit_id: commitId,
+          trader,
+          commitment_hash: hex32(asBig(event.args.commitmentHash)),
+          bond_eth: toHuman(bond, 18),
+          bond_wei: bond,
+          revealed: false,
+          slashed: false,
+        });
+      }
+      commitMapsByBatch.set(batchId, map);
+    } else if (event.eventName === 'CommitmentSlashed') {
+      const batchId = Number(asBig(event.args.batchId));
+      const commitId = asBig(event.args.commitId);
+      slashedCommits.add(`${batchId}:${commitId}`);
+    } else if (event.eventName === 'OrderClaimed') {
+      claimedOrders.add(
+        `${Number(asBig(event.args.batchId))}:${Number(asBig(event.args.orderId))}`,
+      );
+    } else if (event.eventName === 'BatchSettled') {
+      const batchId = Number(asBig(event.args.batchId));
+      if (!settledByBatch.has(batchId)) {
+        settledByBatch.set(batchId, event);
+      }
+    }
+  }
+
+  const ordersByBatch = new Map<number, ChainOrder[]>();
+  for (const [batchId, map] of orderMapsByBatch.entries()) {
+    ordersByBatch.set(
+      batchId,
+      Array.from(map.values()).sort((a, b) => a.order_id - b.order_id),
+    );
+  }
+
+  const commitmentsByBatch = new Map<number, ChainCommitment[]>();
+  for (const [batchId, map] of commitMapsByBatch.entries()) {
+    const list = Array.from(map.values()).sort((a, b) => a.commit_id - b.commit_id);
+    for (const commit of list) {
+      const key = `${batchId}:${commit.commit_id}`;
+      if (revealedCommits.has(key)) commit.revealed = true;
+      if (slashedCommits.has(key)) commit.slashed = true;
+    }
+    commitmentsByBatch.set(batchId, list);
+  }
+
+  const settledEvents = Array.from(settledByBatch.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, ev]) => ev);
+
+  return {
+    ordersByBatch,
+    commitmentsByBatch,
+    revealedCommits,
+    slashedCommits,
+    claimedOrders,
+    settledEvents,
+  };
+}
+
+/**
+ * Reconstructs pre-settlement `(base, quote)` reserves for each settled batch.
+ * The deployed FairBatch constructor initializes pool reserves to `(0, 0)` and
+ * `seedReserves` emits `LiquidityAdded`, so tracking starts from `(0, 0)` to
+ * avoid double-counting the seed deposit. If no liquidity event preceded the
+ * first settlement (partial event range), falls back to `config.initialReserve*`.
+ */
+export function reconstructReserveHistory(
+  events: FairBatchEvent[],
+  config: Pick<RuntimeConfig, 'initialReserveBase' | 'initialReserveQuote'>,
+): Map<number, { base: bigint; quote: bigint }> {
+  let trackedBase = 0n;
+  let trackedQuote = 0n;
+  let sawLiquidityEvent = false;
+  const seenSettled = new Set<number>();
+  const beforeByBatch = new Map<number, { base: bigint; quote: bigint }>();
+
+  for (const event of events) {
+    if (event.eventName === 'LiquidityAdded') {
+      sawLiquidityEvent = true;
+      trackedBase += asBig(event.args.amountBase);
+      trackedQuote += asBig(event.args.amountQuote);
+    } else if (event.eventName === 'LiquidityRemoved') {
+      sawLiquidityEvent = true;
+      const base = asBig(event.args.amountBase);
+      const quote = asBig(event.args.amountQuote);
+      trackedBase = trackedBase > base ? trackedBase - base : 0n;
+      trackedQuote = trackedQuote > quote ? trackedQuote - quote : 0n;
+    } else if (event.eventName === 'BatchSettled') {
+      const batchId = Number(asBig(event.args.batchId));
+      if (seenSettled.has(batchId)) continue;
+      seenSettled.add(batchId);
+      if (!sawLiquidityEvent && trackedBase === 0n && trackedQuote === 0n) {
+        trackedBase = config.initialReserveBase;
+        trackedQuote = config.initialReserveQuote;
+      }
+      beforeByBatch.set(batchId, { base: trackedBase, quote: trackedQuote });
+      trackedBase = asBig(event.args.reserveBaseAfter);
+      trackedQuote = asBig(event.args.reserveQuoteAfter);
+    }
+  }
+
+  return beforeByBatch;
 }
 
 export async function loadOnchainSnapshot(
@@ -415,7 +596,7 @@ export async function loadOnchainSnapshot(
   account: Address | null,
 ): Promise<OnchainSnapshot> {
   const client = getPublicClient(config);
-  const [batchRaw, reservesRaw, domainRaw, events] = await Promise.all([
+  const [batchRaw, reservesRaw, domainRaw, latestBlock, events] = await Promise.all([
     client.readContract({
       address: config.fairBatch,
       abi: fairBatchAbi,
@@ -431,8 +612,13 @@ export async function loadOnchainSnapshot(
       abi: fairBatchAbi,
       functionName: 'domainSeparator',
     }),
+    client.getBlock({ blockTag: 'latest' }).catch(() => null),
     loadFairBatchEvents(client, config),
   ]);
+
+  const wallNowSecs = Math.floor(Date.now() / 1000);
+  const blockTimestamp = latestBlock?.timestamp ? Number(latestBlock.timestamp) : wallNowSecs;
+  const chainTimeOffsetSecs = blockTimestamp - wallNowSecs;
 
   const batch = batchRaw as unknown as RawBatchInfo;
   const reserves = reservesRaw as unknown as RawReserves;
@@ -588,63 +774,13 @@ export async function loadOnchainSnapshot(
     }
   }
 
-  const ordersByBatch = new Map<number, ChainOrder[]>();
-  const commitmentsByBatch = new Map<number, ChainCommitment[]>();
-  const revealedCommits = new Set<string>();
-  const slashedCommits = new Set<string>();
-  const claimedOrders = new Set<string>();
-  const settledEvents: FairBatchEvent[] = [];
-
-  for (const event of events) {
-    if (event.eventName === 'OrderSubmitted') {
-      const order = buildOrder(config, event, asNumber(event.args.mode));
-      const list = ordersByBatch.get(order.batch_id) ?? [];
-      list.push(order);
-      ordersByBatch.set(order.batch_id, list);
-    } else if (event.eventName === 'OrderRevealed') {
-      const order = buildOrder(config, event, 1);
-      const list = ordersByBatch.get(order.batch_id) ?? [];
-      list.push(order);
-      ordersByBatch.set(order.batch_id, list);
-      const commitId = asBig(event.args.commitId);
-      revealedCommits.add(`${order.batch_id}:${commitId}`);
-    } else if (event.eventName === 'OrderCommitted') {
-      const batchId = Number(asBig(event.args.batchId));
-      const commitId = Number(asBig(event.args.commitId));
-      const trader = asAddress(event.args.trader);
-      const bond = asBig(event.args.bond);
-      const list = commitmentsByBatch.get(batchId) ?? [];
-      list.push({
-        batch_id: batchId,
-        commit_id: commitId,
-        trader,
-        commitment_hash: hex32(asBig(event.args.commitmentHash)),
-        bond_eth: toHuman(bond, 18),
-        bond_wei: bond,
-        revealed: false,
-        slashed: false,
-      });
-      commitmentsByBatch.set(batchId, list);
-    } else if (event.eventName === 'CommitmentSlashed') {
-      const batchId = Number(asBig(event.args.batchId));
-      const commitId = asBig(event.args.commitId);
-      slashedCommits.add(`${batchId}:${commitId}`);
-    } else if (event.eventName === 'OrderClaimed') {
-      claimedOrders.add(
-        `${Number(asBig(event.args.batchId))}:${Number(asBig(event.args.orderId))}`,
-      );
-    } else if (event.eventName === 'BatchSettled') {
-      settledEvents.push(event);
-    }
-  }
-
-  for (const [batchId, list] of commitmentsByBatch.entries()) {
-    for (const commit of list) {
-      const key = `${batchId}:${commit.commit_id}`;
-      if (revealedCommits.has(key)) commit.revealed = true;
-      if (slashedCommits.has(key)) commit.slashed = true;
-    }
-  }
+  const {
+    ordersByBatch,
+    commitmentsByBatch,
+    slashedCommits,
+    claimedOrders,
+    settledEvents,
+  } = indexFairBatchEvents(events, config);
 
   // Resolve receipts for every settled batch (cached across refreshes).
   const receiptEntries = new Map<string, RawReceipt>();
@@ -664,15 +800,24 @@ export async function loadOnchainSnapshot(
   }
 
   const activeBatchId = Number(batch.batchId);
-  const activeOrders = (ordersByBatch.get(activeBatchId) ?? []).sort(
-    (a, b) => a.order_id - b.order_id,
-  );
-  const activeCommitments = (commitmentsByBatch.get(activeBatchId) ?? []).sort(
-    (a, b) => a.commit_id - b.commit_id,
-  );
+  const activeOrders = ordersByBatch.get(activeBatchId) ?? [];
+  const activeCommitments = commitmentsByBatch.get(activeBatchId) ?? [];
   const allCommitments = Array.from(commitmentsByBatch.values())
     .flat()
     .sort((a, b) => b.batch_id - a.batch_id || b.commit_id - a.commit_id);
+
+  // Reconcile header counts if getLogs is slightly ahead/behind a load-balanced RPC node.
+  const reconciledBatch: RawBatchInfo = {
+    ...batch,
+    orderCount:
+      activeOrders.length > Number(batch.orderCount)
+        ? BigInt(activeOrders.length)
+        : batch.orderCount,
+    commitCount:
+      activeCommitments.length > Number(batch.commitCount)
+        ? BigInt(activeCommitments.length)
+        : batch.commitCount,
+  };
 
   const claimable: ClaimableDto[] = [];
   for (const [key, receipt] of receiptEntries.entries()) {
@@ -708,35 +853,12 @@ export async function loadOnchainSnapshot(
   }
   claimable.sort((a, b) => b.batch_id - a.batch_id || b.order_id - a.order_id);
 
-  // Reconstruct reserve history and produce real settled-batch records.
-  // The deployment is constructor-seeded, so the tracked baseline starts from the
-  // configured initial reserves; only later LiquidityAdded/Removed events move it.
-  let trackedBase = config.initialReserveBase;
-  let trackedQuote = config.initialReserveQuote;
-  const beforeByBatch = new Map<number, { base: bigint; quote: bigint }>();
-  for (const event of events) {
-    if (event.eventName === 'LiquidityAdded') {
-      trackedBase += asBig(event.args.amountBase);
-      trackedQuote += asBig(event.args.amountQuote);
-    } else if (event.eventName === 'LiquidityRemoved') {
-      const base = asBig(event.args.amountBase);
-      const quote = asBig(event.args.amountQuote);
-      trackedBase = trackedBase > base ? trackedBase - base : 0n;
-      trackedQuote = trackedQuote > quote ? trackedQuote - quote : 0n;
-    } else if (event.eventName === 'BatchSettled') {
-      const batchId = Number(asBig(event.args.batchId));
-      beforeByBatch.set(batchId, { base: trackedBase, quote: trackedQuote });
-      trackedBase = asBig(event.args.reserveBaseAfter);
-      trackedQuote = asBig(event.args.reserveQuoteAfter);
-    }
-  }
+  const beforeByBatch = reconstructReserveHistory(events, config);
 
   const settledHistory: BatchSettlementDto[] = [];
   for (const settled of settledEvents) {
     const batchId = Number(asBig(settled.args.batchId));
-    const orders = (ordersByBatch.get(batchId) ?? []).sort(
-      (a, b) => a.order_id - b.order_id,
-    );
+    const orders = ordersByBatch.get(batchId) ?? [];
     const receipts = orders
       .map((order) => receiptEntries.get(`${batchId}:${order.order_id}`))
       .filter((receipt): receipt is RawReceipt => Boolean(receipt?.settled));
@@ -763,16 +885,17 @@ export async function loadOnchainSnapshot(
 
     let comparison = emptyComparison(clearingPrice);
     try {
-      const simulated = computeBatchSettlement(
-        batchId,
-        rxBefore,
-        ryBefore,
-        orders,
+      const simulated = computeBatchSettlement(batchId, rxBefore, ryBefore, orders);
+      const signedDiff = computeSignedTraderValueDiff(
+        executionReceipts,
+        simulated.comparison.amm_receipts,
+        clearingPrice,
       );
       comparison = {
         ...simulated.comparison,
         fairbatch_uniform_price: clearingPrice,
         fairbatch_receipts: executionReceipts,
+        user_value_saved_quote: signedDiff,
       };
     } catch {
       comparison = {
@@ -831,7 +954,7 @@ export async function loadOnchainSnapshot(
   }
   settledHistory.sort((a, b) => b.batch_id - a.batch_id);
 
-  const phase = mapPhase(batch.phase);
+  const phase = deriveLivePhase(reconciledBatch, blockTimestamp);
   const rx = toHuman(reserves.reserveBase, config.baseDecimals);
   const ry = toHuman(reserves.reserveQuote, config.quoteDecimals);
   const spot = wadToHuman(reserves.spotPriceWad);
@@ -846,9 +969,11 @@ export async function loadOnchainSnapshot(
   const state: StateResponse = {
     batch_id: activeBatchId,
     phase,
-    commit_duration_secs: Number(batch.commitDeadline - batch.startTime),
-    reveal_duration_secs: Number(batch.revealDeadline - batch.commitDeadline),
-    phase_remaining_secs: remainingSeconds(batch, phase),
+    commit_duration_secs: Number(reconciledBatch.commitDeadline - reconciledBatch.startTime),
+    reveal_duration_secs: Number(
+      reconciledBatch.revealDeadline - reconciledBatch.commitDeadline,
+    ),
+    phase_remaining_secs: remainingSecondsForPhase(reconciledBatch, phase, blockTimestamp),
     reserves: {
       rx,
       ry,
@@ -859,9 +984,6 @@ export async function loadOnchainSnapshot(
       base_decimals: config.baseDecimals,
       quote_decimals: config.quoteDecimals,
     },
-    demo_wallets: account
-      ? [{ index: 0, name: 'Connected wallet', address: account }]
-      : [],
     commitments: activeCommitments,
     orders: activeOrders,
     claimable,
@@ -888,7 +1010,7 @@ export async function loadOnchainSnapshot(
     config,
     health,
     state,
-    batch,
+    batch: reconciledBatch,
     reserves,
     balances,
     allowances,
@@ -906,6 +1028,8 @@ export async function loadOnchainSnapshot(
     claimable,
     settledHistory,
     activeSettlement,
+    blockTimestamp,
+    chainTimeOffsetSecs,
     lastUpdated: Date.now(),
   };
 }

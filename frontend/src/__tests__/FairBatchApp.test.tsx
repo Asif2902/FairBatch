@@ -4,7 +4,7 @@ import type { BatchPhase, ClaimableDto, OrderDto, StateResponse } from '../types
 import type { FairBatchController } from '../onchain/useFairBatch';
 import type { FaucetState, LiquidityLockState, OnchainSnapshot } from '../onchain/state';
 import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
-import { computeBatchSettlement } from '../lib/fallbackEngine';
+import { computeBatchSettlement } from '../lib/clearingMath';
 import { formatPrice } from '../lib/format';
 import App from '../App';
 
@@ -70,7 +70,7 @@ let controller: FairBatchController;
 
 function makeSnapshot(
   phase: BatchPhase,
-  account: string | null = null,
+  _account: string | null = null,
   overrides: { lpLock?: Partial<LiquidityLockState>; faucet?: Partial<FaucetState> } = {},
 ): OnchainSnapshot {
   const settlement = computeBatchSettlement(BATCH_ID, 100, 300_000, ORDERS);
@@ -90,9 +90,6 @@ function makeSnapshot(
       base_decimals: 18,
       quote_decimals: 6,
     },
-    demo_wallets: account
-      ? [{ index: 0, name: 'Connected wallet', address: account }]
-      : [],
     commitments: [
       {
         commit_id: 4,
@@ -193,6 +190,8 @@ function makeSnapshot(
     claimable: CLAIMS,
     settledHistory: [],
     activeSettlement: settlement,
+    blockTimestamp: Math.floor(Date.now() / 1000),
+    chainTimeOffsetSecs: 0,
     lastUpdated: Date.now(),
   };
 }
@@ -201,24 +200,32 @@ function makeController(
   overrides: Partial<FairBatchController> = {},
 ): FairBatchController {
   const account = overrides.account ?? null;
+  const snapshot = overrides.snapshot ?? makeSnapshot('Open', account);
   return {
     config: DEFAULT_RUNTIME_CONFIG,
+    hasWallet: true,
     account,
     walletChainId: DEFAULT_RUNTIME_CONFIG.chainId,
-    snapshot: makeSnapshot('Open', account),
+    snapshot,
+    livePhase: overrides.livePhase ?? snapshot.state.phase,
+    chainNow: Math.floor(Date.now() / 1000),
     loading: false,
     refreshing: false,
     busyAction: null,
+    txStatus: null,
     error: null,
     notice: null,
     secretVault: [],
     configured: true,
     wrongNetwork: false,
     connect: vi.fn(async () => undefined),
+    switchNetwork: vi.fn(async () => undefined),
     disconnect: vi.fn(),
     refresh: vi.fn(),
     clearNotice: vi.fn(),
-    submitDirect: vi.fn(async () => ({ hash: '0x', receipt: {} })),
+    submitDirect: vi.fn(async () => ({ hash: '0x', receipt: {}, orderId: 1 })),
+    settleAndSubmitDirect: vi.fn(async () => ({ hash: '0x', receipt: {}, orderId: 1 })),
+    signAndSubmitIntent: vi.fn(async () => ({ hash: '0x', receipt: {}, orderId: 1 })),
     sealCommit: vi.fn(async () => ({ hash: '0x', receipt: {} })),
     revealCommit: vi.fn(async () => ({ hash: '0x', receipt: {} })),
     signIntent: vi.fn(async () => ({

@@ -1,11 +1,14 @@
 import { getAddress, isAddress, zeroAddress, type Address, type Chain } from 'viem';
 import { sepolia } from 'viem/chains';
 import deployment from '../../../config/deployment.json';
+import networks from '../../../config/networks.json';
 
 export interface RuntimeConfig {
   network: 'sepolia';
   chainId: number;
   rpcUrl: string;
+  fallbackRpcUrls: string[];
+  rpcUrls: string[];
   explorerUrl: string;
   deployer: Address;
   fairBatch: Address;
@@ -33,12 +36,30 @@ function parseAddress(raw: string | undefined): Address {
   return getAddress(raw);
 }
 
+function collectRpcUrls(primary: string, fallbacks: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of [primary, ...fallbacks]) {
+    const trimmed = candidate.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
 function buildSepoliaConfig(): RuntimeConfig {
   const faucet = parseAddress(deployment.contracts.faucet);
+  const rawFallbacks = networks.networks?.sepolia?.fallback_rpc_urls ?? [];
+  const rpcUrls = collectRpcUrls(deployment.rpcUrl, rawFallbacks);
+  const fallbackRpcUrls = rpcUrls.slice(1);
   return {
     network: 'sepolia',
     chainId: deployment.chainId,
-    rpcUrl: deployment.rpcUrl,
+    rpcUrl: rpcUrls[0] ?? deployment.rpcUrl,
+    fallbackRpcUrls,
+    rpcUrls,
     explorerUrl: deployment.explorerUrl,
     deployer: parseAddress(deployment.deployer),
     fairBatch: parseAddress(deployment.contracts.fairBatch),
@@ -75,7 +96,7 @@ export function isContractConfigured(config: RuntimeConfig): boolean {
 export function getChain(config: RuntimeConfig): Chain {
   return {
     ...sepolia,
-    rpcUrls: { default: { http: [config.rpcUrl] } },
+    rpcUrls: { default: { http: config.rpcUrls } },
   };
 }
 

@@ -1,4 +1,4 @@
-export type ExecutionMode = 'local_engine' | 'rpc_connected' | 'browser_fallback';
+export type ExecutionMode = 'rpc_connected';
 
 export type BatchPhase = 'Open' | 'Reveal' | 'Ready' | 'Settled';
 
@@ -7,12 +7,6 @@ export type OrderSide = 'SellBase' | 'BuyBase';
 export type SubmissionType = 'Direct' | 'CommitReveal' | 'Eip712Intent';
 
 export type FillStatus = 'Filled' | 'PartialFill' | 'OutOfMoneyRefund';
-
-export type PresetId =
-  | 'five_sellers'
-  | 'cow_balanced'
-  | 'marginal_pro_rata'
-  | 'whale_imbalance';
 
 export interface ContractAddressesDto {
   fair_batch: string;
@@ -41,12 +35,6 @@ export interface ReservesDto {
   quote_symbol: string;
   base_decimals: number;
   quote_decimals: number;
-}
-
-export interface DemoWalletDto {
-  index: number;
-  name: string;
-  address: string;
 }
 
 export interface CommitmentDto {
@@ -127,6 +115,7 @@ export interface ComparisonDto {
   fee_bps: number;
   amm_victim_avg_price: number;
   fairbatch_uniform_price: number;
+  /** Signed Quote-denominated difference: FairBatch minus Sequential AMM. */
   user_value_saved_quote: number;
   amm_sandwich_profit_quote: number;
   fairbatch_sandwich_profit_quote: number;
@@ -170,7 +159,6 @@ export interface StateResponse {
   reveal_duration_secs: number;
   phase_remaining_secs: number;
   reserves: ReservesDto;
-  demo_wallets: DemoWalletDto[];
   commitments: CommitmentDto[];
   orders: OrderDto[];
   claimable: ClaimableDto[];
@@ -189,11 +177,8 @@ export interface LocalSecretVaultEntry {
   commitment_hash: string;
   bond_eth: number;
   revealed: boolean;
-  /** Exact raw input units, stored so a reveal never depends on float rounding. */
   amount_in_raw?: string;
-  /** Exact WAD limit price, stored so a reveal never depends on float rounding. */
   limit_price_raw?: string;
-  /** Exact wei bond posted with the commitment. */
   bond_wei?: string;
 }
 
@@ -210,23 +195,4 @@ export interface SignedIntentArtifact {
   deadline: number;
   signature: string;
   digest: string;
-}
-
-export interface SignedDemoIntentResponse {
-  trader: string;
-  nonce: number;
-  batch_id?: number;
-  deadline: number;
-  chain_id?: number;
-  verifying_contract?: string;
-  signature: string;
-  digest: string;
-}
-
-export interface ContractConfigUpdatePayload {
-  rpc_url?: string;
-  chain_id?: number;
-  fair_batch?: string;
-  base_token?: string;
-  quote_token?: string;
 }

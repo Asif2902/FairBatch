@@ -17,7 +17,7 @@ import type {
   StateResponse,
 } from '../types';
 import type { RuntimeConfig } from '../onchain/config';
-import { computeBatchSettlement } from '../lib/fallbackEngine';
+import { computeBatchSettlement } from '../lib/clearingMath';
 import {
   computeLocalCommitmentHash,
   generateRandomSaltHex,

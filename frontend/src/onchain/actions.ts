@@ -15,6 +15,8 @@ import { erc20Abi, fairBatchAbi, fairBatchEvents, faucetAbi, faucetEvents } from
 import { ensureWalletReady, getPublicClient } from './client';
 import { getChain, type RuntimeConfig } from './config';
 
+export type StatusReporter = (status: string) => void;
+
 export interface TxResult {
   hash: Hash;
   receipt: TransactionReceipt;
@@ -28,6 +30,7 @@ export interface FaucetClaimResult extends TxResult {
 
 export interface DirectOrderResult extends TxResult {
   orderId: number;
+  settledPreviousBatchId?: number;
 }
 
 export interface CommitResult extends TxResult {
@@ -85,12 +88,15 @@ export function saltToBigInt(salt: string): bigint {
   if (/^0x[0-9a-fA-F]{1,64}$/.test(trimmed)) {
     return BigInt(trimmed);
   }
-  // Compatibility for legacy vault entries: fold arbitrary text into a u256.
   return BigInt(keccak256Utf8(trimmed));
 }
 
 function inputToken(config: RuntimeConfig, side: OrderSide): Address {
   return side === 'SellBase' ? config.baseToken : config.quoteToken;
+}
+
+function inputSymbol(config: RuntimeConfig, side: OrderSide): string {
+  return side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
 }
 
 function inputDecimals(config: RuntimeConfig, side: OrderSide): number {
@@ -125,17 +131,34 @@ function decodeEvents(
   }
 }
 
-async function waitForSuccess(config: RuntimeConfig, hash: Hash): Promise<TransactionReceipt> {
+async function waitForSuccess(
+  config: RuntimeConfig,
+  hash: Hash,
+  onStatus?: StatusReporter,
+): Promise<TransactionReceipt> {
   const client = getPublicClient(config);
-  const receipt = await client.waitForTransactionReceipt({
-    hash,
-    confirmations: 1,
-    timeout: 180_000,
-  });
-  if (receipt.status !== 'success') {
-    throw new Error(`Transaction reverted on-chain: ${hash}`);
+  const slowTimer =
+    typeof globalThis.setTimeout === 'function'
+      ? globalThis.setTimeout(() => {
+          onStatus?.('Still confirming on Sepolia — network is taking a bit longer than usual…');
+        }, 18_000)
+      : null;
+
+  try {
+    const receipt = await client.waitForTransactionReceipt({
+      hash,
+      confirmations: 1,
+      timeout: 180_000,
+    });
+    if (receipt.status !== 'success') {
+      throw new Error(`Transaction reverted on-chain: ${hash}`);
+    }
+    return receipt;
+  } finally {
+    if (slowTimer !== null && typeof globalThis.clearTimeout === 'function') {
+      globalThis.clearTimeout(slowTimer);
+    }
   }
-  return receipt;
 }
 
 async function approveToken(
@@ -144,6 +167,8 @@ async function approveToken(
   token: Address,
   spender: Address,
   amount: bigint = maxUint256,
+  symbol?: string,
+  onStatus?: StatusReporter,
 ): Promise<Hash | null> {
   const client = getPublicClient(config);
   const current = await client.readContract({
@@ -154,6 +179,7 @@ async function approveToken(
   });
   if (current >= amount) return null;
 
+  onStatus?.(`Approving ${symbol ?? 'token'}…`);
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: token,
@@ -163,7 +189,8 @@ async function approveToken(
     account,
     chain: getChain(config),
   });
-  await waitForSuccess(config, hash);
+  onStatus?.(`Waiting for ${symbol ?? 'token'} approval…`);
+  await waitForSuccess(config, hash, onStatus);
   return hash;
 }
 
@@ -172,17 +199,28 @@ export async function ensureInputAllowance(
   account: Address,
   side: OrderSide,
   amount: bigint,
+  onStatus?: StatusReporter,
 ): Promise<Hash | null> {
-  return approveToken(config, account, inputToken(config, side), config.fairBatch, amount);
+  return approveToken(
+    config,
+    account,
+    inputToken(config, side),
+    config.fairBatch,
+    amount,
+    inputSymbol(config, side),
+    onStatus,
+  );
 }
 
 export async function claimFaucet(
   config: RuntimeConfig,
   account: Address,
+  onStatus?: StatusReporter,
 ): Promise<FaucetClaimResult> {
   if (!config.tokenFaucetEnabled) {
     throw new Error('Sepolia faucet contract is not configured.');
   }
+  onStatus?.('Confirm faucet claim in your wallet…');
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.faucet,
@@ -192,7 +230,8 @@ export async function claimFaucet(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Claiming free test tokens on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   let baseAmount = config.faucetClaimBase;
   let quoteAmount = config.faucetClaimQuote;
   let nextClaimAt = 0n;
@@ -217,11 +256,18 @@ export async function submitDirectOrder(
   config: RuntimeConfig,
   account: Address,
   params: { side: OrderSide; amountIn: string; limitPrice: string },
+  onStatus?: StatusReporter,
 ): Promise<DirectOrderResult> {
   const amountRaw = toRawAmount(params.amountIn, inputDecimals(config, params.side));
   const limitRaw = toWadPrice(params.limitPrice);
-  await ensureInputAllowance(config, account, params.side, amountRaw);
+  const symbol = inputSymbol(config, params.side);
+  const approved = await ensureInputAllowance(config, account, params.side, amountRaw, onStatus);
 
+  onStatus?.(
+    approved
+      ? `Approved ${symbol} → Sending your order…`
+      : 'Sending your order…',
+  );
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -231,10 +277,98 @@ export async function submitDirectOrder(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming your order on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderSubmitted');
   const orderId = events[0] ? Number(eventBig(events[0], 'orderId')) : -1;
   return { hash, receipt, orderId };
+}
+
+/**
+ * When the current round is finished (Ready), combines `settleBatch()` +
+ * `submitDirectOrder(...)` into a single atomic `multicall` transaction so the
+ * user never gets stuck on a dead end. If another wallet already settled while
+ * the approval confirmed, falls back transparently to `submitDirectOrder`.
+ */
+export async function settleAndSubmitDirect(
+  config: RuntimeConfig,
+  account: Address,
+  params: { side: OrderSide; amountIn: string; limitPrice: string },
+  onStatus?: StatusReporter,
+): Promise<DirectOrderResult> {
+  const amountRaw = toRawAmount(params.amountIn, inputDecimals(config, params.side));
+  const limitRaw = toWadPrice(params.limitPrice);
+  const symbol = inputSymbol(config, params.side);
+  const approved = await ensureInputAllowance(config, account, params.side, amountRaw, onStatus);
+
+  const calls: `0x${string}`[] = [
+    encodeFunctionData({
+      abi: fairBatchAbi,
+      functionName: 'settleBatch',
+      args: [],
+    }),
+    encodeFunctionData({
+      abi: fairBatchAbi,
+      functionName: 'submitDirectOrder',
+      args: [sideU8(params.side), amountRaw, limitRaw],
+    }),
+  ];
+
+  const client = getPublicClient(config);
+  let canMulticall = true;
+  try {
+    await client.simulateContract({
+      address: config.fairBatch,
+      abi: fairBatchAbi,
+      functionName: 'multicall',
+      args: [calls],
+      account,
+    });
+  } catch (simErr) {
+    const msg = simErr instanceof Error ? simErr.message : '';
+    // If another caller already started the next round, submit directly into it.
+    if (
+      msg.includes('Reveal window still active') ||
+      msg.includes('Batch already settled') ||
+      msg.includes('Commit window')
+    ) {
+      canMulticall = false;
+    } else {
+      // Otherwise let multicall or direct surface the real revert cleanly
+      canMulticall = false;
+    }
+  }
+
+  if (!canMulticall) {
+    return submitDirectOrder(config, account, params, onStatus);
+  }
+
+  onStatus?.(
+    approved
+      ? `Approved ${symbol} → Starting next round & sending your order…`
+      : 'Starting next round & sending your order in one transaction…',
+  );
+  const wallet = await ensureWalletReady(config, account);
+  const hash = await wallet.writeContract({
+    address: config.fairBatch,
+    abi: fairBatchAbi,
+    functionName: 'multicall',
+    args: [calls],
+    account,
+    chain: getChain(config),
+  });
+  onStatus?.('Confirming new round & order on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
+  const orderEvents = decodeEvents(receipt, 'OrderSubmitted');
+  const settledEvents = decodeEvents(receipt, 'BatchSettled');
+  return {
+    hash,
+    receipt,
+    orderId: orderEvents[0] ? Number(eventBig(orderEvents[0], 'orderId')) : -1,
+    settledPreviousBatchId: settledEvents[0]
+      ? Number(eventBig(settledEvents[0], 'batchId'))
+      : undefined,
+  };
 }
 
 export async function commitOrder(
@@ -248,23 +382,25 @@ export async function commitOrder(
     bondEth: string;
     batchId: number;
   },
+  onStatus?: StatusReporter,
 ): Promise<CommitResult> {
   const amountRaw = toRawAmount(params.amountIn, inputDecimals(config, params.side));
   const limitRaw = toWadPrice(params.limitPrice);
   const bondWei = toRawAmount(params.bondEth, 18);
   if (bondWei < config.minBondWei) {
     throw new Error(
-      `Reveal bond must be at least ${Number(config.minBondWei) / 1e18} ETH.`,
+      `Deposit must be at least ${Number(config.minBondWei) / 1e18} ETH.`,
     );
   }
   const client = getPublicClient(config);
   const ethBalance = await client.getBalance({ address: account });
   if (ethBalance < bondWei) {
     throw new Error(
-      `Insufficient Sepolia ETH for the reveal bond. Need ${Number(bondWei) / 1e18} ETH plus gas.`,
+      `Insufficient Sepolia ETH for the deposit. Need ${Number(bondWei) / 1e18} ETH plus gas.`,
     );
   }
 
+  onStatus?.('Sealing your order hash…');
   const saltBig = saltToBigInt(params.salt);
   const commitmentHash = (await client.readContract({
     address: config.fairBatch,
@@ -280,6 +416,7 @@ export async function commitOrder(
     ],
   })) as bigint;
 
+  onStatus?.('Confirm sealed order & refundable deposit in your wallet…');
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -290,7 +427,8 @@ export async function commitOrder(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming sealed order on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderCommitted');
   const commitId = events[0] ? Number(eventBig(events[0], 'commitId')) : -1;
   return {
@@ -309,6 +447,7 @@ export async function revealOrder(
   config: RuntimeConfig,
   account: Address,
   secret: LocalSecretVaultEntry,
+  onStatus?: StatusReporter,
 ): Promise<RevealResult> {
   const amountRaw = secret.amount_in_raw
     ? BigInt(secret.amount_in_raw)
@@ -317,8 +456,14 @@ export async function revealOrder(
     ? BigInt(secret.limit_price_raw)
     : toWadPrice(secret.limit_price);
   const saltBig = saltToBigInt(secret.salt);
-  await ensureInputAllowance(config, account, secret.side, amountRaw);
+  const symbol = inputSymbol(config, secret.side);
+  const approved = await ensureInputAllowance(config, account, secret.side, amountRaw, onStatus);
 
+  onStatus?.(
+    approved
+      ? `Approved ${symbol} → Revealing your sealed order…`
+      : 'Revealing your sealed order & returning deposit…',
+  );
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -328,7 +473,8 @@ export async function revealOrder(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming reveal on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderRevealed');
   const orderId = events[0] ? Number(eventBig(events[0], 'orderId')) : -1;
   return { hash, receipt, orderId };
@@ -338,6 +484,7 @@ export async function signIntent(
   config: RuntimeConfig,
   account: Address,
   params: { side: OrderSide; amountIn: string; limitPrice: string; label: string },
+  onStatus?: StatusReporter,
 ): Promise<IntentResult> {
   const client = getPublicClient(config);
   const [nonce, currentBatch] = await Promise.all([
@@ -383,6 +530,7 @@ export async function signIntent(
     deadline: BigInt(deadline),
   } as const;
 
+  onStatus?.('Sign your order message in your wallet…');
   const wallet = await ensureWalletReady(config, account);
   const signature = await wallet.signTypedData({
     account,
@@ -418,14 +566,21 @@ export async function submitSignedIntent(
   config: RuntimeConfig,
   account: Address,
   artifact: SignedIntentArtifact,
+  onStatus?: StatusReporter,
 ): Promise<DirectOrderResult> {
   if (getAddress(artifact.trader) !== getAddress(account)) {
-    throw new Error('The connected wallet must be the signed intent trader.');
+    throw new Error('The connected wallet must be the signed order owner.');
   }
   const amountRaw = BigInt(artifact.amount_in_raw);
   const limitRaw = BigInt(artifact.limit_price_raw);
-  await ensureInputAllowance(config, account, artifact.side, amountRaw);
+  const symbol = inputSymbol(config, artifact.side);
+  const approved = await ensureInputAllowance(config, account, artifact.side, amountRaw, onStatus);
 
+  onStatus?.(
+    approved
+      ? `Approved ${symbol} → Submitting signed order…`
+      : 'Submitting signed order to the current round…',
+  );
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -446,16 +601,37 @@ export async function submitSignedIntent(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming signed order on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderSubmitted');
   const orderId = events[0] ? Number(eventBig(events[0], 'orderId')) : -1;
   return { hash, receipt, orderId };
 }
 
+/**
+ * Single-button signed order flow used automatically in Simple mode during the
+ * Finalizing (`Reveal`) window so users can trade without waiting for the next round.
+ */
+export async function signAndSubmitIntent(
+  config: RuntimeConfig,
+  account: Address,
+  params: { side: OrderSide; amountIn: string; limitPrice: string; label: string },
+  onStatus?: StatusReporter,
+): Promise<DirectOrderResult> {
+  const amountRaw = toRawAmount(params.amountIn, inputDecimals(config, params.side));
+  await ensureInputAllowance(config, account, params.side, amountRaw, onStatus);
+  onStatus?.('Step 1/2: Sign your order in your wallet…');
+  const artifact = await signIntent(config, account, params, onStatus);
+  onStatus?.('Step 2/2: Submitting your order to this round…');
+  return submitSignedIntent(config, account, artifact, onStatus);
+}
+
 export async function settleBatch(
   config: RuntimeConfig,
   account: Address,
+  onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; batchId: number }> {
+  onStatus?.('Starting next round & pricing finished orders…');
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -465,7 +641,8 @@ export async function settleBatch(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming round settlement on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'BatchSettled');
   return {
     hash,
@@ -478,7 +655,9 @@ export async function slashUnrevealed(
   account: Address,
   batchId: number,
   commitId: number,
+  onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; forfeitedBond: bigint }> {
+  onStatus?.('Slashing expired unrevealed commitment…');
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -488,7 +667,8 @@ export async function slashUnrevealed(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming slash bounty on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'CommitmentSlashed');
   return {
     hash,
@@ -501,7 +681,9 @@ export async function claimOrder(
   account: Address,
   batchId: number,
   orderId: number,
+  onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; payoutBase: bigint; payoutQuote: bigint }> {
+  onStatus?.('Confirm token collection in your wallet…');
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -511,7 +693,8 @@ export async function claimOrder(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Collecting your tokens on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderClaimed');
   const claimed = events[0];
   return {
@@ -525,8 +708,10 @@ export async function claimMany(
   config: RuntimeConfig,
   account: Address,
   items: Array<{ batchId: number; orderId: number }>,
+  onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; claimed: number }> {
   if (items.length === 0) throw new Error('No claims selected.');
+  onStatus?.(`Confirm collecting ${items.length} completed orders in your wallet…`);
   const calls = items.map((item) =>
     encodeFunctionData({
       abi: fairBatchAbi,
@@ -543,7 +728,8 @@ export async function claimMany(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.(`Collecting ${items.length} payouts in one transaction…`);
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderClaimed');
   return { hash, claimed: events.length };
 }
@@ -555,13 +741,31 @@ export async function addLiquidity(
   amountQuote: string,
   lockDurationSecs = 0,
   minShares = 0n,
+  onStatus?: StatusReporter,
 ): Promise<LiquidityResult> {
   const baseRaw = toRawAmount(amountBase, config.baseDecimals);
   const quoteRaw = toRawAmount(amountQuote, config.quoteDecimals);
   const lockSecs = Math.max(0, Math.floor(lockDurationSecs));
-  await approveToken(config, account, config.baseToken, config.fairBatch, baseRaw);
-  await approveToken(config, account, config.quoteToken, config.fairBatch, quoteRaw);
+  await approveToken(
+    config,
+    account,
+    config.baseToken,
+    config.fairBatch,
+    baseRaw,
+    config.baseSymbol,
+    onStatus,
+  );
+  await approveToken(
+    config,
+    account,
+    config.quoteToken,
+    config.fairBatch,
+    quoteRaw,
+    config.quoteSymbol,
+    onStatus,
+  );
 
+  onStatus?.(lockSecs > 0 ? 'Adding & locking liquidity…' : 'Adding liquidity to the pool…');
   const wallet = await ensureWalletReady(config, account);
   const hash =
     lockSecs > 0
@@ -581,7 +785,8 @@ export async function addLiquidity(
           account,
           chain: getChain(config),
         });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming liquidity deposit on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const addedEvents = decodeEvents(receipt, 'LiquidityAdded');
   const lockedEvents = lockSecs > 0 ? decodeEvents(receipt, 'LiquidityLocked') : [];
   return {
@@ -600,8 +805,10 @@ export async function removeLiquidity(
   shares: string,
   minBase = 0n,
   minQuote = 0n,
+  onStatus?: StatusReporter,
 ): Promise<LiquidityResult> {
   const sharesRaw = toRawAmount(shares, 18);
+  onStatus?.('Withdrawing liquidity from the pool…');
   const wallet = await ensureWalletReady(config, account);
   const hash = await wallet.writeContract({
     address: config.fairBatch,
@@ -611,7 +818,8 @@ export async function removeLiquidity(
     account,
     chain: getChain(config),
   });
-  const receipt = await waitForSuccess(config, hash);
+  onStatus?.('Confirming withdrawal on Sepolia…');
+  const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'LiquidityRemoved');
   return {
     hash,
@@ -625,47 +833,99 @@ export async function approveFairBatch(
   config: RuntimeConfig,
   account: Address,
   token: 'base' | 'quote',
+  onStatus?: StatusReporter,
 ): Promise<Hash | null> {
   const tokenAddress = token === 'base' ? config.baseToken : config.quoteToken;
-  return approveToken(config, account, tokenAddress, config.fairBatch);
+  const symbol = token === 'base' ? config.baseSymbol : config.quoteSymbol;
+  return approveToken(
+    config,
+    account,
+    tokenAddress,
+    config.fairBatch,
+    maxUint256,
+    symbol,
+    onStatus,
+  );
 }
 
-export function describeTxError(error: unknown): string {
-  if (error instanceof Error) {
-    const raw = error.message;
+export interface ErrorMappingContext {
+  lockUnlockTimeSecs?: number;
+}
+
+/**
+ * Maps contract reverts, wallet rejections, and RPC failures into plain-language messages.
+ */
+export function describeTxError(error: unknown, context?: ErrorMappingContext): string {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+
+  if (raw) {
+    if (raw.includes('Faucet cooldown active')) {
+      return 'Faucet cooldown active — you can claim free test tokens once every 12 hours.';
+    }
+    if (raw.includes('LP shares locked')) {
+      if (context?.lockUnlockTimeSecs && context.lockUnlockTimeSecs > 0) {
+        const unlockStr = new Date(context.lockUnlockTimeSecs * 1000).toLocaleString();
+        return `Your liquidity is locked until ${unlockStr}.`;
+      }
+      return 'Your liquidity is locked until the lock period ends.';
+    }
+    if (
+      raw.includes('Slippage: insufficient LP shares') ||
+      raw.includes('Slippage: insufficient base output') ||
+      raw.includes('Slippage: insufficient quote output')
+    ) {
+      return 'Price moved too much, try again.';
+    }
+    if (
+      raw.includes('Commit window closed') ||
+      raw.includes('Intent window closed') ||
+      raw.includes('Batch already settled')
+    ) {
+      return 'This round closed, try the next one.';
+    }
+    if (raw.includes('Reveal window closed') || raw.includes('Commitment slashed')) {
+      return 'Sealed order not revealed in time.';
+    }
+
     const known: Array<[string, string]> = [
-      ['Commit window closed', 'The commit window has closed. Wait for the next batch.'],
-      ['Reveal window not open yet', 'The reveal window has not opened yet.'],
-      ['Reveal window closed', 'The reveal window has closed. This commitment can be slashed.'],
-      ['Intent window closed', 'Signed intents are closed for this batch.'],
-      ['Reveal window still active', 'The reveal window is still active. Settle after it closes.'],
-      ['Insufficient allowance', 'Token allowance is too low. Approve the token and retry.'],
+      ['Reveal window not open yet', 'Wait until this round enters Finalizing before revealing your sealed order.'],
+      ['Reveal window still active', 'This round is still finalizing — wait a few seconds for the countdown to finish.'],
+      ['Insufficient allowance', 'Token approval is too low. Approve the token and try again.'],
       ['Insufficient balance', 'Wallet balance is too low for this amount.'],
-      ['Insufficient reveal bond', 'The reveal bond is below the contract minimum.'],
-      ['Insufficient Sepolia ETH', 'You need Sepolia ETH for the reveal bond and gas.'],
-      ['Commitment hash mismatch', 'The reveal data does not match the sealed commitment.'],
-      ['Already revealed', 'This commitment has already been revealed.'],
-      ['Commitment slashed', 'This commitment was slashed and can no longer be revealed.'],
-      ['Not commitment owner', 'Only the wallet that committed can reveal it.'],
-      ['Not order owner', 'Only the order owner can claim this receipt.'],
-      ['Order already claimed', 'This receipt has already been claimed.'],
-      ['LP shares locked', 'These LP shares are currently time-locked. Wait until unlock time or withdraw only unlocked shares.'],
-      ['Slippage: insufficient LP shares', 'Liquidity deposit slippage limit exceeded (minted LP shares below minimum).'],
-      ['Slippage: insufficient base output', 'Liquidity withdrawal slippage limit exceeded (base token output below minimum).'],
-      ['Slippage: insufficient quote output', 'Liquidity withdrawal slippage limit exceeded (quote token output below minimum).'],
-      ['Faucet cooldown active', 'Faucet cooldown is still active. Each wallet can claim once every 12 hours.'],
-      ['user rejected', 'Transaction rejected in the wallet.'],
-      ['User rejected', 'Transaction rejected in the wallet.'],
+      ['Insufficient reveal bond', 'The refundable deposit is below the contract minimum.'],
+      ['Insufficient Sepolia ETH', 'You need a little Sepolia ETH for gas (and any sealed deposit).'],
+      ['insufficient funds for gas', 'Not enough Sepolia ETH to cover transaction gas.'],
+      ['Commitment hash mismatch', 'The reveal details do not match your sealed order.'],
+      ['Already revealed', 'This sealed order has already been revealed.'],
+      ['Not commitment owner', 'Only the wallet that placed this sealed order can reveal it.'],
+      ['Not order owner', 'Only the wallet that placed this order can collect it.'],
+      ['Order already claimed', 'You already collected this order.'],
+      ['Invalid EIP-712 signed intent', 'Order signature could not be verified. Please sign again.'],
+      ['Reveal window not expired', 'This sealed order still has time left to reveal and cannot be slashed yet.'],
+      ['Commitment was revealed', 'This sealed order was already revealed and cannot be slashed.'],
+      ['Already slashed', 'This expired deposit has already been slashed.'],
+      ['user rejected', 'You canceled the request in your wallet.'],
+      ['User rejected', 'You canceled the request in your wallet.'],
+      ['ACTION_REJECTED', 'You canceled the request in your wallet.'],
+      ['429', 'Sepolia RPC is busy right now — retrying automatically.'],
+      ['Too Many Requests', 'Sepolia RPC is busy right now — retrying automatically.'],
+      ['HTTP request failed', 'Network hiccup reaching Sepolia RPC. Try refreshing in a moment.'],
+      ['timed out', 'Sepolia confirmation is taking longer than expected. Check Etherscan or refresh.'],
     ];
     for (const [needle, message] of known) {
       if (raw.includes(needle)) return message;
     }
     if (raw.includes('returned no data') || raw.includes('is not a contract')) {
-      return 'The configured RPC or contract address is not responding as a FairBatch contract.';
+      return 'Unable to reach the FairBatch contract on Ethereum Sepolia.';
     }
-    const short = (error as { shortMessage?: string }).shortMessage;
+    const short = (error as { shortMessage?: string } | null)?.shortMessage;
     if (short) return short;
-    return raw.split('\n')[0].slice(0, 240);
+    return raw.split('\n')[0].slice(0, 220);
   }
-  return 'Transaction failed.';
+  return 'Transaction failed. Please try again.';
 }

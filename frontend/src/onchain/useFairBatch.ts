@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, type Address, type Hash } from 'viem';
 import type {
+  BatchPhase,
   ClaimableDto,
   LocalSecretVaultEntry,
   OrderSide,
   SignedIntentArtifact,
 } from '../types';
 import { formatDuration } from '../lib/format';
+import { useNow } from '../lib/useNow';
 import {
   addLiquidity as addLiquidityAction,
   approveFairBatch,
@@ -17,7 +19,9 @@ import {
   describeTxError,
   removeLiquidity as removeLiquidityAction,
   revealOrder,
+  settleAndSubmitDirect as settleAndSubmitDirectAction,
   settleBatch as settleBatchAction,
+  signAndSubmitIntent as signAndSubmitIntentAction,
   signIntent as signIntentAction,
   slashUnrevealed,
   submitDirectOrder,
@@ -32,7 +36,9 @@ import {
 import {
   connectInjectedWallet,
   getWalletChainId,
+  hasInjectedWallet,
   restoreInjectedAccount,
+  switchWalletToSepolia,
   watchInjectedWallet,
 } from './client';
 import {
@@ -41,7 +47,12 @@ import {
   loadRuntimeConfig,
   type RuntimeConfig,
 } from './config';
-import { loadOnchainSnapshot, type OnchainSnapshot } from './state';
+import {
+  deriveLivePhase,
+  loadOnchainSnapshot,
+  type OnchainSnapshot,
+  type WalletBalances,
+} from './state';
 import {
   loadSecretVault,
   markSecretRevealed,
@@ -49,6 +60,32 @@ import {
 } from './secretVault';
 
 const AUTOCONNECT_KEY = 'fairbatch.autoconnect.v1';
+
+export type SimpleStep = 1 | 2 | 3 | 4;
+
+/**
+ * Pure step detector for Simple mode's 4-step progress bar:
+ *   1 Connect -> 2 Get test tokens -> 3 Swap -> 4 Collect
+ * Derived strictly from wallet + on-chain state so a page refresh restores the exact step.
+ */
+export function detectSimpleStep(params: {
+  account: string | null;
+  wrongNetwork: boolean;
+  balances: WalletBalances | null;
+  claimable: ClaimableDto[];
+}): SimpleStep {
+  if (!params.account || params.wrongNetwork) return 1;
+  const normalized = params.account.toLowerCase();
+  const hasUnclaimed = params.claimable.some(
+    (c) => !c.claimed && c.trader.toLowerCase() === normalized,
+  );
+  if (hasUnclaimed) return 4;
+
+  const hasTokens =
+    (params.balances?.base ?? 0n) > 0n || (params.balances?.quote ?? 0n) > 0n;
+  if (!hasTokens) return 2;
+  return 3;
+}
 
 export interface Notice {
   kind: 'success' | 'error' | 'info';
@@ -58,22 +95,37 @@ export interface Notice {
 
 export interface FairBatchController {
   config: RuntimeConfig;
+  hasWallet: boolean;
   account: Address | null;
   walletChainId: number | null;
   snapshot: OnchainSnapshot | null;
+  livePhase: BatchPhase;
+  chainNow: number;
   loading: boolean;
   refreshing: boolean;
   busyAction: string | null;
+  txStatus: string | null;
   error: string | null;
   notice: Notice | null;
   secretVault: LocalSecretVaultEntry[];
   configured: boolean;
   wrongNetwork: boolean;
   connect: () => Promise<void>;
+  switchNetwork: () => Promise<void>;
   disconnect: () => void;
   refresh: () => void;
   clearNotice: () => void;
   submitDirect: (params: {
+    side: OrderSide;
+    amountIn: string;
+    limitPrice: string;
+  }) => Promise<DirectOrderResult>;
+  settleAndSubmitDirect: (params: {
+    side: OrderSide;
+    amountIn: string;
+    limitPrice: string;
+  }) => Promise<DirectOrderResult>;
+  signAndSubmitIntent: (params: {
     side: OrderSide;
     amountIn: string;
     limitPrice: string;
@@ -100,8 +152,13 @@ export interface FairBatchController {
     amountBase: string,
     amountQuote: string,
     lockDurationSecs?: number,
+    minShares?: bigint,
   ) => Promise<LiquidityResult>;
-  removeLiquidity: (shares: string) => Promise<LiquidityResult>;
+  removeLiquidity: (
+    shares: string,
+    minBase?: bigint,
+    minQuote?: bigint,
+  ) => Promise<LiquidityResult>;
   claimFaucet: () => Promise<FaucetClaimResult>;
   approve: (token: 'base' | 'quote') => Promise<Hash | null>;
 }
@@ -112,12 +169,14 @@ function toMessage(hash: Hash, text: string): Notice {
 
 export function useFairBatch(): FairBatchController {
   const config = useMemo<RuntimeConfig>(() => loadRuntimeConfig(), []);
+  const wallNow = useNow(1_000);
   const [account, setAccount] = useState<Address | null>(null);
   const [walletChainId, setWalletChainId] = useState<number | null>(null);
   const [snapshot, setSnapshot] = useState<OnchainSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [txStatus, setTxStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [secretVault, setSecretVault] = useState<LocalSecretVaultEntry[]>(() =>
@@ -130,10 +189,25 @@ export function useFairBatch(): FairBatchController {
   const requestIdRef = useRef<number>(0);
   const accountRef = useRef<Address | null>(null);
   accountRef.current = account;
+  const snapshotRef = useRef<OnchainSnapshot | null>(null);
+  snapshotRef.current = snapshot;
+
+  const hasWallet = useMemo(() => hasInjectedWallet(), []);
 
   const refresh = useCallback(() => {
     setRefreshNonce((value) => value + 1);
   }, []);
+
+  // Derive live chain timestamp & auto-advancing phase so countdowns never stall at 00:00.
+  const chainNow = useMemo(() => {
+    if (!snapshot) return wallNow;
+    return wallNow + snapshot.chainTimeOffsetSecs;
+  }, [snapshot, wallNow]);
+
+  const livePhase: BatchPhase = useMemo(() => {
+    if (!snapshot) return 'Open';
+    return deriveLivePhase(snapshot.batch, chainNow);
+  }, [snapshot, chainNow]);
 
   // Restore an already-authorised injected wallet on first load.
   useEffect(() => {
@@ -161,7 +235,11 @@ export function useFairBatch(): FairBatchController {
     return watchInjectedWallet({
       onAccountsChanged: (accounts) => {
         setAccount(accounts[0] ?? null);
-        setWalletChainId(config.chainId);
+        if (accounts.length === 0) {
+          setWalletChainId(null);
+        } else {
+          void getWalletChainId(config).then((cid) => setWalletChainId(cid));
+        }
         refresh();
       },
       onChainChanged: (chainId) => {
@@ -173,9 +251,9 @@ export function useFairBatch(): FairBatchController {
         setWalletChainId(null);
       },
     });
-  }, [config.chainId, refresh]);
+  }, [config, refresh]);
 
-  // Snapshot polling + explicit refresh.
+  // Snapshot fetch.
   useEffect(() => {
     let cancelled = false;
     if (!isContractConfigured(config)) {
@@ -186,7 +264,7 @@ export function useFairBatch(): FairBatchController {
     }
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-    if (!snapshot) setLoading(true);
+    if (!snapshotRef.current) setLoading(true);
     else setRefreshing(true);
 
     void (async () => {
@@ -209,10 +287,9 @@ export function useFairBatch(): FairBatchController {
     return () => {
       cancelled = true;
     };
-    // snapshot intentionally excluded: it would re-run after every read.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, account, refreshNonce]);
 
+  // Regular background polling (10s).
   useEffect(() => {
     const id = window.setInterval(() => {
       if (busyRef.current === null) refresh();
@@ -220,10 +297,40 @@ export function useFairBatch(): FairBatchController {
     return () => window.clearInterval(id);
   }, [refresh]);
 
+  // Re-read chain state whenever the user returns to this tab or focuses the window.
+  useEffect(() => {
+    const handleResume = () => {
+      if (document.visibilityState === 'visible' && busyRef.current === null) {
+        refresh();
+      }
+    };
+    const handleFocus = () => {
+      if (busyRef.current === null) refresh();
+    };
+    document.addEventListener('visibilitychange', handleResume);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleResume);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [refresh]);
+
+  // Fast confirmation poll when crossing commitDeadline or revealDeadline so
+  // on-chain `currentBatch()` catches up within a few seconds of a deadline passing.
+  const onChainPhaseMatchesLive =
+    snapshot === null || snapshot.state.phase === livePhase;
+  useEffect(() => {
+    if (onChainPhaseMatchesLive || busyRef.current !== null) return;
+    const id = window.setInterval(() => {
+      if (busyRef.current === null) refresh();
+    }, 3_000);
+    return () => window.clearInterval(id);
+  }, [onChainPhaseMatchesLive, refresh]);
+
   const requireAccount = useCallback((): Address => {
     const active = accountRef.current;
     if (!active) {
-      throw new Error('Connect an injected wallet to sign on-chain transactions.');
+      throw new Error('Connect your wallet to continue.');
     }
     return active;
   }, []);
@@ -231,25 +338,29 @@ export function useFairBatch(): FairBatchController {
   const runAction = useCallback(
     async <T,>(
       name: string,
-      fn: (active: Address) => Promise<T>,
+      fn: (active: Address, report: (msg: string) => void) => Promise<T>,
       successText: (result: T) => Notice,
     ): Promise<T> => {
       const active = requireAccount();
       setBusyAction(name);
+      setTxStatus(null);
       setError(null);
       setNotice(null);
+      const report = (msg: string) => setTxStatus(msg);
       try {
-        const result = await fn(active);
+        const result = await fn(active, report);
         setNotice(successText(result));
         refresh();
         return result;
       } catch (err) {
-        const message = describeTxError(err);
+        const unlockTimeSecs = Number(snapshotRef.current?.lpLock?.unlockTime ?? 0n);
+        const message = describeTxError(err, { lockUnlockTimeSecs: unlockTimeSecs });
         setError(message);
         setNotice({ kind: 'error', text: message });
         throw new Error(message);
       } finally {
         setBusyAction(null);
+        setTxStatus(null);
       }
     },
     [refresh, requireAccount],
@@ -257,6 +368,7 @@ export function useFairBatch(): FairBatchController {
 
   const connect = useCallback(async () => {
     setBusyAction('connect');
+    setTxStatus('Connecting your wallet…');
     setError(null);
     try {
       const connected = await connectInjectedWallet(config);
@@ -265,9 +377,9 @@ export function useFairBatch(): FairBatchController {
       try {
         localStorage.setItem(AUTOCONNECT_KEY, '1');
       } catch {
-        // ignore
+        // ignore storage errors
       }
-      setNotice({ kind: 'success', text: `Connected wallet ${connected}.` });
+      setNotice({ kind: 'success', text: 'Wallet connected on Ethereum Sepolia.' });
       refresh();
     } catch (err) {
       const message = describeTxError(err);
@@ -276,6 +388,27 @@ export function useFairBatch(): FairBatchController {
       throw new Error(message);
     } finally {
       setBusyAction(null);
+      setTxStatus(null);
+    }
+  }, [config, refresh]);
+
+  const switchNetwork = useCallback(async () => {
+    setBusyAction('switch-network');
+    setTxStatus('Switching wallet to Ethereum Sepolia…');
+    setError(null);
+    try {
+      const nextChainId = await switchWalletToSepolia(config);
+      setWalletChainId(nextChainId);
+      setNotice({ kind: 'success', text: 'Switched to Ethereum Sepolia.' });
+      refresh();
+    } catch (err) {
+      const message = describeTxError(err);
+      setError(message);
+      setNotice({ kind: 'error', text: message });
+      throw new Error(message);
+    } finally {
+      setBusyAction(null);
+      setTxStatus(null);
     }
   }, [config, refresh]);
 
@@ -285,25 +418,59 @@ export function useFairBatch(): FairBatchController {
     try {
       localStorage.setItem(AUTOCONNECT_KEY, '0');
     } catch {
-      // ignore
+      // ignore storage errors
     }
-    setNotice({ kind: 'info', text: 'Wallet disconnected from this terminal.' });
+    setNotice({ kind: 'info', text: 'Wallet disconnected.' });
   }, []);
 
   const submitDirect = useCallback(
     (params: { side: OrderSide; amountIn: string; limitPrice: string }) =>
       runAction(
         'direct',
-        (active) =>
-          submitDirectOrder(config, active, {
-            side: params.side,
-            amountIn: params.amountIn,
-            limitPrice: params.limitPrice,
-          }),
+        (active, report) => submitDirectOrder(config, active, params, report),
         (result) =>
           toMessage(
             result.hash,
-            `Direct order ${result.orderId >= 0 ? `#${result.orderId}` : ''} confirmed on-chain.`,
+            `Order ${result.orderId >= 0 ? `#${result.orderId} ` : ''}placed in the current round.`,
+          ),
+      ),
+    [config, runAction],
+  );
+
+  const settleAndSubmitDirect = useCallback(
+    (params: { side: OrderSide; amountIn: string; limitPrice: string }) =>
+      runAction(
+        'direct',
+        (active, report) => settleAndSubmitDirectAction(config, active, params, report),
+        (result) =>
+          toMessage(
+            result.hash,
+            result.settledPreviousBatchId !== undefined
+              ? `Finished Round #${result.settledPreviousBatchId} and placed your order in the new round.`
+              : 'Order placed in the new round.',
+          ),
+      ),
+    [config, runAction],
+  );
+
+  const signAndSubmitIntent = useCallback(
+    (params: { side: OrderSide; amountIn: string; limitPrice: string }) =>
+      runAction(
+        'submit-intent',
+        (active, report) =>
+          signAndSubmitIntentAction(
+            config,
+            active,
+            {
+              ...params,
+              label: `${active.slice(0, 6)}…${active.slice(-4)} (Signed)`,
+            },
+            report,
+          ),
+        (result) =>
+          toMessage(
+            result.hash,
+            `Signed order ${result.orderId >= 0 ? `#${result.orderId} ` : ''}placed in the current round.`,
           ),
       ),
     [config, runAction],
@@ -318,17 +485,19 @@ export function useFairBatch(): FairBatchController {
       bondEth: string;
     }): Promise<CommitResult> => {
       const active = requireAccount();
-      const currentSnapshot = snapshot;
-      if (!currentSnapshot) throw new Error('Batch state is still loading.');
+      const currentSnapshot = snapshotRef.current;
+      if (!currentSnapshot) throw new Error('Round state is still loading.');
       const batchId = currentSnapshot.state.batch_id;
       const result = await runAction(
         'commit',
-        (walletAddress) =>
-          commitOrder(config, walletAddress, {
-            ...params,
-            batchId,
-          }),
-        (res) => toMessage(res.hash, `Sealed commitment confirmed in Batch #${batchId}.`),
+        (walletAddress, report) =>
+          commitOrder(
+            config,
+            walletAddress,
+            { ...params, batchId },
+            report,
+          ),
+        (res) => toMessage(res.hash, `Sealed order placed in Round #${batchId}.`),
       );
 
       let commitId = result.commitId;
@@ -364,21 +533,19 @@ export function useFairBatch(): FairBatchController {
       }
       return result;
     },
-    [config, requireAccount, runAction, snapshot],
+    [config, requireAccount, runAction],
   );
 
   const revealCommit = useCallback(
     (secret: LocalSecretVaultEntry) =>
       runAction(
         'reveal',
-        (active) => revealOrder(config, active, secret),
+        (active, report) => revealOrder(config, active, secret, report),
         (result) => {
           setSecretVault(markSecretRevealed(secret.batch_id, secret.commit_id));
           return toMessage(
             result.hash,
-            `Reveal confirmed for commitment #${secret.commit_id}${
-              result.orderId >= 0 ? ` → order #${result.orderId}` : ''
-            }.`,
+            `Sealed order revealed and deposit returned.`,
           );
         },
       ),
@@ -393,19 +560,26 @@ export function useFairBatch(): FairBatchController {
     }): Promise<IntentResult> => {
       const active = requireAccount();
       setBusyAction('sign-intent');
+      setTxStatus('Sign your order message in your wallet…');
       setError(null);
       setNotice(null);
       try {
-        return await signIntentAction(config, active, {
-          ...params,
-          label: `${active.slice(0, 6)}…${active.slice(-4)} (Signed)`,
-        });
+        return await signIntentAction(
+          config,
+          active,
+          {
+            ...params,
+            label: `${active.slice(0, 6)}…${active.slice(-4)} (Signed)`,
+          },
+          (msg) => setTxStatus(msg),
+        );
       } catch (err) {
         const message = describeTxError(err);
         setError(message);
         throw new Error(message);
       } finally {
         setBusyAction(null);
+        setTxStatus(null);
       }
     },
     [config, requireAccount],
@@ -415,13 +589,11 @@ export function useFairBatch(): FairBatchController {
     (artifact: SignedIntentArtifact) =>
       runAction(
         'submit-intent',
-        (active) => submitSignedIntent(config, active, artifact),
+        (active, report) => submitSignedIntent(config, active, artifact, report),
         (result) =>
           toMessage(
             result.hash,
-            `Signed intent accepted as order ${
-              result.orderId >= 0 ? `#${result.orderId}` : ''
-            } (nonce #${artifact.nonce}).`,
+            `Signed order ${result.orderId >= 0 ? `#${result.orderId} ` : ''}accepted.`,
           ),
       ),
     [config, runAction],
@@ -431,11 +603,11 @@ export function useFairBatch(): FairBatchController {
     () =>
       runAction(
         'settle',
-        (active) => settleBatchAction(config, active),
+        (active, report) => settleBatchAction(config, active, report),
         (result) =>
           toMessage(
             result.hash,
-            `Batch #${result.batchId >= 0 ? result.batchId : '?'} settled at one uniform clearing price.`,
+            `Round #${result.batchId >= 0 ? result.batchId : '?'} finalized at one fair price.`,
           ),
       ),
     [config, runAction],
@@ -445,11 +617,11 @@ export function useFairBatch(): FairBatchController {
     (batchId: number, commitId: number) =>
       runAction(
         'slash',
-        (active) => slashUnrevealed(config, active, batchId, commitId),
+        (active, report) => slashUnrevealed(config, active, batchId, commitId, report),
         (result) =>
           toMessage(
             result.hash,
-            `Commitment #${commitId} slashed; ${Number(result.forfeitedBond) / 1e18} ETH forfeited.`,
+            `Expired deposit slashed; ${Number(result.forfeitedBond) / 1e18} ETH bounty sent to your wallet.`,
           ),
       ),
     [config, runAction],
@@ -459,11 +631,11 @@ export function useFairBatch(): FairBatchController {
     (item: ClaimableDto) =>
       runAction(
         'claim',
-        (active) => claimOrder(config, active, item.batch_id, item.order_id),
+        (active, report) => claimOrder(config, active, item.batch_id, item.order_id, report),
         (result) =>
           toMessage(
             result.hash,
-            `Claimed Batch #${item.batch_id} Order #${item.order_id}.`,
+            `Collected tokens from Round #${item.batch_id}.`,
           ),
       ),
     [config, runAction],
@@ -473,7 +645,7 @@ export function useFairBatch(): FairBatchController {
     (items: ClaimableDto[]) =>
       runAction(
         'multicall-claim',
-        (active) =>
+        (active, report) =>
           claimManyAction(
             config,
             active,
@@ -481,24 +653,34 @@ export function useFairBatch(): FairBatchController {
               batchId: item.batch_id,
               orderId: item.order_id,
             })),
+            report,
           ),
         (result) =>
           toMessage(
             result.hash,
-            `Executed Multicall claim for ${result.claimed} settled receipt(s).`,
+            `Collected ${result.claimed} completed order${result.claimed === 1 ? '' : 's'} in one transaction.`,
           ),
       ),
     [config, runAction],
   );
 
   const addLiquidity = useCallback(
-    (amountBase: string, amountQuote: string, lockDurationSecs = 0) =>
+    (amountBase: string, amountQuote: string, lockDurationSecs = 0, minShares = 0n) =>
       runAction(
         'add-liquidity',
-        (active) => addLiquidityAction(config, active, amountBase, amountQuote, lockDurationSecs),
+        (active, report) =>
+          addLiquidityAction(
+            config,
+            active,
+            amountBase,
+            amountQuote,
+            lockDurationSecs,
+            minShares,
+            report,
+          ),
         (result) => {
           const shareText = result.sharesMinted
-            ? ` · ${Number(result.sharesMinted) / 1e18} LP shares minted`
+            ? ` · ${(Number(result.sharesMinted) / 1e18).toFixed(2)} shares`
             : '';
           const lockText =
             lockDurationSecs > 0 ? ` · locked for ${formatDuration(lockDurationSecs)}` : '';
@@ -509,11 +691,12 @@ export function useFairBatch(): FairBatchController {
   );
 
   const removeLiquidity = useCallback(
-    (shares: string) =>
+    (shares: string, minBase = 0n, minQuote = 0n) =>
       runAction(
         'remove-liquidity',
-        (active) => removeLiquidityAction(config, active, shares),
-        (result) => toMessage(result.hash, 'Liquidity removed from the pool.'),
+        (active, report) =>
+          removeLiquidityAction(config, active, shares, minBase, minQuote, report),
+        (result) => toMessage(result.hash, 'Liquidity withdrawn to your wallet.'),
       ),
     [config, runAction],
   );
@@ -522,14 +705,14 @@ export function useFairBatch(): FairBatchController {
     () =>
       runAction(
         'faucet',
-        (active) => claimFaucetAction(config, active),
+        (active, report) => claimFaucetAction(config, active, report),
         (result) =>
           toMessage(
             result.hash,
-            `Claimed ${formatUnits(result.baseAmount, config.baseDecimals)} ${config.baseSymbol} + ${formatUnits(
+            `Received ${formatUnits(result.baseAmount, config.baseDecimals)} ${config.baseSymbol} + ${formatUnits(
               result.quoteAmount,
               config.quoteDecimals,
-            )} ${config.quoteSymbol} from the Sepolia faucet.`,
+            )} ${config.quoteSymbol}.`,
           ),
       ),
     [config, runAction],
@@ -539,16 +722,14 @@ export function useFairBatch(): FairBatchController {
     (token: 'base' | 'quote') =>
       runAction(
         'approve',
-        (active) => approveFairBatch(config, active, token),
+        (active, report) => approveFairBatch(config, active, token, report),
         (result) =>
           result
             ? toMessage(
                 result,
-                `Approved FairBatch to spend ${
-                  token === 'base' ? config.baseSymbol : config.quoteSymbol
-                }.`,
+                `Approved ${token === 'base' ? config.baseSymbol : config.quoteSymbol}.`,
               )
-            : { kind: 'info', text: 'Allowance is already sufficient.' },
+            : { kind: 'info', text: 'Already approved.' },
       ),
     [config, runAction],
   );
@@ -560,22 +741,29 @@ export function useFairBatch(): FairBatchController {
 
   return {
     config,
+    hasWallet,
     account,
     walletChainId,
     snapshot,
+    livePhase,
+    chainNow,
     loading,
     refreshing,
     busyAction,
+    txStatus,
     error,
     notice,
     secretVault,
     configured: isContractConfigured(config),
     wrongNetwork,
     connect,
+    switchNetwork,
     disconnect,
     refresh,
     clearNotice: () => setNotice(null),
     submitDirect,
+    settleAndSubmitDirect,
+    signAndSubmitIntent,
     sealCommit,
     revealCommit,
     signIntent,
