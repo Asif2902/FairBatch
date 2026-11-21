@@ -443,4 +443,48 @@ describe('Simple mode end-to-end flows', () => {
     fireEvent.click(screen.getByTestId('simple-tab-earn'));
     expect(controller.clearNotice).toHaveBeenCalledTimes(1);
   });
+
+  it('opens in-app /docs route from header, modal, and footer with User Guide, Developer Guide, Visuals, Threat Table, and Glossary', async () => {
+    controller = makeCtrl({ account: ALICE });
+    render(<App />);
+
+    // Open from header Docs link
+    fireEvent.click(screen.getByTestId('header-docs-link'));
+    expect(await screen.findByTestId('docs-page')).toBeInTheDocument();
+
+    // User guide content
+    expect(screen.getByTestId('docs-user-guide')).toBeInTheDocument();
+    expect(screen.getByText(/FairBatch in 60 seconds/i)).toBeInTheDocument();
+    expect(screen.getByText(/Not fully free — what you still pay gas for/i)).toBeInTheDocument();
+
+    // Developer guide content with verified Fe test names and live addresses
+    fireEvent.click(screen.getByTestId('docs-tab-developer'));
+    expect(screen.getByTestId('docs-developer-guide')).toBeInTheDocument();
+    expect(screen.getByText(/proof_mev_sandwich_zero_profit/i)).toBeInTheDocument();
+    expect(screen.getByText(/property_order_permutation_invariance/i)).toBeInTheDocument();
+    expect(screen.getByText(/property_lnd_invariant_across_imbalanced_regimes/i)).toBeInTheDocument();
+    expect(screen.getByText(DEFAULT_RUNTIME_CONFIG.fairBatch)).toBeInTheDocument();
+
+    // Visuals & Animations (5 diagrams)
+    fireEvent.click(screen.getByTestId('docs-tab-visuals'));
+    expect(screen.getByTestId('docs-anim-sandwich')).toBeInTheDocument();
+    expect(screen.getByTestId('docs-anim-lifecycle')).toBeInTheDocument();
+    expect(screen.getByTestId('docs-anim-one-price')).toBeInTheDocument();
+    expect(screen.getByTestId('docs-anim-sealed')).toBeInTheDocument();
+    expect(screen.getByTestId('docs-anim-roles')).toBeInTheDocument();
+
+    // Threat model table
+    fireEvent.click(screen.getByTestId('docs-tab-security'));
+    expect(screen.getByTestId('docs-threat-table')).toBeInTheDocument();
+
+    // Glossary with stable anchors
+    fireEvent.click(screen.getByTestId('docs-tab-glossary'));
+    expect(screen.getByTestId('docs-glossary')).toBeInTheDocument();
+    expect(screen.getByTestId('glossary-round')).toBeInTheDocument();
+    expect(screen.getByTestId('glossary-fair-price')).toBeInTheDocument();
+
+    // Back to exchange
+    fireEvent.click(screen.getByTestId('docs-back-button'));
+    expect(screen.getByTestId('simple-swap-card')).toBeInTheDocument();
+  });
 });

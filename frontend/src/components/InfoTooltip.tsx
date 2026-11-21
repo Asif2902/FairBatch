@@ -4,12 +4,41 @@ import { HelpCircle } from 'lucide-react';
 interface InfoTooltipProps {
   label: string;
   text: string;
+  glossaryAnchor?: string;
 }
 
-export const InfoTooltip: React.FC<InfoTooltipProps> = ({ label, text }) => {
+function inferGlossaryAnchor(label: string): string {
+  const lower = label.toLowerCase();
+  if (lower.includes('p*') || lower.includes('clearing price') || lower.includes('fair')) {
+    return 'glossary-fair-price';
+  }
+  if (lower.includes('bond') || lower.includes('deposit') || lower.includes('slash')) {
+    return 'glossary-deposit';
+  }
+  if (lower.includes('pull') || lower.includes('claim') || lower.includes('collect')) {
+    return 'glossary-collect';
+  }
+  if (lower.includes('cow')) return 'glossary-cow';
+  if (lower.includes('fm-amm') || lower.includes('saving') || lower.includes('spot')) {
+    return 'glossary-fm-amm';
+  }
+  if (lower.includes('lnd') || lower.includes('invariant') || lower.includes('reserve')) {
+    return 'glossary-lnd';
+  }
+  if (lower.includes('pro-rata') || lower.includes('slippage')) return 'glossary-slippage';
+  if (lower.includes('nonce') || lower.includes('712')) return 'glossary-nonce';
+  return 'glossary-round';
+}
+
+export const InfoTooltip: React.FC<InfoTooltipProps> = ({
+  label,
+  text,
+  glossaryAnchor,
+}) => {
   const [open, setOpen] = useState(false);
   const tooltipId = useId();
   const containerRef = useRef<HTMLSpanElement | null>(null);
+  const anchorId = glossaryAnchor ?? inferGlossaryAnchor(label);
 
   useEffect(() => {
     if (!open) return;
@@ -55,7 +84,14 @@ export const InfoTooltip: React.FC<InfoTooltipProps> = ({ label, text }) => {
           role="tooltip"
           className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 border border-ink bg-paper-bright px-3 py-2 text-left font-sans text-xs font-normal normal-case leading-relaxed tracking-normal text-ink shadow-lg"
         >
-          {text}
+          <span className="block">{text}</span>
+          <a
+            href={`#/docs#${anchorId}`}
+            onClick={() => setOpen(false)}
+            className="mt-1.5 inline-block font-mono text-[10px] font-bold text-cobalt-700 underline decoration-dotted hover:text-ink"
+          >
+            Glossary: #{anchorId.replace('glossary-', '')} →
+          </a>
         </span>
       )}
     </span>

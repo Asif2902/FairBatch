@@ -52,6 +52,8 @@ interface TopCommandBarProps {
   onOpenFeModal: () => void;
   onOpenContractModal: () => void;
   onOpenSimulationModal: () => void;
+  onOpenDocs?: () => void;
+  isDocsActive?: boolean;
 }
 
 function formatShortClock(totalSeconds: number): string {
@@ -88,6 +90,8 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
   onOpenFeModal,
   onOpenContractModal,
   onOpenSimulationModal,
+  onOpenDocs,
+  isDocsActive = false,
 }) => {
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -190,10 +194,10 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
             <button
               type="button"
               data-testid="mode-pro-button"
-              aria-pressed={mode === 'pro'}
+              aria-pressed={!isDocsActive && mode === 'pro'}
               onClick={() => onModeChange('pro')}
               className={`min-h-[30px] px-1.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
-                mode === 'pro'
+                !isDocsActive && mode === 'pro'
                   ? 'bg-ink text-paper'
                   : 'text-ink-muted hover:text-ink'
               }`}
@@ -201,6 +205,25 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
               Pro
             </button>
           </div>
+
+          {onOpenDocs && (
+            <a
+              href="#/docs"
+              data-testid="header-docs-link"
+              onClick={(e) => {
+                e.preventDefault();
+                onOpenDocs();
+              }}
+              className={`hidden min-h-[34px] items-center gap-1 border px-2.5 font-sans text-xs font-bold transition sm:inline-flex ${
+                isDocsActive
+                  ? 'border-ink bg-ink text-paper'
+                  : 'border-rule-strong bg-paper-soft text-ink-soft hover:border-ink hover:text-ink'
+              }`}
+            >
+              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Docs</span>
+            </a>
+          )}
         </div>
 
         {/* Center: round status pill */}
@@ -394,6 +417,21 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                 aria-label="More navigation links"
                 className="absolute right-0 top-full z-50 mt-1.5 w-60 border border-ink bg-paper-bright py-1 shadow-xl"
               >
+                {onOpenDocs && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="menu-docs-link"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      onOpenDocs();
+                    }}
+                    className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-sm font-medium text-ink transition hover:bg-paper-soft"
+                  >
+                    <BookOpen className="h-4 w-4 text-vermilion-600" aria-hidden="true" />
+                    <span>User &amp; developer docs (/docs)</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"

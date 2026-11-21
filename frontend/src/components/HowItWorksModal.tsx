@@ -5,9 +5,14 @@ import { HOW_IT_WORKS_STEPS } from '../lib/glossary';
 interface HowItWorksModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenDocs?: () => void;
 }
 
-export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({ isOpen, onClose }) => {
+export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({
+  isOpen,
+  onClose,
+  onOpenDocs,
+}) => {
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -80,7 +85,23 @@ export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({ isOpen, onClos
             ))}
           </ol>
 
-          <div className="flex justify-end border-t border-rule pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-4">
+            <a
+              href="#/docs"
+              data-testid="modal-docs-link"
+              onClick={(e) => {
+                if (onOpenDocs) {
+                  e.preventDefault();
+                  onClose();
+                  onOpenDocs();
+                } else {
+                  onClose();
+                }
+              }}
+              className="font-sans text-xs font-bold text-cobalt-700 underline decoration-dotted underline-offset-4 hover:text-ink"
+            >
+              Read full User &amp; Developer Guide (/docs) →
+            </a>
             <button
               type="button"
               onClick={onClose}
