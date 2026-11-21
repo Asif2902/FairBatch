@@ -88,8 +88,8 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
   onAddLiquidity,
   onRemoveLiquidity,
 }) => {
-  const [baseInput, setBaseInput] = useState<string>('0.05');
-  const [quoteInput, setQuoteInput] = useState<string>('150');
+  const [baseInput, setBaseInput] = useState<string>('0.02');
+  const [quoteInput, setQuoteInput] = useState<string>('60');
   const [lockOpen, setLockOpen] = useState<boolean>(false);
   const [advancedOpen, setAdvancedOpen] = useState<boolean>(false);
   const [lockPreset, setLockPreset] = useState<LockPresetId>('none');
