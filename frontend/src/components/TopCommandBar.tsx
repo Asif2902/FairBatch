@@ -1,368 +1,460 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
-  ArrowRight,
-  CheckCircle2,
+  AlertTriangle,
+  BookOpen,
+  Check,
+  ChevronDown,
   Code2,
-  Cpu,
+  Copy,
   ExternalLink,
+  FlaskConical,
+  Globe,
+  LogOut,
+  MoreHorizontal,
   RefreshCw,
-  Settings2,
   ShieldCheck,
   Wallet,
 } from 'lucide-react';
-import type { BatchPhase, StateResponse } from '../types';
-import type { RawBatchInfo } from '../onchain/state';
-import { phaseLabel } from '../onchain/state';
-import type { RuntimeConfig } from '../onchain/config';
+import { formatUnits } from 'viem';
+import type { BatchPhase } from '../types';
+import type { RawBatchInfo, WalletBalances } from '../onchain/state';
+import { remainingSecondsForPhase } from '../onchain/state';
+import { explorerAddressUrl, type RuntimeConfig } from '../onchain/config';
 import {
-  formatInvariant,
   formatPrice,
   formatToken,
   getChainLabel,
   shortenAddress,
 } from '../lib/format';
+import { proPhaseName, simplePhaseName } from '../lib/glossary';
+
+export type UiMode = 'simple' | 'pro';
 
 interface TopCommandBarProps {
+  mode: UiMode;
+  onModeChange: (mode: UiMode) => void;
   config: RuntimeConfig;
-  state: StateResponse | null;
   batch: RawBatchInfo | null;
+  livePhase: BatchPhase;
+  chainNow: number;
   account: string | null;
+  balances: WalletBalances | null;
   walletChainId: number | null;
   wrongNetwork: boolean;
   loading: boolean;
   refreshing: boolean;
   busyAction: string | null;
+  onConnect: () => Promise<void>;
+  onSwitchNetwork: () => Promise<void>;
+  onDisconnect: () => void;
   onRefresh: () => void;
-  onSettleBatch: () => void;
-  onOpenContractModal: () => void;
+  onOpenHowItWorks: () => void;
   onOpenFeModal: () => void;
+  onOpenContractModal: () => void;
+  onOpenSimulationModal: () => void;
 }
 
-function stageDone(phase: BatchPhase, stage: 'Open' | 'Reveal' | 'Ready'): boolean {
-  if (stage === 'Open') return phase !== 'Open';
-  if (stage === 'Reveal') return phase === 'Ready' || phase === 'Settled';
-  return phase === 'Settled';
+function formatShortClock(totalSeconds: number): string {
+  const secs = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(secs / 60);
+  const rem = secs % 60;
+  return `${mins}:${String(rem).padStart(2, '0')}`;
+}
+
+function human(raw: bigint | undefined, decimals: number): number {
+  if (raw === undefined) return 0;
+  return Number(formatUnits(raw, decimals));
 }
 
 export const TopCommandBar: React.FC<TopCommandBarProps> = ({
+  mode,
+  onModeChange,
   config,
-  state,
   batch,
+  livePhase,
+  chainNow,
   account,
+  balances,
   walletChainId,
   wrongNetwork,
   loading,
   refreshing,
   busyAction,
+  onConnect,
+  onSwitchNetwork,
+  onDisconnect,
   onRefresh,
-  onSettleBatch,
-  onOpenContractModal,
+  onOpenHowItWorks,
   onOpenFeModal,
+  onOpenContractModal,
+  onOpenSimulationModal,
 }) => {
-  const phase: BatchPhase = state?.phase ?? 'Open';
-  const connectionBadge = (() => {
-    if (loading) {
-      return {
-        label: 'Syncing on-chain ledger',
-        dotClass: 'bg-brass-500 animate-pulse',
-        pillClass: 'border-brass-600/50 bg-brass-50 text-brass-700',
-      };
-    }
-    if (wrongNetwork) {
-      return {
-        label: `Wrong network · wallet ${walletChainId ?? '?'}`,
-        dotClass: 'bg-vermilion-500',
-        pillClass: 'border-vermilion-500/50 bg-vermilion-50 text-vermilion-700',
-      };
-    }
-    if (account) {
-      return {
-        label: `Wallet ${shortenAddress(account)}`,
-        dotClass: 'bg-pine-500 animate-pulse',
-        pillClass: 'border-pine-600/40 bg-pine-50 text-pine-700',
-      };
-    }
-    return {
-      label: 'Read-only · live RPC',
-      dotClass: 'bg-cobalt-500 animate-pulse',
-      pillClass: 'border-cobalt-600/40 bg-cobalt-50 text-cobalt-700',
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const walletMenuRef = useRef<HTMLDivElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (walletMenuRef.current && !walletMenuRef.current.contains(target)) {
+        setWalletMenuOpen(false);
+      }
+      if (moreMenuRef.current && !moreMenuRef.current.contains(target)) {
+        setMoreMenuOpen(false);
+      }
     };
-  })();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setWalletMenuOpen(false);
+        setMoreMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
 
-  const stages: Array<{ id: 'Open' | 'Reveal' | 'Ready'; step: string; title: string }> = [
-    { id: 'Open', step: '1', title: 'Open / Collect' },
-    { id: 'Reveal', step: '2', title: 'Reveal / Intent' },
-    { id: 'Ready', step: '3', title: 'Ready / Settle' },
-  ];
+  const remaining = batch
+    ? remainingSecondsForPhase(batch, livePhase, chainNow)
+    : 0;
+  const roundNumber = batch ? Number(batch.batchId) : null;
+  const phaseText =
+    mode === 'simple' ? simplePhaseName(livePhase) : proPhaseName(livePhase);
+  const showTimer = livePhase === 'Open' || livePhase === 'Reveal';
 
-  const canSettle =
-    phase === 'Ready' && Boolean(account) && !busyAction && !wrongNetwork;
+  const statusPillClass =
+    livePhase === 'Ready'
+      ? 'border-vermilion-500/60 bg-vermilion-50 text-vermilion-800'
+      : livePhase === 'Reveal'
+        ? 'border-brass-600/60 bg-brass-50 text-brass-900'
+        : 'border-pine-600/50 bg-pine-50 text-pine-800';
+
+  const statusDotClass =
+    livePhase === 'Ready'
+      ? 'bg-vermilion-500'
+      : livePhase === 'Reveal'
+        ? 'bg-brass-500'
+        : 'bg-pine-500';
+
+  const handleCopyAddress = async () => {
+    if (!account) return;
+    try {
+      await navigator.clipboard.writeText(account);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard unavailable
+    }
+  };
+
+  const explorerAccountUrl = account ? explorerAddressUrl(config, account) : null;
 
   return (
-    <header className="relative z-30 border-b-2 border-ink bg-paper/95 backdrop-blur-sm lg:sticky lg:top-0">
-      {/* Edition rule */}
-      <div className="border-b border-rule bg-paper-deep/70">
-        <div className="mx-auto flex max-w-[1560px] flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-4 py-1.5 lg:px-8">
-          <span className="hidden font-mono text-[8.5px] font-bold uppercase tracking-wide2 text-ink-muted sm:block">
-            FairBatch Clearing House · Public auction ledger
+    <header className="sticky top-0 z-40 h-12 border-b border-ink bg-paper-bright sm:h-14">
+      <div className="mx-auto flex h-full max-w-[1560px] items-center justify-between gap-2 px-3 sm:px-4 lg:px-8">
+        {/* Left: brand + Simple | Pro toggle */}
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center border border-ink bg-ink text-paper sm:h-8 sm:w-8">
+              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="font-display text-base font-bold tracking-tight text-ink sm:text-lg">
+              FairBatch
+            </span>
+          </div>
+
+          <div
+            role="group"
+            aria-label="Interface mode"
+            className="inline-flex shrink-0 border border-rule-strong bg-paper-soft p-0.5"
+          >
+            <button
+              type="button"
+              data-testid="mode-simple-button"
+              aria-pressed={mode === 'simple'}
+              onClick={() => onModeChange('simple')}
+              className={`min-h-[32px] px-2.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
+                mode === 'simple'
+                  ? 'bg-ink text-paper'
+                  : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              Simple
+            </button>
+            <button
+              type="button"
+              data-testid="mode-pro-button"
+              aria-pressed={mode === 'pro'}
+              onClick={() => onModeChange('pro')}
+              className={`min-h-[32px] px-2.5 font-sans text-xs font-bold transition sm:min-h-[34px] sm:px-3 ${
+                mode === 'pro'
+                  ? 'bg-ink text-paper'
+                  : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              Pro
+            </button>
+          </div>
+        </div>
+
+        {/* Center: round status pill */}
+        <div
+          data-testid="round-status-pill"
+          className={`hidden min-w-0 items-center gap-1.5 border px-2.5 py-1 font-mono text-xs font-bold tabular-nums md:inline-flex ${statusPillClass}`}
+        >
+          <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotClass}`} />
+          <span className="truncate">
+            {loading || roundNumber === null
+              ? 'Syncing Sepolia…'
+              : `${mode === 'simple' ? 'Round' : 'Batch'} ${roundNumber} · ${phaseText}${
+                  showTimer ? ` · ${formatShortClock(remaining)}` : ''
+                }`}
           </span>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            <div
-              data-testid="connection-status-badge"
-              className={`inline-flex items-center gap-1.5 border px-2 py-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.1em] ${connectionBadge.pillClass}`}
-            >
-              <span className={`h-1.5 w-1.5 ${connectionBadge.dotClass}`} />
-              <span>{connectionBadge.label}</span>
-            </div>
-
-            <span className="hidden border border-rule bg-paper-soft px-2 py-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-ink-muted lg:inline-flex">
-              {getChainLabel(config.chainId)}
-            </span>
-
-            <a
-              href={
-                config.explorerUrl
-                  ? `${config.explorerUrl}/address/${config.fairBatch}`
-                  : undefined
-              }
-              target="_blank"
-              rel="noreferrer"
-              data-testid="deployed-contract-badge"
-              className="hidden items-center gap-1 border border-pine-600/40 bg-pine-50 px-2 py-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.08em] text-pine-700 transition hover:bg-pine-100 xl:inline-flex"
-            >
-              <span>Contract {shortenAddress(config.fairBatch)}</span>
-              <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
-            </a>
-          </div>
         </div>
-      </div>
 
-      {/* Masthead */}
-      <div className="mx-auto max-w-[1560px] px-4 lg:px-8">
-        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4 py-4 lg:py-5">
-          <div className="flex min-w-0 items-start gap-3.5">
-            <div className="hidden h-12 w-12 shrink-0 items-center justify-center border border-ink bg-ink text-paper sm:flex">
-              <ShieldCheck className="h-6 w-6" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="font-display text-[2rem] font-bold leading-none tracking-[-0.04em] text-ink sm:text-[2.4rem]">
-                  FairBatch
-                </span>
-                <span className="border border-cobalt-600/50 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-label text-cobalt-700">
-                  Fe 26.5.0
-                </span>
-              </div>
-              <p className="mt-1.5 font-serif text-[13px] italic leading-none text-ink-muted">
-                Uniform-price batch exchange — many orders, one clearing price.
-              </p>
-            </div>
-          </div>
-
-          {/* Centred motto fills the masthead's middle column on wide screens */}
-          <div className="hidden flex-1 flex-col items-center justify-end pb-1.5 text-center 2xl:flex">
-            <span className="font-serif text-[16px] italic leading-none text-ink-soft">
-              Many orders. One price.
-            </span>
-            <span className="mt-2 flex items-center gap-2 whitespace-nowrap font-mono text-[8px] uppercase tracking-wide2 text-ink-faint">
-              <span className="h-px w-5 bg-rule-strong" />
-              CoW · FM-AMM · one clearing price
-              <span className="h-px w-5 bg-rule-strong" />
-            </span>
-          </div>
-
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1.5 border border-rule-strong bg-paper-bright px-2 py-1">
-              <Wallet className="h-3 w-3 text-ink-faint" aria-hidden="true" />
-              <span className="font-mono text-[10px] font-medium text-ink">
-                {account
-                  ? shortenAddress(account)
-                  : wrongNetwork
-                    ? 'Switch network'
-                    : 'No wallet connected'}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={onOpenFeModal}
-              className="inline-flex items-center gap-1.5 border border-cobalt-600/40 px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-cobalt-700 transition hover:bg-cobalt-50"
+        {/* Right: compact mobile round pill + single wallet button + overflow menu */}
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          {roundNumber !== null && (
+            <span
+              className={`inline-flex items-center gap-1 border px-1.5 py-1 font-mono text-xs font-bold tabular-nums md:hidden ${statusPillClass}`}
+              title={`${mode === 'simple' ? 'Round' : 'Batch'} ${roundNumber} · ${phaseText}`}
             >
-              <Code2 className="h-3 w-3" aria-hidden="true" />
-              <span>Why Fe 26.5?</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenContractModal}
-              className="inline-flex items-center gap-1.5 border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-ink-soft transition hover:border-ink hover:text-ink"
-            >
-              <Settings2 className="h-3 w-3 text-ink-faint" aria-hidden="true" />
-              <span>Contract &amp; Network Config</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Batch band: identity, lifecycle, reserves, actions */}
-      <div className="border-t border-rule bg-paper-soft/80">
-        <div className="mx-auto max-w-[1560px] px-4 py-2.5 lg:px-8">
-          <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
-            <div className="flex flex-wrap items-center gap-3">
-              <div
-                data-testid="batch-id-badge"
-                className="flex items-center gap-2 border-r border-rule-strong pr-3"
-              >
-                <Cpu className="h-3.5 w-3.5 text-vermilion-600" aria-hidden="true" />
-                <span className="font-display text-lg font-bold leading-none tracking-tight text-ink tabular-nums">
-                  BATCH #{state ? state.batch_id : '—'}
-                </span>
-                <span className="font-mono text-[8.5px] uppercase tracking-label text-ink-faint">
-                  {loading ? 'syncing' : phaseLabel(phase)}
-                </span>
-              </div>
-
-              <nav
-                aria-label="Batch Lifecycle Stepper"
-                className="flex flex-wrap items-center gap-1"
-              >
-                {stages.map((st, idx) => {
-                  const active = phase === st.id;
-                  const done = stageDone(phase, st.id);
-                  return (
-                    <React.Fragment key={st.id}>
-                      <div
-                        className={`flex items-center gap-1.5 border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.08em] transition ${
-                          active
-                            ? st.id === 'Reveal'
-                              ? 'border-brass-600 bg-brass-500 text-paper'
-                              : st.id === 'Ready'
-                                ? 'border-vermilion-700 bg-vermilion-500 text-paper'
-                                : 'border-ink bg-ink text-paper'
-                            : done
-                              ? 'border-pine-600/40 bg-pine-50 text-pine-700'
-                              : 'border-rule bg-paper-bright text-ink-faint'
-                        }`}
-                      >
-                        {done && !active ? (
-                          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-                        ) : (
-                          <span
-                            className={`flex h-3.5 w-3.5 items-center justify-center border text-[8px] ${
-                              active
-                                ? 'border-paper/40 text-paper'
-                                : 'border-current text-ink-faint'
-                            }`}
-                          >
-                            {st.step}
-                          </span>
-                        )}
-                        <span>{st.title}</span>
-                      </div>
-                      {idx < stages.length - 1 && (
-                        <ArrowRight
-                          className="h-2.5 w-2.5 text-ink-faint"
-                          aria-hidden="true"
-                        />
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </nav>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <div className="flex flex-col">
-                <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                  Reserve R_x
-                </span>
-                <span
-                  data-testid="reserve-rx"
-                  className="font-mono text-[11px] font-bold text-ink tabular-nums"
-                >
-                  {state ? formatToken(state.reserves.rx, 2) : '—'} {config.baseSymbol}
-                </span>
-              </div>
-              <div className="hidden h-7 w-px bg-rule sm:block" />
-              <div className="flex flex-col">
-                <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                  Reserve R_y
-                </span>
-                <span
-                  data-testid="reserve-ry"
-                  className="font-mono text-[11px] font-bold text-ink tabular-nums"
-                >
-                  {state ? formatPrice(state.reserves.ry, 0) : '—'} {config.quoteSymbol}
-                </span>
-              </div>
-              <div className="hidden h-7 w-px bg-rule sm:block" />
-              <div className="flex flex-col">
-                <span className="flex items-center gap-1 font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                  <Activity className="h-2.5 w-2.5 text-vermilion-600" aria-hidden="true" />
-                  Pool spot
-                </span>
-                <span
-                  data-testid="pool-spot-price"
-                  className="font-mono text-[11px] font-bold text-vermilion-700 tabular-nums"
-                >
-                  {state ? `$${formatPrice(state.reserves.spot_price, 2)}` : '—'}
-                </span>
-              </div>
-              <div className="hidden h-7 w-px bg-rule sm:block" />
-              <div className="flex flex-col">
-                <span className="font-mono text-[8px] uppercase tracking-label text-ink-faint">
-                  LP invariant k
-                </span>
-                <span
-                  data-testid="pool-k-invariant"
-                  className="font-mono text-[11px] font-bold text-pine-700 tabular-nums"
-                >
-                  {state ? formatInvariant(state.reserves.k_invariant) : '—'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-rule pt-2 sm:justify-end">
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={refreshing}
-              className="inline-flex items-center gap-1.5 border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-ink-muted transition hover:border-ink hover:text-ink disabled:opacity-40"
-            >
-              <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
-              <span>{refreshing ? 'Syncing' : 'Refresh Ledger'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onSettleBatch}
-              disabled={!canSettle}
-              title={
-                !account
-                  ? 'Connect a wallet to settle permissionlessly'
-                  : phase !== 'Ready'
-                    ? `Settlement opens when the reveal window closes for batch ${state ? `#${state.batch_id}` : ''}`
-                    : 'Compute the uniform clearing price and open the next batch'
-              }
-              className="inline-flex items-center gap-1.5 border border-pine-700 bg-pine-600 px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-paper transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+              <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass}`} />
               <span>
-                {busyAction === 'settle'
-                  ? 'Settling…'
-                  : phase === 'Ready'
-                    ? 'Settle Batch'
-                    : 'Settlement Locked'}
+                #{roundNumber}
+                {showTimer ? ` ${formatShortClock(remaining)}` : ''}
               </span>
+            </span>
+          )}
+
+          {/* Single Wallet Button + Dropdown */}
+          <div ref={walletMenuRef} className="relative">
+            {!account ? (
+              <button
+                type="button"
+                data-testid="header-wallet-button"
+                disabled={busyAction !== null}
+                onClick={() => void onConnect()}
+                className="inline-flex min-h-[36px] items-center gap-1.5 border border-ink bg-ink px-2.5 font-sans text-xs font-bold text-paper transition hover:bg-ink-soft disabled:opacity-50 sm:min-h-[38px] sm:px-3.5"
+              >
+                <Wallet className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{busyAction === 'connect' ? 'Connecting…' : 'Connect'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="header-wallet-button"
+                aria-haspopup="menu"
+                aria-expanded={walletMenuOpen}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setWalletMenuOpen((v) => !v);
+                }}
+                className={`inline-flex min-h-[36px] items-center gap-1.5 border px-2.5 font-mono text-xs font-bold transition sm:min-h-[38px] sm:px-3 ${
+                  wrongNetwork
+                    ? 'border-vermilion-600 bg-vermilion-50 text-vermilion-800'
+                    : 'border-rule-strong bg-paper-soft text-ink hover:border-ink'
+                }`}
+              >
+                {wrongNetwork ? (
+                  <AlertTriangle className="h-3.5 w-3.5 text-vermilion-600" aria-hidden="true" />
+                ) : (
+                  <span className="h-2 w-2 rounded-full bg-pine-500" />
+                )}
+                <span>{wrongNetwork ? 'Wrong network' : shortenAddress(account)}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
+              </button>
+            )}
+
+            {walletMenuOpen && account && (
+              <div
+                role="menu"
+                aria-label="Wallet details"
+                className="absolute right-0 top-full z-50 mt-1.5 w-72 border border-ink bg-paper-bright p-3.5 shadow-xl"
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-rule pb-2.5">
+                  <div className="min-w-0">
+                    <div className="font-mono text-xs font-bold text-ink">
+                      {shortenAddress(account)}
+                    </div>
+                    <div className="mt-0.5 font-mono text-xs text-ink-muted">
+                      {wrongNetwork
+                        ? `Chain #${walletChainId ?? '?'} (switch required)`
+                        : getChainLabel(config.chainId)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyAddress()}
+                      aria-label="Copy wallet address"
+                      className="inline-flex h-9 w-9 items-center justify-center border border-rule text-ink-muted transition hover:border-ink hover:text-ink"
+                    >
+                      {copied ? (
+                        <Check className="h-4 w-4 text-pine-700" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </button>
+                    {explorerAccountUrl && (
+                      <a
+                        href={explorerAccountUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label="View wallet on Etherscan"
+                        className="inline-flex h-9 w-9 items-center justify-center border border-rule text-ink-muted transition hover:border-ink hover:text-ink"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                {wrongNetwork && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWalletMenuOpen(false);
+                      void onSwitchNetwork();
+                    }}
+                    className="tap-target mt-2.5 inline-flex w-full items-center justify-center gap-2 border border-vermilion-600 bg-vermilion-500 px-3 font-sans text-xs font-bold text-paper transition hover:bg-vermilion-600"
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>Switch to Sepolia</span>
+                  </button>
+                )}
+
+                <div className="mt-2.5 space-y-1.5 border-b border-rule pb-2.5 font-mono text-xs tabular-nums">
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink-muted">Sepolia ETH</span>
+                    <span className="font-bold text-ink">
+                      {formatToken(human(balances?.eth, 18), 4)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink-muted">{config.baseSymbol}</span>
+                    <span className="font-bold text-ink">
+                      {formatToken(human(balances?.base, config.baseDecimals), 3)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink-muted">{config.quoteSymbol}</span>
+                    <span className="font-bold text-ink">
+                      {formatPrice(human(balances?.quote, config.quoteDecimals), 2)}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWalletMenuOpen(false);
+                    onDisconnect();
+                  }}
+                  className="mt-2.5 inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 border border-rule-strong px-3 font-sans text-xs font-bold text-ink-soft transition hover:border-ink hover:text-ink"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Disconnect</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Overflow "⋯" menu */}
+          <div ref={moreMenuRef} className="relative">
+            <button
+              type="button"
+              data-testid="header-more-menu"
+              aria-label="More options"
+              aria-haspopup="menu"
+              aria-expanded={moreMenuOpen}
+              onClick={() => {
+                setWalletMenuOpen(false);
+                setMoreMenuOpen((v) => !v);
+              }}
+              className="inline-flex h-9 w-9 items-center justify-center border border-rule-strong bg-paper-soft text-ink transition hover:border-ink sm:h-[38px] sm:w-[38px]"
+            >
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
             </button>
 
-            {batch && Number(batch.orderCount) > 0 && (
-              <span className="font-mono text-[8.5px] uppercase tracking-label text-ink-faint tabular-nums">
-                {Number(batch.orderCount)} orders · {Number(batch.commitCount)} commitments
-              </span>
+            {moreMenuOpen && (
+              <div
+                role="menu"
+                aria-label="More navigation links"
+                className="absolute right-0 top-full z-50 mt-1.5 w-60 border border-ink bg-paper-bright py-1 shadow-xl"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    onOpenHowItWorks();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-sm font-medium text-ink transition hover:bg-paper-soft"
+                >
+                  <BookOpen className="h-4 w-4 text-cobalt-700" aria-hidden="true" />
+                  <span>How it works</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    onOpenFeModal();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-sm font-medium text-ink transition hover:bg-paper-soft"
+                >
+                  <Code2 className="h-4 w-4 text-vermilion-600" aria-hidden="true" />
+                  <span>Why Fe</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    onOpenContractModal();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-sm font-medium text-ink transition hover:bg-paper-soft"
+                >
+                  <Globe className="h-4 w-4 text-pine-700" aria-hidden="true" />
+                  <span>Contract &amp; network config</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    onOpenSimulationModal();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-sm font-medium text-ink transition hover:bg-paper-soft"
+                >
+                  <FlaskConical className="h-4 w-4 text-plum-700" aria-hidden="true" />
+                  <span>MEV sandwich simulation</span>
+                </button>
+                <div className="my-1 border-t border-rule" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={refreshing}
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    onRefresh();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-sm font-medium text-ink-muted transition hover:bg-paper-soft hover:text-ink disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>Refresh Sepolia state</span>
+                </button>
+              </div>
             )}
           </div>
         </div>

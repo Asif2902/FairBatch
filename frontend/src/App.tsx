@@ -10,7 +10,8 @@ import {
 import type { ClaimableDto, LocalSecretVaultEntry } from './types';
 import { explorerTxUrl } from './onchain/config';
 import { useFairBatch } from './onchain/useFairBatch';
-import { TopCommandBar } from './components/TopCommandBar';
+import { TopCommandBar, type UiMode } from './components/TopCommandBar';
+import { ProStatsRow } from './components/ProStatsRow';
 import { AccountPanel } from './components/AccountPanel';
 import { BatchConsole } from './components/BatchConsole';
 import { OrderTicket } from './components/OrderTicket';
@@ -20,19 +21,43 @@ import { MevComparison } from './components/MevComparison';
 import { ClaimsPanel } from './components/ClaimsPanel';
 import { ContractConfigModal } from './components/ContractConfigModal';
 import { FeArchitectureModal } from './components/FeArchitectureModal';
+import { HowItWorksModal } from './components/HowItWorksModal';
+import { SIMPLE_COPY } from './lib/glossary';
+
+const MODE_STORAGE_KEY = 'fairbatch.uiMode.v1';
+
+function readInitialMode(defaultMode: UiMode): UiMode {
+  try {
+    if (typeof localStorage === 'undefined') return defaultMode;
+    const saved = localStorage.getItem(MODE_STORAGE_KEY);
+    if (saved === 'simple' || saved === 'pro') return saved;
+  } catch {
+    // storage unavailable
+  }
+  return defaultMode;
+}
 
 export const App: React.FC = () => {
   const fb = useFairBatch();
-  const [selectedViewBatchId, setSelectedViewBatchId] = useState<number | 'live'>(
-    'live',
-  );
+  // Commit 3 adds SimpleExperience and switches defaultMode to 'simple'.
+  const [mode, setMode] = useState<UiMode>(() => readInitialMode('pro'));
+  const [selectedViewBatchId, setSelectedViewBatchId] = useState<number | 'live'>('live');
   const [isContractModalOpen, setIsContractModalOpen] = useState<boolean>(false);
   const [isFeModalOpen, setIsFeModalOpen] = useState<boolean>(false);
+  const [isHowItWorksOpen, setIsHowItWorksOpen] = useState<boolean>(false);
+
+  const handleModeChange = (next: UiMode) => {
+    setMode(next);
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, next);
+    } catch {
+      // ignore storage failure
+    }
+  };
 
   const snapshot = fb.snapshot;
   const state = snapshot?.state ?? null;
 
-  // If a selection points at a batch that no longer exists (config switch), fall back.
   useEffect(() => {
     if (!snapshot || selectedViewBatchId === 'live') return;
     const exists = snapshot.settledHistory.some(
@@ -60,7 +85,7 @@ export const App: React.FC = () => {
         result.batchId >= 0 ? result.batchId : (settlingBatch ?? 'live'),
       );
     } catch {
-      // The controller already surfaced the failure in the notice banner.
+      // surfaced via notice
     }
   };
 
@@ -82,26 +107,34 @@ export const App: React.FC = () => {
   return (
     <div className="flex min-h-screen flex-col text-ink">
       <TopCommandBar
+        mode={mode}
+        onModeChange={handleModeChange}
         config={fb.config}
-        state={state}
         batch={snapshot?.batch ?? null}
+        livePhase={fb.livePhase}
+        chainNow={fb.chainNow}
         account={fb.account}
+        balances={snapshot?.balances ?? null}
         walletChainId={fb.walletChainId}
         wrongNetwork={fb.wrongNetwork}
         loading={fb.loading}
         refreshing={fb.refreshing}
         busyAction={fb.busyAction}
+        onConnect={fb.connect}
+        onSwitchNetwork={fb.switchNetwork}
+        onDisconnect={fb.disconnect}
         onRefresh={fb.refresh}
-        onSettleBatch={() => void handleSettle()}
-        onOpenContractModal={() => setIsContractModalOpen(true)}
+        onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
         onOpenFeModal={() => setIsFeModalOpen(true)}
+        onOpenContractModal={() => setIsContractModalOpen(true)}
+        onOpenSimulationModal={() => setIsHowItWorksOpen(true)}
       />
 
       <main className="mx-auto w-full max-w-[1560px] flex-1 px-4 py-5 lg:px-8">
         {notice && (
           <div
             role="status"
-            className={`mb-4 flex flex-wrap items-center justify-between gap-3 border-l-2 px-3 py-2 text-[11px] font-medium ${
+            className={`mb-4 flex flex-wrap items-center justify-between gap-3 border-l-2 px-3.5 py-2.5 text-sm font-medium ${
               notice.kind === 'error'
                 ? 'border-vermilion-500 bg-vermilion-50 text-vermilion-800'
                 : notice.kind === 'info'
@@ -111,9 +144,9 @@ export const App: React.FC = () => {
           >
             <div className="flex min-w-0 items-center gap-2">
               {notice.kind === 'error' ? (
-                <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-vermilion-600" />
+                <ShieldAlert className="h-4 w-4 shrink-0 text-vermilion-600" />
               ) : (
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-pine-700" />
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-pine-700" />
               )}
               <span className="min-w-0 break-words">{notice.text}</span>
               {txUrl && notice.hash && (
@@ -121,17 +154,17 @@ export const App: React.FC = () => {
                   href={txUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex shrink-0 items-center gap-1 border border-current px-1.5 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-label opacity-80 transition hover:opacity-100"
+                  className="inline-flex shrink-0 items-center gap-1 border border-current px-2 py-0.5 font-mono text-xs font-bold opacity-85 transition hover:opacity-100"
                 >
                   <span>Tx {notice.hash.slice(0, 8)}…</span>
-                  <ExternalLink className="h-2.5 w-2.5" />
+                  <ExternalLink className="h-3 w-3" />
                 </a>
               )}
             </div>
             <button
               type="button"
               onClick={fb.clearNotice}
-              className="shrink-0 border border-current px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-label opacity-60 transition hover:opacity-100"
+              className="shrink-0 border border-current px-2 py-0.5 font-mono text-xs font-bold opacity-75 transition hover:opacity-100"
             >
               Dismiss
             </button>
@@ -142,46 +175,45 @@ export const App: React.FC = () => {
           <section className="ledger-panel flex flex-col items-center justify-center gap-3 px-6 py-20 text-center">
             <RefreshCw className="h-6 w-6 animate-spin text-cobalt-600" />
             <h2 className="font-display text-xl font-bold text-ink">
-              Syncing the on-chain ledger
+              Loading Ethereum Sepolia state
             </h2>
-            <p className="max-w-md text-[11.5px] leading-relaxed text-ink-muted">
-              Reading the current batch, pool reserves and event history from{' '}
-              <span className="font-mono text-ink-soft">{fb.config.rpcUrl}</span>.
+            <p className="max-w-md text-sm leading-relaxed text-ink-muted">
+              Reading the current round, pool reserves, and recent orders from Ethereum Sepolia.
             </p>
           </section>
         )}
 
         {!snapshot && !fb.loading && (
-          <section className="border border-vermilion-500/40 bg-vermilion-50/60 p-6">
+          <section className="border border-vermilion-500/40 bg-vermilion-50 p-6">
             <div className="flex items-start gap-3">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-vermilion-600" />
               <div className="min-w-0">
                 <h2 className="font-display text-xl font-bold text-ink">
                   {fb.configured
-                    ? 'Unable to read the FairBatch contract'
+                    ? 'Unable to reach Ethereum Sepolia right now'
                     : 'No FairBatch contract configured'}
                 </h2>
-                <p className="mt-1 max-w-2xl text-[11.5px] leading-relaxed text-ink-muted">
+                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink-muted">
                   {fb.error ??
                     'Configure a deployed FairBatch address and JSON-RPC endpoint to begin.'}
                 </p>
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={fb.refresh}
                     disabled={fb.refreshing}
-                    className="inline-flex items-center gap-1.5 border border-vermilion-600 bg-paper-bright px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-vermilion-800 transition hover:bg-vermilion-100 disabled:opacity-40"
+                    className="tap-target inline-flex items-center gap-1.5 border border-vermilion-600 bg-paper-bright px-4 font-sans text-sm font-bold text-vermilion-800 transition hover:bg-vermilion-100 disabled:opacity-40"
                   >
-                    <RefreshCw className={`h-3 w-3 ${fb.refreshing ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`h-4 w-4 ${fb.refreshing ? 'animate-spin' : ''}`} />
                     <span>Retry</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setIsContractModalOpen(true)}
-                    className="inline-flex items-center gap-1.5 border border-ink bg-ink px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-paper transition hover:bg-ink-soft"
+                    className="tap-target inline-flex items-center gap-1.5 border border-ink bg-ink px-4 font-sans text-sm font-bold text-paper transition hover:bg-ink-soft"
                   >
-                    <Wallet className="h-3 w-3" />
-                    <span>Open contract config</span>
+                    <Wallet className="h-4 w-4" />
+                    <span>Contract &amp; network config</span>
                   </button>
                 </div>
               </div>
@@ -191,6 +223,17 @@ export const App: React.FC = () => {
 
         {snapshot && state && displayedSettlement && (
           <>
+            <ProStatsRow
+              config={fb.config}
+              state={state}
+              batch={snapshot.batch}
+              livePhase={fb.livePhase}
+              account={fb.account}
+              walletChainId={fb.walletChainId}
+              wrongNetwork={fb.wrongNetwork}
+              loading={fb.loading}
+            />
+
             <div className="grid items-start gap-5 lg:grid-cols-12">
               <div className="min-w-0 space-y-4 lg:col-span-4">
                 <AccountPanel
@@ -214,7 +257,7 @@ export const App: React.FC = () => {
                 />
 
                 <OrderTicket
-                  state={state}
+                  state={{ ...state, phase: fb.livePhase }}
                   config={fb.config}
                   account={fb.account}
                   localSecrets={fb.secretVault}
@@ -238,7 +281,7 @@ export const App: React.FC = () => {
               <div className="min-w-0 space-y-5 lg:col-span-8">
                 <BatchConsole
                   batch={snapshot.batch}
-                  phase={state.phase}
+                  phase={fb.livePhase}
                   config={fb.config}
                   account={fb.account}
                   commitments={snapshot.allCommitments}
@@ -307,25 +350,23 @@ export const App: React.FC = () => {
       </main>
 
       <footer className="mt-10 border-t border-ink bg-paper-deep">
-        <div className="mx-auto flex max-w-[1560px] flex-col items-center justify-between gap-2 px-4 py-4 text-center font-mono text-[9px] uppercase tracking-[0.12em] text-ink-muted xl:flex-row xl:text-left lg:px-8">
-          <span className="text-ink-soft">
+        <div className="mx-auto flex max-w-[1560px] flex-col items-center justify-between gap-2 px-4 py-4 text-center font-mono text-xs text-ink-muted xl:flex-row xl:text-left lg:px-8">
+          <span className="font-bold text-ink-soft">
             FairBatch Exchange · One price, every order
           </span>
-          <span className="normal-case tracking-normal">
-            Built natively in{' '}
-            <span className="font-bold text-cobalt-700">Fe 26.5.0</span> —{' '}
-            <code className="text-ink-soft">clearing::solve_batch</code>,{' '}
-            <code className="text-ink-soft">core::fixed::Wad</code>, EIP-1153{' '}
-            <code className="text-ink-soft">Mutex</code>,{' '}
-            <code className="text-ink-soft">std::evm::eip712</code>
-          </span>
+          <span>{SIMPLE_COPY.footerVerified}</span>
           <span>
             {snapshot
-              ? `Chain ${fb.config.chainId} · ${fb.config.fairBatch.slice(0, 6)}…${fb.config.fairBatch.slice(-4)} · refreshed ${new Date(snapshot.lastUpdated).toLocaleTimeString()}`
-              : 'Read-only until a contract is configured'}
+              ? `Sepolia · ${fb.config.fairBatch.slice(0, 6)}…${fb.config.fairBatch.slice(-4)}`
+              : 'Ethereum Sepolia'}
           </span>
         </div>
       </footer>
+
+      <HowItWorksModal
+        isOpen={isHowItWorksOpen}
+        onClose={() => setIsHowItWorksOpen(false)}
+      />
 
       <ContractConfigModal
         isOpen={isContractModalOpen}

@@ -285,9 +285,6 @@ describe('FairBatch on-chain terminal', () => {
       'Read-only · live RPC',
     );
     expect(
-      screen.getByRole('navigation', { name: /Batch Lifecycle Stepper/i }),
-    ).toBeInTheDocument();
-    expect(
       screen.getByRole('img', { name: /Batch Supply and Demand Depth Chart/i }),
     ).toBeInTheDocument();
     expect(screen.getByTestId('uniform-clearing-price-readout')).toHaveTextContent(
@@ -316,8 +313,8 @@ describe('FairBatch on-chain terminal', () => {
     render(<App />);
     expect(screen.queryByTestId('settle-batch-button')).not.toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Settlement Locked/i }),
-    ).toBeDisabled();
+      screen.getByText(/Settlement opens after the reveal window/i),
+    ).toBeInTheDocument();
   });
 
   it('submits a sealed commitment through the connected wallet', async () => {
@@ -424,8 +421,9 @@ describe('FairBatch on-chain terminal', () => {
   it('renders the read-only Sepolia deployment modal from config/deployment.json with no local fork controls', () => {
     render(<App />);
 
+    fireEvent.click(screen.getByTestId('header-more-menu'));
     fireEvent.click(
-      screen.getByRole('button', { name: /Contract & Network Config/i }),
+      screen.getByRole('menuitem', { name: /Contract & network config/i }),
     );
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
