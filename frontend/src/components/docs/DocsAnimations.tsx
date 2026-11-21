@@ -376,7 +376,7 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
           <svg
             role="img"
             aria-label="Illustrative supply and demand curves crossing at one fair price"
-            viewBox="0 0 720 230"
+            viewBox="0 0 760 230"
             className="h-auto w-full border border-rule bg-paper-bright"
           >
             {/* Axes */}

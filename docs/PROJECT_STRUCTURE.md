@@ -41,11 +41,17 @@ FairBatch/
 ├── frontend/                            # React 18 + TypeScript + TailwindCSS + viem Exchange Terminal
 │   ├── package.json                     # Vite, React, viem, TypeScript & Vitest scripts
 │   └── src/
-│       ├── App.tsx                      # Clearing Ledger terminal shell driven directly by Sepolia RPC + wallet
-│       ├── onchain/                     # viem client, ABI, event indexer, snapshot builder, tx actions & secret vault
-│       ├── components/                  # OrderTicket, LiquidityPanel, BatchConsole, ClaimsPanel, PriceChart, AccountPanel...
-│       ├── lib/                         # Pure TS clearing helpers, formatting & keccak
-│       └── __tests__/                   # 35 Vitest unit & component tests
+│       ├── App.tsx                      # Clearing Ledger shell (Simple, Pro, and lazy-loaded /docs route)
+│       ├── onchain/                     # viem client, ABI, event indexer, snapshot builder, tx actions, keeper status & secret vault
+│       ├── components/                  # simple/, docs/ (DocsPage + 5 CSS/SVG animations), OrderTicket, LiquidityPanel, BatchConsole...
+│       ├── lib/                         # Pure TS clearing helpers, glossary, formatting & keccak
+│       └── __tests__/                   # 41 Vitest unit & component tests
+│
+├── keeper/                              # Optional TypeScript + viem Keeper & EIP-712 Intent Relayer (Liveness, Not Trust)
+│   ├── README.md                        # Trust model, configuration & Docker/cloud hosting guide
+│   ├── Dockerfile                       # Multi-stage Node 22 container image
+│   ├── .env.example                     # Safe env template (empty KEEPER_PRIVATE_KEY)
+│   └── src/                             # config.ts, decision.ts, service.ts, relayer.ts, abi.ts, index.ts & 10 Vitest tests
 │
 ├── backend/                             # Optional Off-Chain Rust Reference Solver & MEV Comparison Tool (Not Core Contribution)
 │   ├── README.md                        # Scope note & reference test commands

@@ -74,7 +74,7 @@ FairBatch's core contract suite (`src/*.fe`) is built around **Fe `26.5.0`** fea
 
 ## Architecture
 
-The live exchange frontend connects **directly to Ethereum Sepolia via `viem`** using [`config/deployment.json`](./config/deployment.json) as the single source of truth — **no REST backend is required**. First-time visitors land in **Simple** mode (plain-language protected swap + Earn tab with guided steps), while judges and power users can switch to **Pro** mode for the full clearing ledger terminal (all 3 order modes, depth/price chart, MEV sandwich simulator, batch console, and claims ledger). The Rust crate in [`backend/`](./backend) is kept strictly as an optional off-chain reference/parity verifier and sequential-AMM MEV sandwich simulator (not the core contribution).
+The live exchange frontend connects **directly to Ethereum Sepolia via `viem`** using [`config/deployment.json`](./config/deployment.json) as the single source of truth — **no REST backend is required**. First-time visitors land in **Simple** mode (plain-language protected swap + Earn tab with guided steps), power users and judges can switch to **Pro** mode for the full clearing ledger terminal (always-visible balances & approvals, all 3 order modes, depth/price chart, MEV sandwich simulator, batch console, and claims ledger), and an in-app **`/docs`** (`#/docs`) route provides a plain-English User Guide, Developer Guide, 5 interactive CSS/SVG walkthroughs, security threat matrix, and glossary. An optional TypeScript keeper & intent relayer lives in [`keeper/`](./keeper) (adds liveness, not trust — the protocol works completely without it). The Rust crate in [`backend/`](./backend) is kept strictly as an optional off-chain reference/parity verifier and sequential-AMM MEV sandwich simulator (not the core contribution).
 
 ```mermaid
 flowchart TB
@@ -82,7 +82,7 @@ flowchart TB
         Cfg["config/deployment.json (Single Source of Truth)"]
         Client["onchain/client.ts & events.ts (Sepolia RPC + EIP-1193 Wallet)"]
         Actions["onchain/actions.ts (Direct, Commit-Reveal, EIP-712, LP, Faucet, Multicall)"]
-        UI["Clearing Ledger UI (Simple Swap & Earn + Pro Terminal)"]
+        UI["Clearing Ledger UI (Simple Swap & Earn + Pro Terminal + In-App /docs)"]
     end
 
     subgraph Contracts["Core Contribution: Fe 26.5.0 Contracts on Ethereum Sepolia (src/)"]
@@ -94,8 +94,9 @@ flowchart TB
         Tokens["mock_erc20.fe: Owner/Minter-Guarded fWETH (18d) & fUSDC (6d)"]
     end
 
-    subgraph RefTool["Optional Off-Chain Reference Tool (backend/ — Rust)"]
-        Parity["clearing.rs & simulator.rs (256-bit Parity Tests + MEV Sandwich Model)"]
+    subgraph OptionalInfra["Optional Infrastructure (Adds Liveness, Not Trust)"]
+        Keeper["keeper/ (TypeScript + viem: Auto-Settle after 5s Grace, Slasher, POST /relay/intent)"]
+        Parity["backend/ (Rust: Offline 256-bit Parity Tests + MEV Sandwich Model)"]
     end
 
     Cfg --> Client
@@ -104,6 +105,8 @@ flowchart TB
     FB --> Intent & Clear & Tokens
     Clear --> Math
     Faucet --> Tokens
+    UI -.->|"Optional VITE_KEEPER_URL (/health, /relay/intent)"| Keeper
+    Keeper -.->|"Permissionless settleBatch / slashUnrevealed / submitSignedIntent"| FB
     Parity -.->|"Offline Differential Parity Tests Only"| Clear
 ```
 
@@ -121,10 +124,27 @@ flowchart TB
 | [`src/tests.fe`](./src/tests.fe) | **69 Fe tests** covering clearing math, properties, MEV zero-profit proof, `MockClock` transitions (batches, LP locks, faucet, slashing), full EVM lifecycles, 64-order settlement, and security revert boundaries. |
 | [`config/deployment.json`](./config/deployment.json) | Single source of truth for live Ethereum Sepolia contract addresses, token metadata, market windows, and faucet config. |
 | [`deployments/sepolia.json`](./deployments/sepolia.json) | Full Sepolia deployment manifest with tx hashes, block numbers, gas usage, and Etherscan links. |
-| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia (**35 Vitest tests**). |
+| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**41 Vitest tests**). |
+| [`keeper/`](./keeper) | **Optional** TypeScript + `viem` permissionless settlement keeper (`5s` grace, empty-round throttle), slasher (`60s` grace), and EIP-712 intent relayer (`POST /relay/intent`) (**10 Vitest tests**, see [`keeper/README.md`](./keeper/README.md)). |
 | [`backend/`](./backend) | Optional Rust reference solver & sequential-AMM MEV simulator (**30 Cargo tests**, see [`backend/README.md`](./backend/README.md)). |
 | [`scripts/`](./scripts) | PowerShell deployment and verification scripts (`deploy_sepolia.ps1`, `prepare_deployment.ps1`, `check_setup.ps1`). |
 | [`docs/`](./docs) | [`PROJECT_STRUCTURE.md`](./docs/PROJECT_STRUCTURE.md), [`RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`design/CLEARING_LEDGER.md`](./docs/design/CLEARING_LEDGER.md), and [`screenshots/`](./docs/screenshots). |
+
+---
+
+## Interface & In-App Documentation (`/docs`)
+
+Launch the web app (`cd frontend && npm run dev`) to explore **Simple** mode, **Pro** mode, the **MEV Sandwich Simulation**, and the full in-app documentation at **`/docs`** (`#/docs`, linked from the top bar, `⋯` menu, footer, and `?` tooltips):
+
+| Simple Swap & Ready Banner | Aggregated Collect & 380px Mobile |
+| :---: | :---: |
+| ![Simple Swap](./docs/screenshots/simple-swap.png) | ![380px Mobile Collect](./docs/screenshots/mobile-380px.png) |
+| **Pro Terminal (Balances, Approvals & Order Slip)** | **MEV Sandwich Simulation Modal** |
+| ![Pro Terminal](./docs/screenshots/pro-terminal.png) | ![Sandwich Simulation](./docs/screenshots/sandwich-sim.png) |
+| **In-App `/docs` (User & Developer Guide)** | **In-App `/docs` Visuals & Animations** |
+| ![In-App Docs](./docs/screenshots/docs-page.png) | ![Docs Animations](./docs/screenshots/docs-animations.png) |
+
+Additional workflow captures in [`docs/screenshots/`](./docs/screenshots): [`simple-ready-banner.png`](./docs/screenshots/simple-ready-banner.png), [`simple-waiting.png`](./docs/screenshots/simple-waiting.png), [`simple-result-collect.png`](./docs/screenshots/simple-result-collect.png), [`simple-earn.png`](./docs/screenshots/simple-earn.png), and [`pro-mobile-380px.png`](./docs/screenshots/pro-mobile-380px.png).
 
 ---
 
@@ -162,18 +182,31 @@ Requires Node.js 20+ and `npm`. No `.env` file or local backend is needed — ad
 ```sh
 cd frontend
 npm ci
-npm test          # 35 passed; 0 failed (Vitest)
-npm run build     # tsc -b && vite build
-npm run dev       # Opens http://localhost:5173 connected to Ethereum Sepolia
+npm test          # 41 passed; 0 failed (Vitest)
+npm run build     # tsc -b && vite build (emits lazy DocsPage chunk)
+npm run dev       # Opens http://localhost:5173 (Simple, Pro, and /docs) connected to Sepolia
 ```
 
 In the browser on Ethereum Sepolia (Chain ID `11155111` with MetaMask or any EIP-1193 wallet):
-1. Connect your wallet to **Sepolia** and click **Get Test Tokens** / **Claim Faucet** (`1 fWETH + 100 fUSDC` every 12 hours).
-2. Complete a protected swap in **Simple** mode (or switch to **Pro** mode to test all three order modes: **Direct**, **Sealed Commit-Reveal**, and **EIP-712 Signed Intent**).
-3. Add flexible or optionally time-locked LP liquidity in the **Earn** / **Liquidity** panel and test partial/unlocked withdrawal.
-4. Once `reveal_deadline` passes, settle the batch (permissionless) to clear all orders at one uniform price $p^*$, slash any unrevealed commitment to collect its ETH bond bounty, and claim payouts individually or via **Multicall Claim**.
+1. **Simple mode (default):** Connect your wallet to **Sepolia** (keep at least `~0.002` Sepolia ETH for gas; the UI links public Sepolia faucets if your balance is low), click **Get free test tokens** (`1 fWETH + 100 fUSDC` every 12 hours), enter an amount, and press **Swap** (or **Start next round & Swap** if the round is Ready). Once the round closes, click **Finish Round** (or wait ~5s if an optional keeper is running) and click **Collect** to pull all finished orders in one transaction.
+2. **Pro mode:** Toggle **Pro** in the top bar to inspect the always-visible **Wallet balances & approvals** strip, section tabs (`All panels | Trade | Liquidity | Round audit | Claims & slashing`), all three order modes (**Direct**, **Sealed Commit-Reveal**, and **EIP-712 Signed Intent** with optional relayer + **"Submit it myself"** fallback), FM-AMM liquidity + optional locking, and permissionless slashing.
+3. **In-app `/docs`:** Click **Docs** in the header (or navigate to `/docs` / `#/docs`) for the User Guide, Developer Guide, 5 interactive CSS/SVG visuals, Threat Matrix, and Glossary.
 
-### 4. Optional Off-Chain Rust Reference Verifier (`backend/`)
+### 4. Optional Permissionless Keeper & Intent Relayer (`keeper/`)
+
+FairBatch works completely without this service; it is strictly optional infrastructure that adds automatic round settlement (`5s` public grace), expired commit slashing (`60s` grace), and gasless EIP-712 intent relaying (`POST /relay/intent`, with `"Submit it myself"` always available in the UI). See [`keeper/README.md`](./keeper/README.md) for the trust model and Docker/cloud hosting steps:
+
+```sh
+cd keeper
+npm ci
+npm test          # 10 passed; 0 failed (Vitest: grace, public races, slashing, relayer validations & limits)
+npm run build     # tsc -p tsconfig.json
+npm run dry-run   # Safe read-only mode against Sepolia (no private key required; serves GET /health)
+```
+
+To connect the frontend to a local or hosted keeper, start the frontend with `VITE_KEEPER_URL=http://localhost:3002 npm run dev`.
+
+### 5. Optional Off-Chain Rust Reference Verifier (`backend/`)
 
 Requires stable Rust (`cargo` 1.80+):
 
@@ -238,6 +271,9 @@ Every core protocol workflow was executed on live Ethereum Sepolia against [`0x6
 | 13 | **Claim** | `claim(3, 0)` (single pull claim) | [`0x6ed98007...a4ddb1`](https://sepolia.etherscan.io/tx/0x6ed98007cfb48c8bec823865976501895228b9f17feba23b02438c30a2a4ddb1) | `12180128` | `82,456` |
 | 14 | **Multicall** | `multicall([claim(3, 1), claim(3, 2)])` (atomic batch claim) | [`0xa6d27d21...811dd3e`](https://sepolia.etherscan.io/tx/0xa6d27d2179434b5e8ac0778e1d8263022ee9a2f78ba0a66debd9d851d811dd3e) | `12180129` | `158,150` |
 | 15 | **Multicall** | `multicall([settleBatch(), submitDirectOrder(...)])` (atomic settle + swap in Simple UI) | [`0x023e03bc...bfecb9e`](https://sepolia.etherscan.io/tx/0x023e03bcfc8d4e4ab1c3c9d3d75bb5c85e929b2d10c613f37479c24dfbfecb9e) | `12182252` | `1,568,581` |
+| 16 | **Optional Keeper** | Live `keeper/` auto-settle after `5s` grace (Batch `#12`, 1 order) | [`0xb3df28cc...461f264f`](https://sepolia.etherscan.io/tx/0xb3df28ccb1db7fffacc2368212cf69ff10315cfc73c5cb297ac5a71e461f264f) | `12183861` | `1,995,245` |
+| 17 | **Optional Keeper** | Public settles Batch `#13` first (`keeper/` observes and skips without duplicate tx) | [`0x77755b17...b0ae1e9`](https://sepolia.etherscan.io/tx/0x77755b178b78c12853c0a45488c70e957edce83928550dfbf4079b4ccb0ae1e9) | `12183872` | `1,995,245` |
+| 18 | **Optional Relayer** | Live `POST /relay/intent` EIP-712 submission after `5s` grace (Batch `#15`, `orderId = 0`) | [`0xb026f0fb...df3807f`](https://sepolia.etherscan.io/tx/0xb026f0fbe642b495146a163863b8f339a8a6ac19940f361be1799d7e1df3807f) | `12183919` | `655,312` |
 
 Additional live Sepolia `settleBatch()` receipts used for the gas scaling table below:
 - **0 orders (Batch `#1`):** [`0x021a019b...7b0ac2f`](https://sepolia.etherscan.io/tx/0x021a019bac85866ad7fa604fd142d88d81d7a852b852c53ef78d4056c7b0ac2f) (block `12176774`, `1,063,232` gas)
