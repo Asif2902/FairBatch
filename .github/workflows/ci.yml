@@ -55,3 +55,7 @@ jobs:
       - name: Install, test & build React + TypeScript frontend
         working-directory: frontend
         run: (if [ -f package-lock.json ]; then npm ci; else npm install; fi) && npm test && npm run build
+
+      - name: Install, test & build optional keeper + intent relayer
+        working-directory: keeper
+        run: (if [ -f package-lock.json ]; then npm ci; else npm install; fi) && npm test && npm run build

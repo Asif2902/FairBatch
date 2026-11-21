@@ -53,6 +53,15 @@ export interface KeeperConfig {
   host: string;
   port: number;
   corsOrigins: string[];
+  relayerEnabled: boolean;
+  relayGraceSeconds: number;
+  relayDeadlineBufferSeconds: number;
+  relayMaxQueue: number;
+  relayRateLimitPerIp: number;
+  relayRateLimitPerTrader: number;
+  relayRateWindowMs: number;
+  relayGasLimit: bigint;
+  relayMaxBodyBytes: number;
 }
 
 function locateRepoRoot(): string {
@@ -179,5 +188,24 @@ export function loadKeeperConfig(argv: string[] = process.argv.slice(2)): Keeper
     host: process.env.KEEPER_HOST ?? '0.0.0.0',
     port: Math.floor(parseNumber(process.env.KEEPER_PORT, 3002, 1)),
     corsOrigins,
+    relayerEnabled: parseBool(process.env.KEEPER_RELAY_ENABLED, true),
+    relayGraceSeconds: Math.floor(parseNumber(process.env.KEEPER_RELAY_GRACE_SECONDS, 5, 0)),
+    relayDeadlineBufferSeconds: Math.floor(
+      parseNumber(process.env.KEEPER_RELAY_DEADLINE_BUFFER_SECONDS, 30, 5),
+    ),
+    relayMaxQueue: Math.floor(parseNumber(process.env.KEEPER_RELAY_MAX_QUEUE, 16, 1)),
+    relayRateLimitPerIp: Math.floor(
+      parseNumber(process.env.KEEPER_RELAY_RATE_LIMIT_PER_IP, 12, 1),
+    ),
+    relayRateLimitPerTrader: Math.floor(
+      parseNumber(process.env.KEEPER_RELAY_RATE_LIMIT_PER_TRADER, 6, 1),
+    ),
+    relayRateWindowMs: Math.floor(
+      parseNumber(process.env.KEEPER_RELAY_RATE_WINDOW_MS, 60_000, 1_000),
+    ),
+    relayGasLimit: BigInt(
+      Math.floor(parseNumber(process.env.KEEPER_RELAY_GAS_LIMIT, 1_500_000, 200_000)),
+    ),
+    relayMaxBodyBytes: 16_384,
   };
 }

@@ -84,6 +84,7 @@ export class FairBatchKeeper {
   private server: http.Server | null = null;
   private stopping = false;
   private txInFlight = false;
+  private txTail: Promise<void> = Promise.resolve();
 
   private lastBalanceWei = 0n;
   private lastLowBalanceLogAtMs = 0;
@@ -155,16 +156,37 @@ export class FairBatchKeeper {
     this.healthAugmenters.push(fn);
   }
 
-  public async withTxLock<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    if (this.txInFlight) {
-      throw new Error(`Transaction already in flight while attempting ${label}`);
-    }
+  public async withTxLock<T>(_label: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.txTail;
+    let release!: () => void;
+    this.txTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prev;
     this.txInFlight = true;
     try {
       return await fn();
     } finally {
       this.txInFlight = false;
+      release();
     }
+  }
+
+  public async checkGasPrice(): Promise<{
+    maxFeePerGas: bigint;
+    maxPriorityFeePerGas: bigint;
+  } | null> {
+    const fees = await this.publicClient.estimateFeesPerGas();
+    const maxFee = fees.maxFeePerGas ?? fees.gasPrice ?? 0n;
+    const priority = fees.maxPriorityFeePerGas ?? 1_000_000n;
+    if (maxFee > this.config.maxGasPriceWei) {
+      this.log('warn', 'gas_price_cap_exceeded', {
+        maxFeePerGas: maxFee.toString(),
+        capWei: this.config.maxGasPriceWei.toString(),
+      });
+      return null;
+    }
+    return { maxFeePerGas: maxFee, maxPriorityFeePerGas: priority };
   }
 
   public getHealth(): KeeperHealthSnapshot & Record<string, unknown> {
@@ -296,20 +318,6 @@ export class FairBatchKeeper {
         // ignore transient read failure
       }
     }
-  }
-
-  private async checkGasPrice(): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } | null> {
-    const fees = await this.publicClient.estimateFeesPerGas();
-    const maxFee = fees.maxFeePerGas ?? fees.gasPrice ?? 0n;
-    const priority = fees.maxPriorityFeePerGas ?? 1_000_000n;
-    if (maxFee > this.config.maxGasPriceWei) {
-      this.log('warn', 'gas_price_cap_exceeded', {
-        maxFeePerGas: maxFee.toString(),
-        capWei: this.config.maxGasPriceWei.toString(),
-      });
-      return null;
-    }
-    return { maxFeePerGas: maxFee, maxPriorityFeePerGas: priority };
   }
 
   public async tick(): Promise<void> {

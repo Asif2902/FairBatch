@@ -1,9 +1,14 @@
 import { loadKeeperConfig } from './config.js';
+import { createKeeperRelayAdapter, IntentRelayer } from './relayer.js';
 import { FairBatchKeeper, structuredLog } from './service.js';
 
 async function main(): Promise<void> {
   const config = loadKeeperConfig(process.argv.slice(2));
   const keeper = new FairBatchKeeper(config, structuredLog);
+
+  const relayer = new IntentRelayer(config, createKeeperRelayAdapter(keeper), structuredLog);
+  keeper.registerHttpHandler(relayer.handleHttpRequest);
+  keeper.registerHealthAugmenter(() => relayer.getHealthFields());
 
   const shutdown = async (signal: string) => {
     structuredLog('info', 'shutdown_signal_received', { signal });
