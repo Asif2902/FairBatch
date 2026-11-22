@@ -777,26 +777,27 @@ check_os_and_privileges() {
   log_step "1. Preflight Checks"
 
   if [[ ! -f "$OS_RELEASE_FILE" ]]; then
-    log_err "Cannot find ${OS_RELEASE_FILE}. Expected Ubuntu 22.04/24.04 or Debian 12."
+    log_err "Cannot find ${OS_RELEASE_FILE}. Expected Ubuntu 22.04/24.04 or Debian 12/13."
     exit 1
   fi
 
-  local os_id="" os_ver="" os_pretty=""
+  local os_id="" os_ver="" os_pretty="" os_codename=""
   while IFS= read -r line; do
     line="${line%$'\r'}"
     case "$line" in
       ID=*) os_id="${line#ID=}"; os_id="${os_id//\"/}" ;;
       VERSION_ID=*) os_ver="${line#VERSION_ID=}"; os_ver="${os_ver//\"/}" ;;
+      VERSION_CODENAME=*) os_codename="${line#VERSION_CODENAME=}"; os_codename="${os_codename//\"/}" ;;
       PRETTY_NAME=*) os_pretty="${line#PRETTY_NAME=}"; os_pretty="${os_pretty//\"/}" ;;
     esac
   done < "$OS_RELEASE_FILE"
 
-  case "${os_id}:${os_ver}" in
-    ubuntu:22.04|ubuntu:24.04|debian:12)
+  case "${os_id}:${os_ver}:${os_codename}" in
+    ubuntu:22.04:*|ubuntu:24.04:*|debian:12:*|debian:13:*|debian:*:trixie)
       log_ok "OS supported: ${os_pretty:-${os_id} ${os_ver}}"
       ;;
     *)
-      log_err "Unsupported OS: ${os_pretty:-${os_id} ${os_ver}}. Supported: Ubuntu 22.04, Ubuntu 24.04, Debian 12."
+      log_err "Unsupported OS: ${os_pretty:-${os_id} ${os_ver}}. Supported: Ubuntu 22.04, Ubuntu 24.04, Debian 12, Debian 13."
       exit 1
       ;;
   esac
@@ -899,7 +900,9 @@ install_missing_dependencies() {
   command -v gpg >/dev/null 2>&1 || apt_needed+=("gnupg")
   if [[ "$MOCK_MODE" != "1" ]] && command -v dpkg >/dev/null 2>&1; then
     dpkg -s libssl-dev >/dev/null 2>&1 || apt_needed+=("libssl-dev")
-    dpkg -s apt-transport-https >/dev/null 2>&1 || apt_needed+=("apt-transport-https")
+    if ! dpkg -s apt-transport-https >/dev/null 2>&1 && apt-cache show apt-transport-https >/dev/null 2>&1; then
+      apt_needed+=("apt-transport-https")
+    fi
     dpkg -s debian-keyring >/dev/null 2>&1 || apt_needed+=("debian-keyring")
     dpkg -s debian-archive-keyring >/dev/null 2>&1 || apt_needed+=("debian-archive-keyring")
   fi
