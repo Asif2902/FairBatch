@@ -52,6 +52,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Verify live Sepolia deployed bytecode matches compiled Fe artifacts
+        run: node scripts/verify_deployed_bytecode.mjs
+
       - name: Install, test & build React + TypeScript frontend
         working-directory: frontend
         run: (if [ -f package-lock.json ]; then npm ci; else npm install; fi) && npm test && npm run build
@@ -60,7 +63,7 @@ jobs:
         working-directory: keeper
         run: (if [ -f package-lock.json ]; then npm ci; else npm install; fi) && npm test && npm run build
 
-      - name: ShellCheck & unit-test deploy.sh
+      - name: ShellCheck & full deploy.sh test suite
         run: |
           shellcheck -s bash deploy.sh deploy/tests/test_deploy.sh
-          SKIP_HEAVY_BUILD=1 bash deploy/tests/test_deploy.sh
+          bash deploy/tests/test_deploy.sh
