@@ -9,7 +9,13 @@ import {
 } from 'lucide-react';
 import type { BatchSettlementDto, ClaimableDto } from '../../types';
 import { explorerTxUrl, type RuntimeConfig } from '../../onchain/config';
-import { formatPrice, formatToken, formatUsd } from '../../lib/format';
+import {
+  formatPrice,
+  formatToken,
+  formatTokenAmount,
+  formatUsd,
+  pickReconciledDecimals,
+} from '../../lib/format';
 import { PRO_TOOLTIPS } from '../../lib/glossary';
 import { InfoTooltip } from '../InfoTooltip';
 
@@ -30,39 +36,56 @@ interface SimpleCollectCardProps {
   onSwapAgain: () => void;
 }
 
-function summarizeSingleReceipt(item: ClaimableDto, config: RuntimeConfig): string {
+function fmtFixed(value: number, decimals: number): string {
+  return formatToken(value, decimals, decimals);
+}
+
+function summarizeSingleReceipt(
+  item: ClaimableDto,
+  config: RuntimeConfig,
+  baseDecimals: number,
+  quoteDecimals: number,
+): string {
   if (item.status === 'OutOfMoneyRefund') {
     const inSym = item.side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
     const refunded =
       item.side === 'SellBase'
-        ? formatToken(item.refund_in, 4)
-        : formatPrice(item.refund_in, 2);
+        ? fmtFixed(item.refund_in, baseDecimals)
+        : fmtFixed(item.refund_in, quoteDecimals);
     return `Round #${item.batch_id} cleared outside your price limit, so your full ${refunded} ${inSym} is ready to collect back.`;
   }
 
   if (item.side === 'SellBase') {
-    return `You sold ${formatToken(item.amount_filled, 4)} ${config.baseSymbol}, received ${formatPrice(
+    return `You sold ${fmtFixed(item.amount_filled, baseDecimals)} ${config.baseSymbol}, received ${fmtFixed(
       item.payout_out,
-      2,
+      quoteDecimals,
     )} ${config.quoteSymbol} at fair price $${formatPrice(
       item.effective_price,
       2,
-    )}. Everyone in this round got the same price.`;
+    )}. Everyone in Round #${item.batch_id} got the same price.`;
   }
 
-  return `You spent ${formatPrice(item.amount_filled, 2)} ${config.quoteSymbol}, received ${formatToken(
+  return `You spent ${fmtFixed(item.amount_filled, quoteDecimals)} ${config.quoteSymbol}, received ${fmtFixed(
     item.payout_out,
-    4,
+    baseDecimals,
   )} ${config.baseSymbol} at fair price $${formatPrice(
     item.effective_price,
     2,
-  )}. Everyone in this round got the same price.`;
+  )}. Everyone in Round #${item.batch_id} got the same price.`;
 }
 
-function summarizeRoundReceipts(items: ClaimableDto[], config: RuntimeConfig): string {
+function summarizeReceipts(
+  items: ClaimableDto[],
+  config: RuntimeConfig,
+  baseDecimals: number,
+  quoteDecimals: number,
+): string {
   if (items.length === 1) {
-    return summarizeSingleReceipt(items[0], config);
+    return summarizeSingleReceipt(items[0], config, baseDecimals, quoteDecimals);
   }
+
+  const distinctRounds = Array.from(new Set(items.map((i) => i.batch_id))).sort((a, b) => a - b);
+  const isMultiRound = distinctRounds.length > 1;
 
   const filledSells = items.filter(
     (i) => i.side === 'SellBase' && i.status !== 'OutOfMoneyRefund' && i.amount_filled > 0,
@@ -70,41 +93,74 @@ function summarizeRoundReceipts(items: ClaimableDto[], config: RuntimeConfig): s
   const filledBuys = items.filter(
     (i) => i.side === 'BuyBase' && i.status !== 'OutOfMoneyRefund' && i.amount_filled > 0,
   );
+  const hasRefundOnly = items.some((i) => i.status === 'OutOfMoneyRefund');
 
-  if (filledSells.length > 0 && filledBuys.length === 0) {
+  if (filledSells.length > 0 && filledBuys.length === 0 && !hasRefundOnly) {
     const totalSold = filledSells.reduce((acc, i) => acc + i.amount_filled, 0);
     const totalReceived = filledSells.reduce((acc, i) => acc + i.payout_out, 0);
-    const parts = filledSells.map((i) => formatToken(i.amount_filled, 4, 2)).join(' + ');
-    const fairPrice = filledSells[0].effective_price;
-    return `You sold ${formatToken(totalSold, 4, 2)} ${config.baseSymbol} total, received ${formatPrice(
+    const parts = filledSells.map((i) => fmtFixed(i.amount_filled, baseDecimals)).join(' + ');
+    const weightedAvgPrice =
+      totalSold > 0 ? totalReceived / totalSold : filledSells[0].effective_price;
+    const prices = filledSells.map((i) => i.effective_price);
+    const pricesDiffer = Math.max(...prices) - Math.min(...prices) >= 0.005;
+
+    if (!isMultiRound) {
+      return `You sold ${fmtFixed(totalSold, baseDecimals)} ${config.baseSymbol} total, received ${fmtFixed(
+        totalReceived,
+        quoteDecimals,
+      )} ${config.quoteSymbol} total (${parts} ${config.baseSymbol} → ${fmtFixed(
+        totalReceived,
+        quoteDecimals,
+      )} ${config.quoteSymbol}) at fair price $${formatPrice(
+        weightedAvgPrice,
+        2,
+      )}. Everyone in Round #${distinctRounds[0]} got the same price.`;
+    }
+
+    return `You sold ${fmtFixed(totalSold, baseDecimals)} ${config.baseSymbol} total, received ${fmtFixed(
       totalReceived,
-      2,
-    )} ${config.quoteSymbol} total (${parts} ${config.baseSymbol} → ${formatPrice(
+      quoteDecimals,
+    )} ${config.quoteSymbol} total across ${distinctRounds.length} rounds (${parts} ${config.baseSymbol} → ${fmtFixed(
       totalReceived,
+      quoteDecimals,
+    )} ${config.quoteSymbol}) at weighted average price $${formatPrice(
+      weightedAvgPrice,
       2,
-    )} ${config.quoteSymbol}) at fair price $${formatPrice(
-      fairPrice,
-      2,
-    )}. Everyone in this round got the same price.`;
+    )}${pricesDiffer ? ' (prices differ by round)' : ' (per-round prices shown below)'}.`;
   }
 
-  if (filledBuys.length > 0 && filledSells.length === 0) {
+  if (filledBuys.length > 0 && filledSells.length === 0 && !hasRefundOnly) {
     const totalSoldQuote = filledBuys.reduce((acc, i) => acc + i.amount_filled, 0);
     const totalReceivedBase = filledBuys.reduce((acc, i) => acc + i.payout_out, 0);
-    const parts = filledBuys.map((i) => formatPrice(i.amount_filled, 2)).join(' + ');
-    const fairPrice = filledBuys[0].effective_price;
-    return `You sold ${formatPrice(totalSoldQuote, 2)} ${config.quoteSymbol} total, received ${formatToken(
+    const parts = filledBuys.map((i) => fmtFixed(i.amount_filled, quoteDecimals)).join(' + ');
+    const weightedAvgPrice =
+      totalReceivedBase > 0 ? totalSoldQuote / totalReceivedBase : filledBuys[0].effective_price;
+    const prices = filledBuys.map((i) => i.effective_price);
+    const pricesDiffer = Math.max(...prices) - Math.min(...prices) >= 0.005;
+
+    if (!isMultiRound) {
+      return `You sold ${fmtFixed(totalSoldQuote, quoteDecimals)} ${config.quoteSymbol} total, received ${fmtFixed(
+        totalReceivedBase,
+        baseDecimals,
+      )} ${config.baseSymbol} total (${parts} ${config.quoteSymbol} → ${fmtFixed(
+        totalReceivedBase,
+        baseDecimals,
+      )} ${config.baseSymbol}) at fair price $${formatPrice(
+        weightedAvgPrice,
+        2,
+      )}. Everyone in Round #${distinctRounds[0]} got the same price.`;
+    }
+
+    return `You sold ${fmtFixed(totalSoldQuote, quoteDecimals)} ${config.quoteSymbol} total, received ${fmtFixed(
       totalReceivedBase,
-      4,
-      2,
-    )} ${config.baseSymbol} total (${parts} ${config.quoteSymbol} → ${formatToken(
+      baseDecimals,
+    )} ${config.baseSymbol} total across ${distinctRounds.length} rounds (${parts} ${config.quoteSymbol} → ${fmtFixed(
       totalReceivedBase,
-      4,
+      baseDecimals,
+    )} ${config.baseSymbol}) at weighted average price $${formatPrice(
+      weightedAvgPrice,
       2,
-    )} ${config.baseSymbol}) at fair price $${formatPrice(
-      fairPrice,
-      2,
-    )}. Everyone in this round got the same price.`;
+    )}${pricesDiffer ? ' (prices differ by round)' : ' (per-round prices shown below)'}.`;
   }
 
   const totalBaseOut = items.reduce(
@@ -115,10 +171,14 @@ function summarizeRoundReceipts(items: ClaimableDto[], config: RuntimeConfig): s
     (acc, i) => acc + (i.side === 'SellBase' ? i.payout_out : i.refund_in),
     0,
   );
-  return `You have ${items.length} completed orders ready to collect (${formatToken(
-    totalBaseOut,
-    4,
-  )} ${config.baseSymbol} + ${formatPrice(totalQuoteOut, 2)} ${config.quoteSymbol} total).`;
+  return `You have ${items.length} completed orders ${
+    isMultiRound
+      ? `across ${distinctRounds.length} rounds (prices differ by round)`
+      : `in Round #${distinctRounds[0]}`
+  } ready to collect (${fmtFixed(totalBaseOut, baseDecimals)} ${config.baseSymbol} + ${fmtFixed(
+    totalQuoteOut,
+    quoteDecimals,
+  )} ${config.quoteSymbol} total).`;
 }
 
 export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
@@ -161,10 +221,10 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
           </h2>
           <p className="mt-1 text-sm text-ink-soft">
             {totalBase > 0 && totalQuote > 0
-              ? `Collected ${formatToken(totalBase, 4)} ${config.baseSymbol} and ${formatPrice(totalQuote, 2)} ${config.quoteSymbol}.`
+              ? `Collected ${formatTokenAmount(totalBase, 'base')} ${config.baseSymbol} and ${formatTokenAmount(totalQuote, 'quote')} ${config.quoteSymbol}.`
               : totalQuote > 0
-                ? `Collected ${formatPrice(totalQuote, 2)} ${config.quoteSymbol}.`
-                : `Collected ${formatToken(totalBase, 4)} ${config.baseSymbol}.`}
+                ? `Collected ${formatTokenAmount(totalQuote, 'quote')} ${config.quoteSymbol}.`
+                : `Collected ${formatTokenAmount(totalBase, 'base')} ${config.baseSymbol}.`}
           </p>
         </div>
 
@@ -198,12 +258,39 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
   if (unclaimed.length === 0) return null;
 
   const primary = unclaimed[0];
-  const sameRoundItems = unclaimed.filter((i) => i.batch_id === primary.batch_id);
-  const aggregatedItems = sameRoundItems.length > 1 ? sameRoundItems : unclaimed;
-  const distinctRounds = Array.from(new Set(unclaimed.map((i) => i.batch_id)));
+  const distinctRounds = Array.from(new Set(unclaimed.map((i) => i.batch_id))).sort(
+    (a, b) => a - b,
+  );
 
-  const primaryBatch = settledHistory.find((s) => s.batch_id === primary.batch_id);
-  // Show savings line ONLY when the signed comparison math shows a real positive saving (> $0.01).
+  // Pick reconciled precision so individually displayed row amounts always sum to the headline total.
+  const baseValues = unclaimed.flatMap((i) => {
+    const arr: number[] = [];
+    if (i.side === 'SellBase') {
+      arr.push(i.amount_filled > 0 ? i.amount_filled : i.amount_in);
+      if (i.refund_in > 0) arr.push(i.refund_in);
+    } else if (i.payout_out > 0) {
+      arr.push(i.payout_out);
+    }
+    return arr;
+  });
+  const quoteValues = unclaimed.flatMap((i) => {
+    const arr: number[] = [];
+    if (i.side === 'SellBase') {
+      if (i.payout_out > 0) arr.push(i.payout_out);
+    } else {
+      arr.push(i.amount_filled > 0 ? i.amount_filled : i.amount_in);
+      if (i.refund_in > 0) arr.push(i.refund_in);
+    }
+    return arr;
+  });
+  const baseDecimals = pickReconciledDecimals(baseValues, 2, 6);
+  const quoteDecimals = pickReconciledDecimals(quoteValues, 2, 6);
+
+  const primaryBatch =
+    distinctRounds.length === 1
+      ? settledHistory.find((s) => s.batch_id === primary.batch_id)
+      : undefined;
+  // Show comparison badge ONLY for a single round when signed diff vs unattacked AMM is strictly positive (> $0.01).
   const realSavingsQuote =
     primaryBatch && primaryBatch.comparison.user_value_saved_quote > 0.01
       ? primaryBatch.comparison.user_value_saved_quote
@@ -240,7 +327,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
           data-testid="simple-collect-summary"
           className="mt-1.5 text-base leading-relaxed text-ink"
         >
-          {summarizeRoundReceipts(aggregatedItems, config)}
+          {summarizeReceipts(unclaimed, config, baseDecimals, quoteDecimals)}
         </p>
 
         {realSavingsQuote !== null && (
@@ -250,7 +337,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
           >
             <ShieldCheck className="h-4 w-4 shrink-0 text-pine-700" aria-hidden="true" />
             <span>
-              Simulated saving vs a normal swap (0.30% x·y=k baseline):{' '}
+              Simulated vs unattacked 0.30% x·y=k AMM (Round #{primary.batch_id}): +
               {formatUsd(realSavingsQuote)}
             </span>
             <InfoTooltip
@@ -264,7 +351,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
       <div className="space-y-4 p-5">
         <div className="space-y-2">
           <div className="eyebrow">
-            {unclaimed.length > 1 ? 'All ready orders' : 'Order receipt'}
+            {unclaimed.length > 1 ? 'All ready orders (per-round details)' : 'Order receipt'}
           </div>
           {unclaimed.map((item) => {
             const outSym =
@@ -275,8 +362,8 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
               item.amount_filled > 0 ? item.amount_filled : item.amount_in;
             const formattedSold =
               inSym === config.quoteSymbol
-                ? formatPrice(soldAmount, 2)
-                : formatToken(soldAmount, 4, 2);
+                ? fmtFixed(soldAmount, quoteDecimals)
+                : fmtFixed(soldAmount, baseDecimals);
 
             return (
               <div
@@ -284,12 +371,14 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
                 data-testid={`simple-collect-row-${item.batch_id}-${item.order_id}`}
                 className="flex flex-wrap items-center justify-between gap-2 border border-rule bg-paper-soft px-3.5 py-2.5 text-sm"
               >
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
                   <span className="font-bold text-ink">
                     Round #{item.batch_id} · Order #{item.order_id}
                   </span>
                   <span className="font-mono text-xs text-ink-soft tabular-nums">
-                    Sold {formattedSold} {inSym}
+                    {item.status === 'OutOfMoneyRefund'
+                      ? `Unfilled ${formattedSold} ${inSym}`
+                      : `Sold ${formattedSold} ${inSym} @ $${formatPrice(item.effective_price, 2)}`}
                   </span>
                 </div>
                 <span className="font-mono text-sm font-bold text-pine-800 tabular-nums">
@@ -297,15 +386,15 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
                   {item.payout_out > 0
                     ? `${
                         outSym === config.quoteSymbol
-                          ? formatPrice(item.payout_out, 2)
-                          : formatToken(item.payout_out, 4)
+                          ? fmtFixed(item.payout_out, quoteDecimals)
+                          : fmtFixed(item.payout_out, baseDecimals)
                       } ${outSym}`
                     : ''}
                   {item.refund_in > 0
                     ? `${item.payout_out > 0 ? ' + ' : ''}${
                         inSym === config.quoteSymbol
-                          ? formatPrice(item.refund_in, 2)
-                          : formatToken(item.refund_in, 4)
+                          ? fmtFixed(item.refund_in, quoteDecimals)
+                          : fmtFixed(item.refund_in, baseDecimals)
                       } ${inSym} refund`
                     : ''}
                 </span>
@@ -332,7 +421,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
               <span>
                 {unclaimed.length === 1
                   ? 'Collect tokens'
-                  : `Collect all ${unclaimed.length} orders (one click)`}
+                  : `Collect all ${unclaimed.length} orders`}
               </span>
             </>
           )}

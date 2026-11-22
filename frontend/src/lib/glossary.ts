@@ -131,7 +131,8 @@ export const PRO_TOOLTIPS: Record<string, string> = {
   eip712: 'Typed structured data signing (domain-bound to FairBatch on Sepolia) verified on-chain with nonces and deadlines.',
   lnd: 'Liquidity-Nondecreasing invariant: R_x′·R_y′ ≥ R_x·R_y on every batch settlement.',
   multicall: 'Executes multiple FairBatch calls (such as claiming several receipts or settling + submitting) atomically in one transaction.',
-  simulatedSaving: 'Client-side comparison against a simulated 0.30% fee sequential constant-product (x·y=k) AMM executing the same orders one-by-one in arrival order.',
+  simulatedSaving:
+    'Client-side comparison of this round’s uniform clearing payout against executing the same round’s orders sequentially on an unattacked 0.30% fee constant-product (x·y=k) AMM (positive mainly when opposite-side orders match peer-to-peer or for very small trades below 0.30% impact).',
 };
 
 export interface VerifiedFeFeature {

@@ -442,8 +442,67 @@ describe('Simple mode end-to-end flows', () => {
     expect(summary).toHaveTextContent(
       /You sold 0\.15 fWETH total, received 446\.40 fUSDC total \(0\.10 \+ 0\.05 fWETH → 446\.40 fUSDC\)/i,
     );
-    expect(screen.getByTestId('simple-collect-row-11-0')).toHaveTextContent(/Sold 0\.10 fWETH/i);
-    expect(screen.getByTestId('simple-collect-row-11-1')).toHaveTextContent(/Sold 0\.05 fWETH/i);
+    expect(screen.getByTestId('simple-collect-row-11-0')).toHaveTextContent(/Sold 0\.10 fWETH @ \$2,976\.00/i);
+    expect(screen.getByTestId('simple-collect-row-11-1')).toHaveTextContent(/Sold 0\.05 fWETH @ \$2,976\.00/i);
+  });
+
+  it('shows per-round prices, weighted average, reconciled decimals, and omits "this round" across multiple rounds', () => {
+    const multiRoundDiffPrices: ClaimableDto[] = [
+      {
+        batch_id: 12,
+        order_id: 0,
+        trader: ALICE,
+        label: 'Alice R12',
+        side: 'SellBase',
+        status: 'Filled',
+        amount_in: 0.001,
+        amount_filled: 0.001,
+        payout_out: 2.9465,
+        refund_in: 0,
+        effective_price: 2946.5,
+        claimed: false,
+      },
+      {
+        batch_id: 13,
+        order_id: 0,
+        trader: ALICE,
+        label: 'Alice R13',
+        side: 'SellBase',
+        status: 'Filled',
+        amount_in: 0.001,
+        amount_filled: 0.001,
+        payout_out: 2.9665,
+        refund_in: 0,
+        effective_price: 2966.5,
+        claimed: false,
+      },
+    ];
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: buildSnapshot({ claimable: multiRoundDiffPrices }),
+    });
+    render(<App />);
+
+    const summary = screen.getByTestId('simple-collect-summary');
+    // Must NEVER say "this round" when multiple rounds are aggregated
+    expect(summary.textContent).not.toMatch(/this round/i);
+    // Weighted average of $2,946.50 and $2,966.50 = $2,956.50 and notes prices differ by round
+    expect(summary).toHaveTextContent(/weighted average price \$2,956\.50/i);
+    expect(summary).toHaveTextContent(/prices differ by round/i);
+    // Reconciled decimals: 2.9465 + 2.9665 = 5.9130 (at 2 decimals 2.95+2.97=5.92 != 5.91 -> bumps to 4 decimals!)
+    expect(summary).toHaveTextContent(/5\.9130 fUSDC total/i);
+    expect(summary).toHaveTextContent(/0\.002 fWETH total/i);
+    expect(screen.getByTestId('simple-collect-row-12-0')).toHaveTextContent(
+      /Sold 0\.001 fWETH @ \$2,946\.50/i,
+    );
+    expect(screen.getByTestId('simple-collect-row-12-0')).toHaveTextContent(/2\.9465 fUSDC/i);
+    expect(screen.getByTestId('simple-collect-row-13-0')).toHaveTextContent(
+      /Sold 0\.001 fWETH @ \$2,966\.50/i,
+    );
+    expect(screen.getByTestId('simple-collect-row-13-0')).toHaveTextContent(/2\.9665 fUSDC/i);
+    expect(screen.getByTestId('simple-collect-button')).toHaveTextContent(
+      /^Collect all 2 orders$/,
+    );
   });
 
   it('shows low Sepolia ETH gas onboarding notice (< 0.002 ETH) and clears non-error banners on tab switch', () => {

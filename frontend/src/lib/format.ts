@@ -86,20 +86,24 @@ export function formatSignedOrderAmount(
 }
 
 /**
- * Picks the smallest decimal count in [minDecimals, maxDecimals] at which the
- * sum of individually rounded row amounts equals the rounded sum, so displayed
- * rows reconcile cleanly with the displayed headline total.
+ * Picks the smallest decimal count in [minDecimals, maxDecimals] at which:
+ *   1. No strictly non-zero row rounds down to zero, AND
+ *   2. The sum of individually rounded row amounts equals the rounded total,
+ * so displayed rows always reconcile cleanly with the displayed headline total.
  */
 export function pickReconciledDecimals(
   values: number[],
   minDecimals = 2,
-  maxDecimals = 4,
+  maxDecimals = 6,
 ): number {
-  if (values.length <= 1) return minDecimals;
-  const exactTotal = values.reduce((acc, v) => acc + v, 0);
+  const nonZero = values.filter((v) => Number.isFinite(v) && Math.abs(v) > 0);
+  if (nonZero.length === 0) return minDecimals;
+  const exactTotal = nonZero.reduce((acc, v) => acc + v, 0);
   for (let d = minDecimals; d <= maxDecimals; d += 1) {
     const scale = Math.pow(10, d);
-    const roundedSum = values.reduce((acc, v) => acc + Math.round(v * scale), 0);
+    const allVisible = nonZero.every((v) => Math.round(Math.abs(v) * scale) >= 1);
+    if (!allVisible) continue;
+    const roundedSum = nonZero.reduce((acc, v) => acc + Math.round(v * scale), 0);
     const totalRounded = Math.round(exactTotal * scale);
     if (roundedSum === totalRounded) {
       return d;
