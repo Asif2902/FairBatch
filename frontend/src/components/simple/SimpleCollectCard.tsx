@@ -17,6 +17,7 @@ import {
   pickReconciledDecimals,
 } from '../../lib/format';
 import { PRO_TOOLTIPS } from '../../lib/glossary';
+import { UI_LABELS } from '../../lib/uiLabels';
 import { InfoTooltip } from '../InfoTooltip';
 
 export interface CollectedReceiptSummary {
@@ -420,8 +421,8 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
               <Coins className="h-5 w-5" aria-hidden="true" />
               <span>
                 {unclaimed.length === 1
-                  ? 'Collect tokens'
-                  : `Collect all ${unclaimed.length} orders`}
+                  ? UI_LABELS.collectTokens
+                  : UI_LABELS.collectAllOrders(unclaimed.length)}
               </span>
             </>
           )}

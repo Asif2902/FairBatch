@@ -13,6 +13,7 @@ import { remainingSecondsForPhase } from '../../onchain/state';
 import type { RuntimeConfig } from '../../onchain/config';
 import { formatTokenAmount } from '../../lib/format';
 import { simplePhaseName } from '../../lib/glossary';
+import { UI_LABELS } from '../../lib/uiLabels';
 
 interface SimpleWaitingCardProps {
   config: RuntimeConfig;
@@ -228,7 +229,7 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
                       {busyAction === 'reveal'
                         ? 'Revealing…'
                         : livePhase === 'Reveal'
-                          ? 'Reveal now'
+                          ? UI_LABELS.revealNow
                           : `Opens in ${formatClock(remaining)}`}
                     </span>
                   </button>
@@ -256,7 +257,7 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
                 onClick={() => void onSettleRound()}
                 className="shrink-0 border border-cobalt-700 bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-cobalt-800 transition hover:border-ink disabled:opacity-50"
               >
-                {busyAction === 'settle' ? 'Finishing…' : 'Settle manually'}
+                {busyAction === 'settle' ? 'Starting…' : UI_LABELS.startNextRound}
               </button>
             </div>
           ) : (
@@ -270,12 +271,12 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
               {busyAction === 'settle' ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-                  <span>{txStatus ?? 'Finishing round…'}</span>
+                  <span>{txStatus ?? 'Starting next round…'}</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="h-5 w-5" aria-hidden="true" />
-                  <span>Finish Round #{roundId} &amp; unlock tokens</span>
+                  <span>{UI_LABELS.startNextRound}</span>
                 </>
               )}
             </button>

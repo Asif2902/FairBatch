@@ -9,7 +9,12 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { explorerAddressUrl, explorerTxUrl, type RuntimeConfig } from '../../onchain/config';
+import { UI_LABELS } from '../../lib/uiLabels';
 import { DocsAnimations } from './DocsAnimations';
+
+const UiLabel: React.FC<{ text: string }> = ({ text }) => (
+  <strong data-ui-label={text}>{text}</strong>
+);
 
 export type DocsSectionId = 'user' | 'developer' | 'visuals' | 'security' | 'glossary';
 
@@ -48,7 +53,7 @@ export const GLOSSARY_ENTRIES: ReadonlyArray<GlossaryEntry> = [
     term: 'Slippage / Price limit',
     shortDef: 'The worst price you are willing to accept before your order automatically refunds.',
     detail:
-      'In Simple mode, choosing an 8% max slippage tolerance sets your minimum sell price to 8% below spot (or maximum buy price to 8% above spot). If the round clears outside your limit, your tokens are not traded and are 100% refundable via Collect.',
+      `In Simple mode, choosing an 8% max slippage tolerance sets your minimum sell price to 8% below spot (or maximum buy price to 8% above spot). If the round clears outside your limit, your tokens are not traded and are 100% refundable via "${UI_LABELS.collectTokens}" (or "${UI_LABELS.collectAllOrdersPattern}").`,
   },
   {
     id: 'glossary-deposit',
@@ -76,7 +81,7 @@ export const GLOSSARY_ENTRIES: ReadonlyArray<GlossaryEntry> = [
     term: 'Relayer (Optional EIP-712 intent submitter)',
     shortDef: 'An optional service that broadcasts your signed EIP-712 order on-chain and pays the submission gas.',
     detail:
-      'When you sign an EIP-712 SignedOrder, your signature binds your address, side, amount, limit price, round number, sequential nonce, and deadline. Anyone (including the optional relayer or you via "Submit it myself") can call submitSignedIntent(order, sig). A relayer can delay or ignore a request, but can never alter the order or move funds without a valid signature.',
+      `When you sign an EIP-712 SignedOrder, your signature binds your address, side, amount, limit price, round number, sequential nonce, and deadline. Anyone (including the optional relayer or you via "${UI_LABELS.submitItMyself}") can call submitSignedIntent(order, sig). A relayer can delay or ignore a request, but can never alter the order or move funds without a valid signature.`,
   },
   {
     id: 'glossary-gas',
@@ -270,9 +275,10 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   Connect your wallet on Ethereum Sepolia
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-                  Click <strong>Connect wallet</strong> (MetaMask or Rabby). If your wallet is on
-                  another network, click <strong>Switch to Sepolia</strong>. You also need a tiny
-                  amount of free Sepolia ETH (at least ~0.002 ETH) to pay network gas.
+                  Click <UiLabel text={UI_LABELS.connectWallet} /> (MetaMask or Rabby). If your
+                  wallet is on another network, click <UiLabel text={UI_LABELS.switchToSepolia} />.
+                  You also need a tiny amount of free Sepolia ETH (at least ~0.002 ETH) to pay
+                  network gas.
                 </p>
               </li>
               <li className="border border-rule bg-paper-soft p-3.5">
@@ -283,7 +289,7 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   Claim free {config.baseSymbol} and {config.quoteSymbol}
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-                  Click <strong>Get free test tokens</strong> to receive{' '}
+                  Click <UiLabel text={UI_LABELS.getFreeTestTokens} /> to receive{' '}
                   <strong>1 {config.baseSymbol} + 100 {config.quoteSymbol}</strong> from the
                   on-chain Sepolia faucet (available once every 12 hours per wallet). If you
                   already hold test tokens, Simple mode skips straight to Step 3.
@@ -298,8 +304,10 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-soft">
                   Pick how much to pay (or click <strong>25% / 50% / 75% / 100% / Max</strong>) and
-                  press <strong>Swap</strong>. On your very first trade of a token, your wallet
-                  asks for a one-time token approval first, then sends your order into the round.
+                  press <UiLabel text={UI_LABELS.swap} /> (or{' '}
+                  <UiLabel text={UI_LABELS.startNextRoundAndSwap} /> if the previous round is ready).
+                  On your very first trade of a token, your wallet asks for a one-time token
+                  approval first, then sends your order into the round.
                 </p>
               </li>
               <li className="border border-rule bg-paper-soft p-3.5">
@@ -310,9 +318,12 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   Finish the round &amp; collect your tokens
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-                  When the timer hits zero, click <strong>Finish Round</strong> (or let the optional
-                  keeper settle it automatically after ~5 seconds). Then click{' '}
-                  <strong>Collect tokens</strong> to pull your payout into your wallet.
+                  When the timer hits zero, click <UiLabel text={UI_LABELS.startNextRound} /> (or in
+                  Pro mode <UiLabel text={UI_LABELS.settleBatchAndOpenNextPattern} />, or let the
+                  optional keeper settle automatically after ~5 seconds). Then click{' '}
+                  <UiLabel text={UI_LABELS.collectTokens} /> (or{' '}
+                  <UiLabel text={UI_LABELS.collectAllOrdersPattern} />) to pull your payout into
+                  your wallet.
                 </p>
               </li>
             </ol>
@@ -388,7 +399,9 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                       1 transaction (pushed immediately)
                     </td>
                     <td className="px-3 py-2.5 text-brass-900">
-                      2 steps: place order, then click Collect after the round settles
+                      2 steps: place order, then click <UiLabel text={UI_LABELS.collectTokens} />{' '}
+                      (or <UiLabel text={UI_LABELS.collectAllOrdersPattern} />) after the round
+                      settles
                     </td>
                   </tr>
                   <tr>
@@ -500,8 +513,8 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                 <p className="mt-1.5 text-ink-soft">
                   Locks a <code>keccak256</code> hash of your order during Collecting along with a
                   refundable <strong>0.0001 ETH deposit</strong>. During the 60s Finalizing window,
-                  you click <strong>Reveal</strong> to open the box and get your 0.0001 ETH deposit
-                  back immediately.
+                  you click <UiLabel text={UI_LABELS.revealNow} /> to open the box and get your
+                  0.0001 ETH deposit back immediately.
                 </p>
                 <p className="mt-2 border-t border-brass-600/30 pt-2 font-bold text-brass-900">
                   Warning: Do not clear your browser data or switch browsers before revealing! Your
@@ -525,8 +538,8 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   <strong>Not fully free — what you still pay gas for:</strong> You still pay gas
                   for the one-time token <code>approve()</code> (the testnet tokens do not implement
                   EIP-2612 permit), for <code>claim()</code> when collecting payouts, and for
-                  submitting the intent yourself if you use <em>&ldquo;Submit it myself&rdquo;</em>{' '}
-                  instead of an active relayer.
+                  submitting the intent yourself if you click{' '}
+                  <UiLabel text={UI_LABELS.submitItMyself} /> instead of using an active relayer.
                 </p>
               </div>
             </div>
@@ -558,8 +571,10 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   If <code>settleBatch()</code> pushed tokens directly to every trader in a loop,
                   one blacklisted or broken address could make the whole batch revert and freeze
                   everyone else’s funds. Instead, settlement records a receipt, and you click{' '}
-                  <strong>Collect</strong> (or <strong>Collect all</strong> via{' '}
-                  <code>multicall</code>) to pull your tokens safely.
+                  <UiLabel text={UI_LABELS.collectTokens} /> (or{' '}
+                  <UiLabel text={UI_LABELS.collectAllOrdersPattern} /> via <code>multicall</code>;
+                  in Pro mode <UiLabel text={UI_LABELS.multicallMyClaimsPattern} />) to pull your
+                  tokens safely.
                 </p>
               </div>
               <div className="border border-rule bg-paper-soft p-3.5">
@@ -641,12 +656,14 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                 <strong className="text-sm text-ink">Why did the Swap button label change?</strong>
                 <p className="mt-1 text-ink-soft">
                   Simple mode adapts automatically to the current round phase so you never hit a
-                  dead end: during Collecting it says <strong>Swap</strong> (direct order); during
-                  Finalizing it says <strong>Swap now (sign &amp; send)</strong> (uses an EIP-712
-                  signed intent so you can still join the round); and when a round is Ready it says{' '}
-                  <strong>Start next round &amp; Swap</strong> (combines{' '}
+                  dead end: during Collecting it says <UiLabel text={UI_LABELS.swap} /> (direct
+                  order); during Finalizing it says <UiLabel text={UI_LABELS.swapNowSignAndSend} />{' '}
+                  (or <UiLabel text={UI_LABELS.signAndRelaySwap} /> when an optional relayer is
+                  active); and when a round is Ready it says{' '}
+                  <UiLabel text={UI_LABELS.startNextRoundAndSwap} /> (combines{' '}
                   <code>settleBatch()</code> + <code>submitDirectOrder()</code> in one atomic{' '}
-                  <code>multicall</code>).
+                  <code>multicall</code>). In Pro mode, the settlement console button reads{' '}
+                  <UiLabel text={UI_LABELS.settleBatchAndOpenNextPattern} />.
                 </p>
               </div>
               <div className="py-2.5">
@@ -654,9 +671,10 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   My wallet says &ldquo;Wrong network&rdquo; or &ldquo;Insufficient funds for gas&rdquo;
                 </strong>
                 <p className="mt-1 text-ink-soft">
-                  Click <strong>Switch to Sepolia</strong> to switch your wallet to Ethereum Sepolia
-                  (Chain ID <code>11155111</code>). If your Sepolia ETH balance is below 0.002 ETH,
-                  use the public Sepolia faucet link in the gas banner to get free test ETH.
+                  Click <UiLabel text={UI_LABELS.switchToSepolia} /> to switch your wallet to
+                  Ethereum Sepolia (Chain ID <code>11155111</code>). If your Sepolia ETH balance is
+                  below 0.002 ETH, use the public Sepolia faucet link in the gas banner to get free
+                  test ETH.
                 </p>
               </div>
             </div>
@@ -1154,8 +1172,10 @@ cd keeper && npm ci && npm test && npm run start -- --dry-run`}
                   <td className="px-3 py-2.5 text-ink-muted">N/A</td>
                   <td className="px-3 py-2.5 text-pine-800">
                     Keeper and relayer are 100% optional. Any user can click{' '}
-                    <strong>Start next round</strong> (<code>settleBatch</code>) or{' '}
-                    <strong>Submit it myself</strong> (<code>submitSignedIntent</code>).
+                    <UiLabel text={UI_LABELS.startNextRound} /> (Pro:{' '}
+                    <UiLabel text={UI_LABELS.settleBatchAndOpenNextPattern} />) to call{' '}
+                    <code>settleBatch</code>, or <UiLabel text={UI_LABELS.submitItMyself} /> to call{' '}
+                    <code>submitSignedIntent</code>.
                   </td>
                   <td className="px-3 py-2.5 text-ink-soft">
                     If the keeper is offline, a user must click once to settle the finished round.

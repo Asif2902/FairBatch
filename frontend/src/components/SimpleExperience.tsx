@@ -20,6 +20,7 @@ import {
   PUBLIC_SEPOLIA_FAUCETS,
   SIMPLE_COPY,
 } from '../lib/glossary';
+import { UI_LABELS } from '../lib/uiLabels';
 import { ProgressStrip } from './simple/ProgressStrip';
 import { SimpleSwapCard } from './simple/SimpleSwapCard';
 import { SimpleWaitingCard } from './simple/SimpleWaitingCard';
@@ -443,7 +444,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                         <span>{fb.txStatus ?? 'Switching network…'}</span>
                       </>
                     ) : (
-                      <span>Switch to Sepolia</span>
+                      <span>{UI_LABELS.switchToSepolia}</span>
                     )}
                   </button>
                 </div>
@@ -473,7 +474,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                     ) : (
                       <>
                         <Wallet className="h-5 w-5" aria-hidden="true" />
-                        <span>Connect wallet</span>
+                        <span>{UI_LABELS.connectWallet}</span>
                       </>
                     )}
                   </button>
@@ -535,7 +536,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                   ) : (
                     <>
                       <Droplets className="h-5 w-5" aria-hidden="true" />
-                      <span>Get free test tokens</span>
+                      <span>{UI_LABELS.getFreeTestTokens}</span>
                     </>
                   )}
                 </button>

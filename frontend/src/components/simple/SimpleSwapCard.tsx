@@ -32,6 +32,7 @@ import { computeBatchSettlement } from '../../lib/clearingMath';
 import { generateRandomSaltHex } from '../../lib/keccak';
 import { formatPrice, formatTokenAmount } from '../../lib/format';
 import { SIMPLE_COPY, SIMPLE_ORDER_MODES } from '../../lib/glossary';
+import { UI_LABELS } from '../../lib/uiLabels';
 
 type SimpleOrderMode = 'direct' | 'sealed' | 'signed';
 
@@ -375,25 +376,25 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
 
   const primaryButtonText = (() => {
     if (busy) return txStatus ?? 'Working on Sepolia…';
-    if (!account) return 'Connect wallet to swap';
-    if (wrongNetwork) return 'Switch to Sepolia';
+    if (!account) return UI_LABELS.connectWalletToSwap;
+    if (wrongNetwork) return UI_LABELS.switchToSepolia;
     if (sealedBlockedInFinalizing) {
       return `Private swap opens in ${formatClock(remaining)}`;
     }
     if (orderMode === 'sealed') {
       return livePhase === 'Ready'
-        ? 'Start next round & place private swap'
-        : 'Place private swap';
+        ? UI_LABELS.startNextRoundAndPlacePrivateSwap
+        : UI_LABELS.placePrivateSwap;
     }
     if (orderMode === 'signed' || autoSignedInFinalizing) {
       return relayerHealthy && !preferSelfSubmit
-        ? 'Sign & relay swap (no submission gas)'
-        : 'Swap now (sign & send)';
+        ? UI_LABELS.signAndRelaySwap
+        : UI_LABELS.swapNowSignAndSend;
     }
     if (livePhase === 'Ready') {
-      return 'Start next round & Swap';
+      return UI_LABELS.startNextRoundAndSwap;
     }
-    return 'Swap';
+    return UI_LABELS.swap;
   })();
 
   return (
@@ -436,7 +437,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                 onClick={() => void onStartNextRound()}
                 className="shrink-0 whitespace-nowrap border border-cobalt-600/50 bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-cobalt-800 transition hover:border-ink disabled:opacity-50"
               >
-                {busyAction === 'settle' ? 'Starting…' : 'Settle now'}
+                {busyAction === 'settle' ? 'Starting…' : UI_LABELS.startNextRound}
               </button>
             ) : (
               <button
@@ -490,7 +491,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                     onClick={() => void onRevealCommit(secret)}
                     className="tap-target bg-brass-600 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-brass-700 disabled:opacity-50"
                   >
-                    {busyAction === 'reveal' ? 'Revealing…' : 'Reveal now'}
+                    {busyAction === 'reveal' ? 'Revealing…' : UI_LABELS.revealNow}
                   </button>
                 )}
               </div>
@@ -859,7 +860,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                             onClick={() => void onRevealCommit(secret)}
                             className="tap-target bg-brass-600 px-3 font-bold text-paper"
                           >
-                            Reveal now
+                            {UI_LABELS.revealNow}
                           </button>
                         )}
                       </div>
@@ -899,7 +900,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                 }}
                 className="border border-ink bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-ink transition hover:bg-paper-soft disabled:opacity-40"
               >
-                Submit it myself
+                {UI_LABELS.submitItMyself}
               </button>
             )}
           </div>
@@ -923,7 +924,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                 onClick={() => setPreferSelfSubmit((v) => !v)}
                 className="shrink-0 border border-cobalt-600/50 bg-paper-bright px-2.5 py-1 font-mono text-[11px] font-bold text-cobalt-800 transition hover:border-ink"
               >
-                {preferSelfSubmit ? 'Use optional relayer' : 'Submit it myself'}
+                {preferSelfSubmit ? 'Use optional relayer' : UI_LABELS.submitItMyself}
               </button>
             </div>
             <p className="leading-relaxed text-ink-soft">

@@ -124,7 +124,7 @@ flowchart TB
 | [`src/tests.fe`](./src/tests.fe) | **69 Fe tests** covering clearing math, properties, MEV zero-profit proof, `MockClock` transitions (batches, LP locks, faucet, slashing), full EVM lifecycles, 64-order settlement, and security revert boundaries. |
 | [`config/deployment.json`](./config/deployment.json) | Single source of truth for live Ethereum Sepolia contract addresses, token metadata, market windows, and faucet config. |
 | [`deployments/sepolia.json`](./deployments/sepolia.json) | Full Sepolia deployment manifest with tx hashes, block numbers, gas usage, and Etherscan links. |
-| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**41 Vitest tests**). |
+| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**50 Vitest tests**). |
 | [`keeper/`](./keeper) | **Optional** TypeScript + `viem` permissionless settlement keeper (`5s` grace, empty-round throttle), slasher (`60s` grace), and EIP-712 intent relayer (`POST /relay/intent`) (**10 Vitest tests**, see [`keeper/README.md`](./keeper/README.md)). |
 | [`deploy.sh`](./deploy.sh) & [`deploy/`](./deploy) | One-script Ubuntu 22.04/24.04 & Debian 12 server deployment (Caddy HTTPS + same-origin `/keeper/*` proxy, hardened systemd keeper, atomic releases, rollback & DNS wizard — see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)). |
 | [`backend/`](./backend) | Optional Rust reference solver & sequential-AMM MEV simulator (**30 Cargo tests**, see [`backend/README.md`](./backend/README.md)). |
@@ -183,14 +183,14 @@ Requires Node.js 20+ and `npm`. No `.env` file or local backend is needed — ad
 ```sh
 cd frontend
 npm ci
-npm test          # 41 passed; 0 failed (Vitest)
+npm test          # 50 passed; 0 failed (Vitest)
 npm run build     # tsc -b && vite build (emits lazy DocsPage chunk)
 npm run dev       # Opens http://localhost:5173 (Simple, Pro, and /docs) connected to Sepolia
 ```
 
 In the browser on Ethereum Sepolia (Chain ID `11155111` with MetaMask or any EIP-1193 wallet):
-1. **Simple mode (default):** Connect your wallet to **Sepolia** (keep at least `~0.002` Sepolia ETH for gas; the UI links public Sepolia faucets if your balance is low), click **Get free test tokens** (`1 fWETH + 100 fUSDC` every 12 hours), enter an amount, and press **Swap** (or **Start next round & Swap** if the round is Ready). Once the round closes, click **Finish Round** (or wait ~5s if an optional keeper is running) and click **Collect** to pull all finished orders in one transaction.
-2. **Pro mode:** Toggle **Pro** in the top bar to inspect the always-visible **Wallet balances & approvals** strip, section tabs (`All panels | Trade | Liquidity | Round audit | Claims & slashing`), all three order modes (**Direct**, **Sealed Commit-Reveal**, and **EIP-712 Signed Intent** with optional relayer + **"Submit it myself"** fallback), FM-AMM liquidity + optional locking, and permissionless slashing.
+1. **Simple mode (default):** Click **Connect wallet** (and **Switch to Sepolia** if needed; keep at least `~0.002` Sepolia ETH for gas — the UI links public Sepolia faucets if your balance is low), click **Get free test tokens** (`1 fWETH + 100 fUSDC` every 12 hours), enter an amount, and press **Swap** (or **Start next round & Swap** if the round is Ready). Once the round closes, click **Start next round** (or wait ~5s if an optional keeper is running) and click **Collect tokens** (or **Collect all N orders**) to pull all finished orders in one transaction.
+2. **Pro mode:** Toggle **Pro** in the top bar to inspect the always-visible **Wallet balances & approvals** strip, section tabs (`All panels | Trade | Liquidity | Round audit | Claims & slashing`), all three order modes (**Direct**, **Sealed Commit-Reveal** with **Reveal now**, and **EIP-712 Signed Intent** with optional relayer + **Submit it myself** fallback), **Settle Batch #N & open next**, **Multicall My Claims (N)**, FM-AMM liquidity + optional locking, and permissionless **Slash & claim bounty**.
 3. **In-app `/docs`:** Click **Docs** in the header (or navigate to `/docs` / `#/docs`) for the User Guide, Developer Guide, 5 interactive CSS/SVG visuals, Threat Matrix, and Glossary.
 
 ### 4. Optional Permissionless Keeper & Intent Relayer (`keeper/`)

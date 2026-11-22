@@ -11,6 +11,7 @@ import type { ClaimableDto } from '../types';
 import type { RuntimeConfig } from '../onchain/config';
 import { formatTokenAmount, shortenAddress } from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
+import { UI_LABELS } from '../lib/uiLabels';
 import { InfoTooltip } from './InfoTooltip';
 
 interface ClaimsPanelProps {
@@ -139,7 +140,7 @@ export const ClaimsPanel: React.FC<ClaimsPanelProps> = ({
               className="inline-flex min-h-[36px] items-center gap-1.5 border border-pine-700 bg-pine-600 px-3 font-mono text-xs font-bold uppercase text-[#FBF8F0] transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Multicall My Claims ({myUnclaimed.length})</span>
+              <span>{UI_LABELS.multicallMyClaims(myUnclaimed.length)}</span>
             </button>
             <InfoTooltip label="Multicall" text={PRO_TOOLTIPS.multicall} />
           </div>
@@ -305,7 +306,7 @@ export const ClaimsPanel: React.FC<ClaimsPanelProps> = ({
                       onClick={() => void handleClaimSingle(item)}
                       className="border border-pine-700 bg-pine-50 px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-[0.06em] text-pine-800 transition hover:bg-pine-600 hover:text-paper disabled:opacity-40"
                     >
-                      {busyAction === 'claim' ? 'Claiming…' : 'Claim Payout'}
+                      {busyAction === 'claim' ? 'Claiming…' : UI_LABELS.claimPayout}
                     </button>
                   )}
                 </div>

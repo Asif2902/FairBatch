@@ -1,4 +1,5 @@
 import type { BatchPhase } from '../types';
+import { UI_LABELS } from './uiLabels';
 
 export const SIMPLE_TERMS = {
   batch: 'round',
@@ -34,12 +35,12 @@ export const HOW_IT_WORKS_STEPS: ReadonlyArray<{
   {
     step: 3,
     title: 'Everyone gets one fair price',
-    body: 'When the round ends, anyone can click once to finalize it. The smart contract computes a single fair price for every order in the round.',
+    body: `When the round ends, anyone can click "${UI_LABELS.startNextRound}" once to finalize it. The smart contract computes a single fair price for every order in the round.`,
   },
   {
     step: 4,
     title: 'Collect your tokens',
-    body: 'Once the round finishes, press Collect to pull your tokens (and any unused refund) straight into your wallet.',
+    body: `Once the round finishes, press "${UI_LABELS.collectTokens}" (or "${UI_LABELS.collectAllOrdersPattern}") to pull your tokens and any unused refund straight into your wallet.`,
   },
 ];
 
@@ -90,8 +91,8 @@ export const SIMPLE_COPY = {
   swapCaption:
     "Your order joins a round and everyone in it gets the same fair price, so bots can't sandwich you.",
   readyBanner:
-    'This round is finished. Start the next round to keep trading (one click, anyone can do it).',
-  readyButton: 'Start next round',
+    `This round is finished. Click "${UI_LABELS.startNextRound}" to keep trading (one click, anyone can do it).`,
+  readyButton: UI_LABELS.startNextRound,
   earnTagline: 'Earn a share of every swap',
   sealedStorageWarning:
     "Do not clear browser data or switch browsers before revealing — your reveal secret is stored only in this browser and is needed to recover your deposit.",

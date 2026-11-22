@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { runSandwichSimulation } from '../../lib/clearingMath';
 import { formatPrice, formatTokenAmount, formatUsd } from '../../lib/format';
+import { UI_LABELS } from '../../lib/uiLabels';
 
 interface DocsAnimationsProps {
   rx: number;
@@ -110,7 +111,7 @@ const SEALED_STEPS = [
     badge: 'REVEAL (FINALIZING WINDOW)',
     title: 'Open the box & get your 0.0001 ETH deposit back',
     detail:
-      'During the 60s Finalizing window, you click Reveal. The contract verifies keccak256(...) == commitment_hash, pulls your tokens into the round, and immediately refunds your 0.0001 ETH deposit.',
+      `During the 60s Finalizing window, you click "${UI_LABELS.revealNow}". The contract verifies keccak256(...) == commitment_hash, pulls your tokens into the round, and immediately refunds your 0.0001 ETH deposit.`,
     onChainSees: 'Verified order enters round + 0.0001 ETH refunded (or slashed if unrevealed)',
   },
 ] as const;

@@ -13,6 +13,7 @@ import type { ChainCommitment, RawBatchInfo } from '../onchain/state';
 import { phaseLabel, remainingSecondsForPhase } from '../onchain/state';
 import { formatToken, shortenAddress } from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
+import { UI_LABELS } from '../lib/uiLabels';
 import { InfoTooltip } from './InfoTooltip';
 
 interface BatchConsoleProps {
@@ -190,7 +191,7 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
                   ? 'Connect a wallet to settle'
                   : busyAction === 'settle'
                     ? 'Settling batch…'
-                    : `Settle Batch #${Number(batch.batchId)} & open next`}
+                    : UI_LABELS.settleBatchAndOpenNext(Number(batch.batchId))}
               </span>
             </button>
           </div>
@@ -235,7 +236,7 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
                     }
                     className="min-h-[36px] shrink-0 border border-vermilion-600/50 bg-vermilion-50 px-3 font-mono text-xs font-bold uppercase text-vermilion-700 transition hover:bg-vermilion-500 hover:text-paper disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    Slash &amp; claim bounty
+                    {UI_LABELS.slashAndClaimBounty}
                   </button>
                 </div>
               ))}
