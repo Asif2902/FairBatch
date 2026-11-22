@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -9,6 +9,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { explorerAddressUrl, explorerTxUrl, type RuntimeConfig } from '../../onchain/config';
+import {
+  buildSandwichSizeTable,
+  computeUnattackedBreakEvenSize,
+} from '../../lib/clearingMath';
+import { formatPrice, formatTokenAmount, formatUsd } from '../../lib/format';
 import { UI_LABELS } from '../../lib/uiLabels';
 import { DocsAnimations } from './DocsAnimations';
 
@@ -169,6 +174,21 @@ export const DocsPage: React.FC<DocsPageProps> = ({
   const faucetUrl = explorerAddressUrl(config, config.faucet);
   const baseTokenUrl = explorerAddressUrl(config, config.baseToken);
   const quoteTokenUrl = explorerAddressUrl(config, config.quoteToken);
+
+  const liveSizeTable = useMemo(
+    () =>
+      buildSandwichSizeTable({
+        rx: Math.max(1, rx),
+        ry: Math.max(1, ry),
+        side: 'SellBase',
+        slippagePct: 8,
+      }),
+    [rx, ry],
+  );
+  const liveBreakEven = useMemo(
+    () => computeUnattackedBreakEvenSize(Math.max(1, rx)),
+    [rx],
+  );
 
   return (
     <div data-testid="docs-page" className="mx-auto w-full max-w-5xl space-y-6 pb-12">
@@ -413,6 +433,83 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   </tr>
                 </tbody>
               </table>
+            </div>
+
+            {/* Live trade-size payout table computed directly from current on-chain reserves */}
+            <div className="space-y-2 pt-2">
+              <h3 className="font-display text-base font-bold text-ink">
+                Live trade-size comparison (computed from current Sepolia reserves)
+              </h3>
+              <p className="text-xs text-ink-soft">
+                One-sided {config.baseSymbol} sells into current reserves (
+                {formatTokenAmount(rx, 'base')} {config.baseSymbol} / {formatPrice(ry, 0)}{' '}
+                {config.quoteSymbol}), comparing an unattacked 0.30% x·y=k AMM, the same AMM under
+                a sandwich bot capped at 8% slippage, and FairBatch uniform clearing:
+              </p>
+              <div className="overflow-x-auto border border-rule">
+                <table
+                  data-testid="docs-size-table"
+                  className="w-full min-w-[600px] border-collapse text-left font-mono text-xs tabular-nums"
+                >
+                  <thead className="bg-ink text-paper uppercase">
+                    <tr>
+                      <th className="px-3 py-2">Sell size ({config.baseSymbol})</th>
+                      <th className="px-3 py-2 text-right">Normal AMM (no attacker)</th>
+                      <th className="px-3 py-2 text-right">AMM + capped bot (8%)</th>
+                      <th className="px-3 py-2 text-right">FairBatch</th>
+                      <th className="px-3 py-2 text-right">FB vs no-attack</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-rule bg-paper-bright">
+                    {liveSizeTable.map((row) => (
+                      <tr key={row.size}>
+                        <td className="px-3 py-2 font-bold text-ink">
+                          {row.size} {config.baseSymbol}{' '}
+                          <span className="font-normal text-[10px] text-ink-muted">
+                            ({row.poolPct.toFixed(2)}% of pool)
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right text-ink">
+                          {formatTokenAmount(row.sim.ammPlainOut, 'quote')} {config.quoteSymbol}
+                        </td>
+                        <td className="px-3 py-2 text-right text-vermilion-800">
+                          {formatTokenAmount(row.sim.ammSandwichedOut, 'quote')}{' '}
+                          {config.quoteSymbol}
+                          {row.sim.ammBotProfitQuote > 0 && (
+                            <span className="ml-1 text-[10px] text-ink-muted">
+                              (bot {formatUsd(row.sim.ammBotProfitQuote, 0)})
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right font-bold text-pine-800">
+                          {formatTokenAmount(row.sim.fairbatchOut, 'quote')} {config.quoteSymbol}
+                        </td>
+                        <td
+                          className={`px-3 py-2 text-right ${
+                            row.sim.fairbatchVsPlainQuote >= 0
+                              ? 'text-pine-800'
+                              : 'text-brass-900'
+                          }`}
+                        >
+                          {row.sim.fairbatchVsPlainQuote >= 0 ? '+' : ''}
+                          {formatUsd(row.sim.fairbatchVsPlainQuote, 2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p data-testid="docs-breakeven-note" className="text-xs leading-relaxed text-ink-muted">
+                <strong>Break-even size note:</strong> For a one-sided swap with no opposing CoW
+                orders, FairBatch&apos;s uniform clearing output{' '}
+                <code>R_y·Δx / (R_x + 2·Δx)</code> equals an unattacked 0.30% x·y=k AMM&apos;s
+                output at exactly{' '}
+                <code>Δx / R_x = γ / (1 − γ) = {liveBreakEven.poolPct.toFixed(2)}%</code> of the
+                pool reserve (<strong>{formatTokenAmount(liveBreakEven.size, 'base')} {config.baseSymbol}</strong>{' '}
+                today). Smaller retail swaps beat even an unattacked 0.30% AMM; larger one-sided
+                swaps pay slightly less than an unattacked AMM while eliminating intra-round
+                sandwich extraction.
+              </p>
             </div>
           </section>
 

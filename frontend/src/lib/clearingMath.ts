@@ -1064,3 +1064,59 @@ export function runSandwichSimulation(params: {
     settlement,
   };
 }
+
+export const DEFAULT_SIM_TRADE_SIZES = {
+  SellBase: [0.05, 0.1, 0.3, 1, 2] as const,
+  BuyBase: [150, 300, 900, 3000, 6000] as const,
+};
+
+/**
+ * Exact one-sided break-even trade size where FairBatch uniform FM-AMM
+ * (0% explicit fee, p* = R_y / (R_x + 2*dx)) matches an unattacked constant-product
+ * AMM with fee gamma = feeBps / 10_000:
+ *   R_y * dx / (R_x + 2*dx) = R_y * (1 - gamma) * dx / (R_x + (1 - gamma) * dx)
+ *   => dx* / R_x = gamma / (1 - gamma)  (~0.3009% of pool reserve for 30 bps).
+ * The symmetric identity dy* / R_y = gamma / (1 - gamma) holds for BuyBase.
+ */
+export function computeUnattackedBreakEvenSize(
+  reserveIn: number,
+  feeBps = DEFAULT_FEE_BPS,
+): { size: number; poolPct: number } {
+  const safeReserve = Math.max(reserveIn, 0);
+  const gamma = Math.max(0, Math.min(0.5, feeBps / 10_000));
+  const ratio = gamma / (1 - gamma);
+  return {
+    size: safeReserve * ratio,
+    poolPct: ratio * 100,
+  };
+}
+
+export interface SandwichSizeTableRow {
+  size: number;
+  poolPct: number;
+  sim: SandwichSimOutput;
+}
+
+export function buildSandwichSizeTable(params: {
+  rx: number;
+  ry: number;
+  side: OrderSide;
+  slippagePct?: number;
+  feeBps?: number;
+  sizes?: ReadonlyArray<number>;
+}): SandwichSizeTableRow[] {
+  const sizes = params.sizes ?? DEFAULT_SIM_TRADE_SIZES[params.side];
+  const reserveIn = Math.max(params.side === 'SellBase' ? params.rx : params.ry, 1e-6);
+  return sizes.map((size) => ({
+    size,
+    poolPct: (size / reserveIn) * 100,
+    sim: runSandwichSimulation({
+      rx: params.rx,
+      ry: params.ry,
+      side: params.side,
+      amountIn: size,
+      slippagePct: params.slippagePct,
+      feeBps: params.feeBps,
+    }),
+  }));
+}

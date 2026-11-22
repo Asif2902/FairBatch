@@ -8,7 +8,11 @@ import {
   X,
 } from 'lucide-react';
 import type { OrderSide } from '../types';
-import { runSandwichSimulation } from '../lib/clearingMath';
+import {
+  buildSandwichSizeTable,
+  computeUnattackedBreakEvenSize,
+  runSandwichSimulation,
+} from '../lib/clearingMath';
 import { formatPrice, formatTokenAmount, formatUsd } from '../lib/format';
 
 interface SandwichSimulationModalProps {
@@ -31,7 +35,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
   onClose,
 }) => {
   const [side, setSide] = useState<OrderSide>('SellBase');
-  const [amountInput, setAmountInput] = useState<string>('2');
+  const [amountInput, setAmountInput] = useState<string>('0.1');
   const [slippagePct, setSlippagePct] = useState<number>(8);
 
   useEffect(() => {
@@ -48,8 +52,8 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
     Number.isFinite(parsedAmount) && parsedAmount > 0
       ? parsedAmount
       : side === 'SellBase'
-        ? 2
-        : 6000;
+        ? 0.1
+        : 300;
 
   const sim = useMemo(
     () =>
@@ -61,6 +65,22 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
         slippagePct,
       }),
     [rx, ry, side, safeAmount, slippagePct],
+  );
+
+  const sizeTable = useMemo(
+    () =>
+      buildSandwichSizeTable({
+        rx: Math.max(1, rx),
+        ry: Math.max(1, ry),
+        side,
+        slippagePct,
+      }),
+    [rx, ry, side, slippagePct],
+  );
+
+  const breakEven = useMemo(
+    () => computeUnattackedBreakEvenSize(side === 'SellBase' ? Math.max(1, rx) : Math.max(1, ry)),
+    [rx, ry, side],
   );
 
   if (!isOpen) return null;
@@ -135,7 +155,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                   aria-pressed={side === 'SellBase'}
                   onClick={() => {
                     setSide('SellBase');
-                    setAmountInput('2');
+                    setAmountInput('0.1');
                   }}
                   className={`tap-target border font-sans text-xs font-bold transition ${
                     side === 'SellBase'
@@ -150,7 +170,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                   aria-pressed={side === 'BuyBase'}
                   onClick={() => {
                     setSide('BuyBase');
-                    setAmountInput('6000');
+                    setAmountInput('300');
                   }}
                   className={`tap-target border font-sans text-xs font-bold transition ${
                     side === 'BuyBase'
@@ -411,9 +431,95 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
               one-sided swap:</strong> FairBatch&apos;s FM-AMM clears net one-sided flow at the
               post-trade marginal price <code>p* = (R_y + 2·D_y) / (R_x + 2·S_x)</code> so passive
               LPs capture the rebalancing surplus instead of arbitrageurs. When opposite-side orders
-              join the same round, they match peer-to-peer (CoW) with zero price impact; on very
-              small trades (&lt;0.30% impact), FairBatch&apos;s 0% swap fee beats the unattacked
-              0.30% AMM.
+              join the same round, they match peer-to-peer (CoW) with zero price impact; on retail
+              trades below the break-even size, FairBatch&apos;s 0% swap fee beats even an
+              unattacked 0.30% AMM.
+            </p>
+          </div>
+
+          {/* Live trade-size comparison table + break-even note */}
+          <div className="space-y-2 border border-rule bg-paper-soft p-3.5">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="eyebrow">
+                Trade-size comparison (live reserves · {sim.slippagePct}% slippage cap)
+              </span>
+              <span className="font-mono text-[11px] text-ink-muted">
+                Click any row to inspect above
+              </span>
+            </div>
+            <div className="overflow-x-auto border border-rule bg-paper-bright">
+              <table
+                data-testid="sim-size-table"
+                className="w-full min-w-[560px] border-collapse text-left font-mono text-xs tabular-nums"
+              >
+                <thead className="bg-ink text-paper uppercase">
+                  <tr>
+                    <th className="px-2.5 py-2">Size ({inSym})</th>
+                    <th className="px-2.5 py-2 text-right">Normal AMM (no attacker)</th>
+                    <th className="px-2.5 py-2 text-right">AMM + capped bot</th>
+                    <th className="px-2.5 py-2 text-right">FairBatch</th>
+                    <th className="px-2.5 py-2 text-right">FB vs no-attack</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-rule">
+                  {sizeTable.map((row) => {
+                    const active = Math.abs(row.size - safeAmount) < 1e-6;
+                    return (
+                      <tr
+                        key={row.size}
+                        onClick={() => setAmountInput(String(row.size))}
+                        className={`cursor-pointer transition hover:bg-paper-soft ${
+                          active ? 'bg-pine-50/70 font-bold' : ''
+                        }`}
+                      >
+                        <td className="px-2.5 py-1.5 text-ink">
+                          {row.size} {inSym}{' '}
+                          <span className="text-[10px] text-ink-muted">
+                            ({row.poolPct.toFixed(2)}%)
+                          </span>
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right text-ink">
+                          {formatTokenAmount(row.sim.ammPlainOut, outKind)} {outSym}
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right text-vermilion-800">
+                          {formatTokenAmount(row.sim.ammSandwichedOut, outKind)} {outSym}
+                          {row.sim.ammBotProfitQuote > 0 && (
+                            <span className="ml-1 text-[10px] text-ink-muted">
+                              (bot {formatUsd(row.sim.ammBotProfitQuote, 0)})
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right font-bold text-pine-800">
+                          {formatTokenAmount(row.sim.fairbatchOut, outKind)} {outSym}
+                        </td>
+                        <td
+                          className={`px-2.5 py-1.5 text-right ${
+                            row.sim.fairbatchVsPlainQuote >= 0
+                              ? 'text-pine-800'
+                              : 'text-brass-900'
+                          }`}
+                        >
+                          {fmtSignedUsd(row.sim.fairbatchVsPlainQuote)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p
+              data-testid="sim-breakeven-note"
+              className="text-xs leading-relaxed text-ink-muted"
+            >
+              <strong>Break-even size vs. an unattacked 0.30% AMM:</strong>{' '}
+              <code>γ / (1 − γ) = {breakEven.poolPct.toFixed(2)}%</code> of the pool reserve (
+              <strong>
+                {formatTokenAmount(breakEven.size, side === 'SellBase' ? 'base' : 'quote')} {inSym}
+              </strong>{' '}
+              at current reserves). One-sided orders smaller than ~0.30% of the pool pay{' '}
+              <strong>more</strong> on FairBatch than even an unattacked 0.30% AMM; larger
+              one-sided orders trade below the unattacked AMM while remaining protected from
+              sandwich extraction.
             </p>
           </div>
 

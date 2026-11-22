@@ -8,7 +8,11 @@ import {
   ShieldCheck,
   Unlock,
 } from 'lucide-react';
-import { runSandwichSimulation } from '../../lib/clearingMath';
+import {
+  buildSandwichSizeTable,
+  computeUnattackedBreakEvenSize,
+  runSandwichSimulation,
+} from '../../lib/clearingMath';
 import { formatPrice, formatTokenAmount, formatUsd } from '../../lib/format';
 import { UI_LABELS } from '../../lib/uiLabels';
 
@@ -137,6 +141,19 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
     [rx, ry],
   );
 
+  const sizeTable = useMemo(
+    () =>
+      buildSandwichSizeTable({
+        rx: Math.max(1, rx),
+        ry: Math.max(1, ry),
+        side: 'SellBase',
+        slippagePct: 8,
+      }),
+    [rx, ry],
+  );
+
+  const breakEven = useMemo(() => computeUnattackedBreakEvenSize(Math.max(1, rx)), [rx]);
+
   const currentSandwich = SANDWICH_STEPS[sandwichStep];
   const currentLifecycle = LIFECYCLE_STAGES[lifecycleIdx];
   const currentSealed = SEALED_STEPS[sealedIdx];
@@ -257,23 +274,63 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
             </div>
           </div>
 
+          <div className="overflow-x-auto border border-rule bg-paper-bright">
+            <table className="w-full min-w-[540px] border-collapse text-left font-mono text-xs tabular-nums">
+              <thead className="bg-ink text-paper uppercase">
+                <tr>
+                  <th className="px-2.5 py-2">Sell size ({baseSymbol})</th>
+                  <th className="px-2.5 py-2 text-right">Normal AMM (no attacker)</th>
+                  <th className="px-2.5 py-2 text-right">AMM + capped bot (8%)</th>
+                  <th className="px-2.5 py-2 text-right">FairBatch</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-rule">
+                {sizeTable.map((row) => (
+                  <tr key={row.size}>
+                    <td className="px-2.5 py-1.5 font-bold text-ink">
+                      {row.size} {baseSymbol}{' '}
+                      <span className="font-normal text-[10px] text-ink-muted">
+                        ({row.poolPct.toFixed(2)}%)
+                      </span>
+                    </td>
+                    <td className="px-2.5 py-1.5 text-right">
+                      {formatTokenAmount(row.sim.ammPlainOut, 'quote')} {quoteSymbol}
+                    </td>
+                    <td className="px-2.5 py-1.5 text-right text-vermilion-800">
+                      {formatTokenAmount(row.sim.ammSandwichedOut, 'quote')} {quoteSymbol}
+                    </td>
+                    <td className="px-2.5 py-1.5 text-right font-bold text-pine-800">
+                      {formatTokenAmount(row.sim.fairbatchOut, 'quote')} {quoteSymbol}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
           <p className="text-xs leading-relaxed text-ink-muted">
-            <strong>Caption (Illustrative example):</strong> Computed from current pool reserves (
-            {formatTokenAmount(rx, 'base')} {baseSymbol} / {formatPrice(ry, 0)} {quoteSymbol}, spot $
-            {formatPrice(sim.spot, 2)}) with an {sim.slippagePct}% slippage cap. Against the
-            attacked AMM, FairBatch pays{' '}
+            <strong>Caption (Illustrative example · live reserves):</strong> Computed from current
+            pool reserves ({formatTokenAmount(rx, 'base')} {baseSymbol} / {formatPrice(ry, 0)}{' '}
+            {quoteSymbol}, spot ${formatPrice(sim.spot, 2)}) with an {sim.slippagePct}% slippage
+            cap. Exact one-sided break-even vs. an unattacked 0.30% AMM is{' '}
+            <code>γ / (1 − γ) = {breakEven.poolPct.toFixed(2)}%</code> of pool reserve (~
+            <strong>
+              {formatTokenAmount(breakEven.size, 'base')} {baseSymbol}
+            </strong>
+            ): retail orders below ~0.30% of the pool earn slightly more on FairBatch; on a 2{' '}
+            {baseSymbol} one-sided sell, FairBatch pays{' '}
             <strong>
               {sim.fairbatchVsAttackedQuote >= 0 ? '+' : ''}
               {formatUsd(sim.fairbatchVsAttackedQuote, 2)}
             </strong>{' '}
-            more (bot profit {formatUsd(sim.ammBotProfitQuote, 2)} + extra LP fees{' '}
+            vs. the attacked AMM (bot profit {formatUsd(sim.ammBotProfitQuote, 2)} + extra LP fees{' '}
             {formatUsd(sim.extraLpFeesQuote, 2)} = {formatUsd(sim.victimLossVsPlainQuote, 2)} user
-            loss). Against an unattacked AMM on a large one-sided order, FairBatch pays{' '}
+            loss) and{' '}
             <strong>
               {sim.fairbatchVsPlainQuote >= 0 ? '+' : ''}
               {formatUsd(sim.fairbatchVsPlainQuote, 2)} ({sim.fairbatchVsPlainPct.toFixed(2)}%)
             </strong>{' '}
-            because FM-AMM clears one-sided imbalance near the post-trade marginal price p* ($
+            vs. an unattacked AMM because FM-AMM clears one-sided imbalance near p* ($
             {formatPrice(sim.fairbatchPrice, 2)}) so LPs capture the rebalancing surplus.
           </p>
         </div>

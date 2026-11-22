@@ -124,7 +124,7 @@ flowchart TB
 | [`src/tests.fe`](./src/tests.fe) | **69 Fe tests** covering clearing math, properties, MEV zero-profit proof, `MockClock` transitions (batches, LP locks, faucet, slashing), full EVM lifecycles, 64-order settlement, and security revert boundaries. |
 | [`config/deployment.json`](./config/deployment.json) | Single source of truth for live Ethereum Sepolia contract addresses, token metadata, market windows, and faucet config. |
 | [`deployments/sepolia.json`](./deployments/sepolia.json) | Full Sepolia deployment manifest with tx hashes, block numbers, gas usage, and Etherscan links. |
-| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**51 Vitest tests**). |
+| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**53 Vitest tests**). |
 | [`keeper/`](./keeper) | **Optional** TypeScript + `viem` permissionless settlement keeper (`5s` grace, empty-round throttle), slasher (`60s` grace), and EIP-712 intent relayer (`POST /relay/intent`) (**10 Vitest tests**, see [`keeper/README.md`](./keeper/README.md)). |
 | [`deploy.sh`](./deploy.sh) & [`deploy/`](./deploy) | One-script Ubuntu 22.04/24.04 & Debian 12 server deployment (Caddy HTTPS + same-origin `/keeper/*` proxy, hardened systemd keeper, atomic releases, rollback & DNS wizard — see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)). |
 | [`backend/`](./backend) | Optional Rust reference solver & sequential-AMM MEV simulator (**30 Cargo tests**, see [`backend/README.md`](./backend/README.md)). |
@@ -183,7 +183,7 @@ Requires Node.js 20+ and `npm`. No `.env` file or local backend is needed — ad
 ```sh
 cd frontend
 npm ci
-npm test          # 51 passed; 0 failed (Vitest)
+npm test          # 53 passed; 0 failed (Vitest)
 npm run build     # tsc -b && vite build (emits lazy DocsPage chunk)
 npm run dev       # Opens http://localhost:5173 (Simple, Pro, and /docs) connected to Sepolia
 ```

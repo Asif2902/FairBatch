@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildSandwichSizeTable,
   computeBatchSettlement,
+  computeUnattackedBreakEvenSize,
   runSandwichSimulation,
   simulateSequentialAmm,
 } from '../lib/clearingMath';
@@ -437,5 +439,49 @@ describe('Hybrid CoW + FM-AMM Batch Clearing & Sequential Baseline Math', () => 
     expect(tinySim.frontRunAmount).toBe(0);
     expect(tinySim.ammBotProfitQuote).toBe(0);
     expect(tinySim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+  });
+
+  it('verifies exact 0.3009% break-even size vs unattacked 0.30% AMM and live trade-size table', () => {
+    const rx = 101.5442;
+    const ry = 299_200;
+
+    // SellBase break-even: dx* / R_x = 0.003 / 0.997 = 0.3009027% (~0.30555 fWETH)
+    const sellBE = computeUnattackedBreakEvenSize(rx, 30);
+    expect(sellBE.poolPct).toBeCloseTo(0.3009027, 5);
+    expect(sellBE.size).toBeCloseTo(0.305549, 4);
+    const atSellBE = runSandwichSimulation({
+      rx,
+      ry,
+      side: 'SellBase',
+      amountIn: sellBE.size,
+      slippagePct: 8,
+    });
+    expect(atSellBE.fairbatchOut).toBeCloseTo(atSellBE.ammPlainOut, 8);
+    expect(atSellBE.fairbatchVsPlainQuote).toBeCloseTo(0, 8);
+
+    // BuyBase break-even: dy* / R_y = 0.003 / 0.997 = 0.3009027%
+    const buyBE = computeUnattackedBreakEvenSize(ry, 30);
+    expect(buyBE.poolPct).toBeCloseTo(0.3009027, 5);
+    const atBuyBE = runSandwichSimulation({
+      rx,
+      ry,
+      side: 'BuyBase',
+      amountIn: buyBE.size,
+      slippagePct: 8,
+    });
+    expect(atBuyBE.fairbatchOut).toBeCloseTo(atBuyBE.ammPlainOut, 8);
+
+    // Trade-size table across [0.05, 0.1, 0.3, 1, 2] fWETH
+    const table = buildSandwichSizeTable({ rx, ry, side: 'SellBase', slippagePct: 8 });
+    expect(table.map((r) => r.size)).toEqual([0.05, 0.1, 0.3, 1, 2]);
+    // Below break-even (0.05, 0.1, 0.3): FairBatch > unattacked AMM
+    expect(table[0].sim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+    expect(table[1].sim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+    expect(table[2].sim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+    // Above break-even (1, 2): FairBatch < unattacked AMM, but > attacked AMM
+    expect(table[3].sim.fairbatchVsPlainQuote).toBeLessThan(0);
+    expect(table[3].sim.fairbatchVsAttackedQuote).toBeGreaterThan(0);
+    expect(table[4].sim.fairbatchVsPlainQuote).toBeLessThan(0);
+    expect(table[4].sim.fairbatchVsAttackedQuote).toBeGreaterThan(0);
   });
 });

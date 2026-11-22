@@ -415,14 +415,21 @@ describe('Simple mode end-to-end flows', () => {
     expect(
       screen.getByText(/Client-side simulation — not an on-chain result/i),
     ).toBeInTheDocument();
+    // Defaults to retail-sized 0.1 fWETH trade with live size table and break-even note
+    expect(screen.getByLabelText(/Simulated trade size/i)).toHaveValue(0.1);
     expect(screen.getByTestId('sim-col-plain')).toHaveTextContent(/Normal AMM, no attacker/i);
     expect(screen.getByTestId('sim-col-attacked')).toHaveTextContent(/Normal AMM \+ sandwich bot/i);
     expect(screen.getByTestId('sim-col-fairbatch')).toHaveTextContent(/FairBatch uniform round/i);
-    expect(screen.getByTestId('sandwich-reconciliation')).toHaveTextContent(
-      /FairBatch payout minus attacked-AMM payout/i,
-    );
+    expect(screen.getByTestId('sim-size-table')).toHaveTextContent(/0\.05 fWETH/i);
+    expect(screen.getByTestId('sim-size-table')).toHaveTextContent(/2 fWETH/i);
+    expect(screen.getByTestId('sim-breakeven-note')).toHaveTextContent(/0\.30%/i);
     expect(screen.getByTestId('sandwich-reconciliation').textContent).not.toMatch(
       /kept in your pocket/i,
+    );
+    // Switching to 2 fWETH shows the full attacked-AMM reconciliation breakdown
+    fireEvent.change(screen.getByLabelText(/Simulated trade size/i), { target: { value: '2' } });
+    expect(screen.getByTestId('sandwich-reconciliation')).toHaveTextContent(
+      /FairBatch payout minus attacked-AMM payout/i,
     );
   });
 
@@ -567,6 +574,9 @@ describe('Simple mode end-to-end flows', () => {
     expect(screen.getByTestId('docs-user-guide')).toBeInTheDocument();
     expect(screen.getByText(/FairBatch in 60 seconds/i)).toBeInTheDocument();
     expect(screen.getByText(/Price vs an unattacked swap/i)).toBeInTheDocument();
+    expect(screen.getByTestId('docs-size-table')).toHaveTextContent(/0\.05 fWETH/i);
+    expect(screen.getByTestId('docs-size-table')).toHaveTextContent(/2 fWETH/i);
+    expect(screen.getByTestId('docs-breakeven-note')).toHaveTextContent(/0\.30%/i);
     expect(screen.getByText(/Is FairBatch always cheaper\?/i)).toBeInTheDocument();
     expect(screen.getByText(/Not fully free — what you still pay gas for/i)).toBeInTheDocument();
 
