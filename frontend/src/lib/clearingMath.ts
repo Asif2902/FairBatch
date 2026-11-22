@@ -757,21 +757,49 @@ export interface SandwichSimOutput {
   spot: number;
   side: OrderSide;
   amountIn: number;
-  fairbatchPrice: number;
-  fairbatchOut: number;
+  slippagePct: number;
+  limitPrice: number;
+  feeBps: number;
+  // Column 1: Normal sequential 0.30% x*y=k AMM without attacker
+  ammPlainPrice: number;
+  ammPlainOut: number;
+  ammPlainLpFeeQuote: number;
+  // Column 2: Normal sequential 0.30% x*y=k AMM with slippage-capped sandwich bot
+  frontRunAmount: number;
+  frontRunIsBase: boolean;
+  botProfitable: boolean;
+  victimExceedsSlippageWithoutAttack: boolean;
   ammSandwichedPrice: number;
   ammSandwichedOut: number;
   ammBotProfitQuote: number;
+  victimLossVsPlainQuote: number;
+  extraLpFeesQuote: number;
+  totalSandwichedLpFeesQuote: number;
+  // Column 3: FairBatch uniform clearing round
+  fairbatchPrice: number;
+  fairbatchOut: number;
   fairbatchBotProfitQuote: number;
+  fairbatchExceedsLimit: boolean;
+  // Honest signed comparisons (all reconcile: fairbatchVsAttacked === fairbatchVsPlain + victimLossVsPlain)
+  fairbatchVsAttackedQuote: number;
+  fairbatchVsPlainQuote: number;
+  fairbatchVsPlainPct: number;
   userSavedQuote: number;
-  frontRunAmount: number;
   settlement: BatchSettlementDto;
 }
 
 /**
- * Pure client-side simulation comparing a single user swap on a standard
- * constant-product AMM under a front-run/back-run sandwich bot vs FairBatch
- * uniform batch clearing, using the live on-chain reserves.
+ * Pure client-side simulation comparing a single user swap across three baselines
+ * using the live on-chain reserves:
+ *   1. Normal AMM, no attacker (0.30% constant-product x*y=k)
+ *   2. Normal AMM + optimal sandwich bot capped by the user's slippage tolerance
+ *      so the victim's trade stays valid (never reverts)
+ *   3. FairBatch uniform batch clearing: p* = (R_y + 2*D_y) / (R_x + 2*S_x)
+ *
+ * Accounting identities satisfied for both SellBase (exact quote) and BuyBase
+ * (quote-equivalent valued at the unattacked AMM effective price):
+ *   - victimLossVsPlainQuote === ammBotProfitQuote + extraLpFeesQuote
+ *   - fairbatchVsAttackedQuote === fairbatchVsPlainQuote + victimLossVsPlainQuote
  */
 export function runSandwichSimulation(params: {
   rx: number;
@@ -779,42 +807,260 @@ export function runSandwichSimulation(params: {
   side: OrderSide;
   amountIn: number;
   slippagePct?: number;
+  feeBps?: number;
 }): SandwichSimOutput {
   const rx = Math.max(params.rx, 1e-6);
   const ry = Math.max(params.ry, 1e-6);
   const spot = ry / rx;
-  const slippage = Math.max(0.01, Math.min(0.45, (params.slippagePct ?? 25) / 100));
+  const feeBps = params.feeBps ?? DEFAULT_FEE_BPS;
+  const feeMult = (10_000 - feeBps) / 10_000;
+  const slippagePct = Math.max(0.5, Math.min(45, params.slippagePct ?? 8));
+  const slippage = slippagePct / 100;
   const limitPrice =
     params.side === 'SellBase' ? spot * (1 - slippage) : spot * (1 + slippage);
+  const v = Math.max(params.amountIn, 0);
 
   const userOrder: OrderDto = {
     order_id: 1,
     trader: '0x0000000000000000000000000000000000000001',
     label: 'Your simulated trade',
     side: params.side,
-    amount_in: params.amountIn,
+    amount_in: v,
     limit_price: limitPrice,
     submission_type: 'Direct',
     is_attacker: false,
   };
 
-  const settlement = computeBatchSettlement(0, rx, ry, [userOrder], 0, DEFAULT_FEE_BPS, true);
-  const fbReceipt = settlement.comparison.fairbatch_receipts.find((r) => !r.is_attacker);
-  const ammReceipt = settlement.comparison.amm_receipts.find((r) => !r.is_attacker);
-  const frontRun = settlement.comparison.amm_receipts.find((r) => r.is_attacker);
+  // Column 3: FairBatch uniform clearing (using exact same formula as src/clearing.fe)
+  const settlement = computeBatchSettlement(0, rx, ry, [userOrder], 0, feeBps, false);
+  const fairbatchPrice =
+    params.side === 'SellBase' ? ry / (rx + 2 * v) : (ry + 2 * v) / rx;
+  const fairbatchExceedsLimit =
+    params.side === 'SellBase'
+      ? fairbatchPrice + EPS < limitPrice
+      : fairbatchPrice - EPS > limitPrice;
+  const fairbatchOut =
+    v <= EPS || fairbatchPrice <= EPS
+      ? 0
+      : params.side === 'SellBase'
+        ? v * fairbatchPrice
+        : v / fairbatchPrice;
+
+  if (params.side === 'SellBase') {
+    // Column 1: Normal AMM, no attacker (0.30% x*y=k)
+    const plainOut = (ry * (v * feeMult)) / (rx + v * feeMult);
+    const plainOutZeroFee = (ry * v) / (rx + v);
+    const ammPlainPrice = v > EPS ? plainOut / v : spot;
+    const ammPlainLpFeeQuote = Math.max(0, plainOutZeroFee - plainOut);
+
+    // Evaluate a SellBase front-run of size `f` fWETH followed by victim `v` fWETH,
+    // followed by exact-out back-run buying back `f` fWETH so the bot ends with 0 base delta.
+    const evalSell = (f: number) => {
+      let x = rx;
+      let y = ry;
+      const q1 = f > 0 ? (y * (f * feeMult)) / (x + f * feeMult) : 0;
+      x += f;
+      y -= q1;
+      const vOut = (y * (v * feeMult)) / (x + v * feeMult);
+      const vEffP = v > EPS ? vOut / v : spot;
+      x += v;
+      y -= vOut;
+      const q2 = f > 0 && x > f + EPS ? (y * f) / ((x - f) * feeMult) : 0;
+      const botProfit = q1 - q2;
+      return { f, vOut, vEffP, botProfit };
+    };
+
+    const victimExceedsSlippageWithoutAttack = ammPlainPrice + EPS < limitPrice;
+    let bestF = 0;
+    let bestEval = evalSell(0);
+
+    if (!victimExceedsSlippageWithoutAttack && v > EPS) {
+      // Binary-search max front-run fMax keeping victim effective price >= limitPrice
+      let lo = 0;
+      let hi = rx * 5;
+      for (let i = 0; i < 80; i += 1) {
+        const mid = (lo + hi) / 2;
+        if (evalSell(mid).vEffP >= limitPrice) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      const fMax = lo;
+
+      // Ternary search for profit-maximizing f* in [0, fMax] (unimodal profit curve)
+      let a = 0;
+      let b = fMax;
+      for (let i = 0; i < 80; i += 1) {
+        const m1 = a + (b - a) / 3;
+        const m2 = b - (b - a) / 3;
+        if (evalSell(m1).botProfit < evalSell(m2).botProfit) {
+          a = m1;
+        } else {
+          b = m2;
+        }
+      }
+      const candF = (a + b) / 2;
+      const cand = evalSell(candF);
+      const edgeMax = evalSell(fMax);
+      const chosen = edgeMax.botProfit > cand.botProfit ? edgeMax : cand;
+      if (chosen.botProfit > 1e-6) {
+        bestF = chosen.f;
+        bestEval = chosen;
+      }
+    }
+
+    const botProfitable = bestF > EPS && bestEval.botProfit > 1e-6;
+    const ammSandwichedOut = botProfitable ? bestEval.vOut : plainOut;
+    const ammSandwichedPrice = botProfitable ? bestEval.vEffP : ammPlainPrice;
+    const ammBotProfitQuote = botProfitable ? bestEval.botProfit : 0;
+
+    // Exact conservation: final R_x = rx + v in both plain and sandwiched AMM,
+    // so (plainOut - ammSandwichedOut) === ammBotProfitQuote + extraLpFeesQuote identically!
+    const victimLossVsPlainQuote = Math.max(0, plainOut - ammSandwichedOut);
+    const extraLpFeesQuote = Math.max(0, victimLossVsPlainQuote - ammBotProfitQuote);
+    const totalSandwichedLpFeesQuote = ammPlainLpFeeQuote + extraLpFeesQuote;
+
+    const fairbatchVsPlainQuote = fairbatchOut - plainOut;
+    const fairbatchVsPlainPct = plainOut > EPS ? (fairbatchVsPlainQuote / plainOut) * 100 : 0;
+    const fairbatchVsAttackedQuote = fairbatchOut - ammSandwichedOut;
+
+    return {
+      spot,
+      side: params.side,
+      amountIn: v,
+      slippagePct,
+      limitPrice,
+      feeBps,
+      ammPlainPrice,
+      ammPlainOut: plainOut,
+      ammPlainLpFeeQuote,
+      frontRunAmount: bestF,
+      frontRunIsBase: true,
+      botProfitable,
+      victimExceedsSlippageWithoutAttack,
+      ammSandwichedPrice,
+      ammSandwichedOut,
+      ammBotProfitQuote,
+      victimLossVsPlainQuote,
+      extraLpFeesQuote,
+      totalSandwichedLpFeesQuote,
+      fairbatchPrice,
+      fairbatchOut,
+      fairbatchBotProfitQuote: 0,
+      fairbatchExceedsLimit,
+      fairbatchVsAttackedQuote,
+      fairbatchVsPlainQuote,
+      fairbatchVsPlainPct,
+      userSavedQuote: fairbatchVsAttackedQuote,
+      settlement,
+    };
+  }
+
+  // BuyBase: victim spends `v` quote to buy base
+  const plainOut = (rx * (v * feeMult)) / (ry + v * feeMult);
+  const plainOutZeroFee = (rx * v) / (ry + v);
+  const ammPlainPrice = plainOut > EPS ? v / plainOut : spot;
+  const ammPlainLpFeeQuote = Math.max(0, (plainOutZeroFee - plainOut) * ammPlainPrice);
+
+  // Bot front-runs spending `f` quote -> receives `b1` base; victim spends `v` quote -> receives `vOut` base;
+  // bot back-runs selling exact `b1` base -> receives `q2` quote. Bot ends with 0 base delta and (q2 - f) quote profit.
+  const evalBuy = (f: number) => {
+    let x = rx;
+    let y = ry;
+    const b1 = f > 0 ? (x * (f * feeMult)) / (y + f * feeMult) : 0;
+    x -= b1;
+    y += f;
+    const vOut = (x * (v * feeMult)) / (y + v * feeMult);
+    const vEffP = vOut > EPS ? v / vOut : Number.POSITIVE_INFINITY;
+    x -= vOut;
+    y += v;
+    const q2 = b1 > 0 ? (y * (b1 * feeMult)) / (x + b1 * feeMult) : 0;
+    const botProfit = q2 - f;
+    return { f, b1, vOut, vEffP, botProfit };
+  };
+
+  const victimExceedsSlippageWithoutAttack = ammPlainPrice - EPS > limitPrice;
+  let bestF = 0;
+  let bestEval = evalBuy(0);
+
+  if (!victimExceedsSlippageWithoutAttack && v > EPS) {
+    // Binary-search max front-run fMax keeping victim effective price <= limitPrice
+    let lo = 0;
+    let hi = ry * 5;
+    for (let i = 0; i < 80; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (evalBuy(mid).vEffP <= limitPrice) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    const fMax = lo;
+
+    let a = 0;
+    let b = fMax;
+    for (let i = 0; i < 80; i += 1) {
+      const m1 = a + (b - a) / 3;
+      const m2 = b - (b - a) / 3;
+      if (evalBuy(m1).botProfit < evalBuy(m2).botProfit) {
+        a = m1;
+      } else {
+        b = m2;
+      }
+    }
+    const candF = (a + b) / 2;
+    const cand = evalBuy(candF);
+    const edgeMax = evalBuy(fMax);
+    const chosen = edgeMax.botProfit > cand.botProfit ? edgeMax : cand;
+    if (chosen.botProfit > 1e-6) {
+      bestF = chosen.f;
+      bestEval = chosen;
+    }
+  }
+
+  const botProfitable = bestF > EPS && bestEval.botProfit > 1e-6;
+  const ammSandwichedOut = botProfitable ? bestEval.vOut : plainOut;
+  const ammSandwichedPrice = botProfitable ? bestEval.vEffP : ammPlainPrice;
+  const ammBotProfitQuote = botProfitable ? bestEval.botProfit : 0;
+
+  // Value all base-token output differences consistently at the unattacked AMM price
+  const victimLossVsPlainQuote = Math.max(0, (plainOut - ammSandwichedOut) * ammPlainPrice);
+  const extraLpFeesQuote = Math.max(0, victimLossVsPlainQuote - ammBotProfitQuote);
+  const totalSandwichedLpFeesQuote = ammPlainLpFeeQuote + extraLpFeesQuote;
+
+  const fairbatchVsPlainQuote = (fairbatchOut - plainOut) * ammPlainPrice;
+  const fairbatchVsPlainPct = plainOut > EPS ? ((fairbatchOut - plainOut) / plainOut) * 100 : 0;
+  const fairbatchVsAttackedQuote = (fairbatchOut - ammSandwichedOut) * ammPlainPrice;
 
   return {
     spot,
     side: params.side,
-    amountIn: params.amountIn,
-    fairbatchPrice: settlement.clearing_price,
-    fairbatchOut: fbReceipt?.amount_out ?? 0,
-    ammSandwichedPrice: ammReceipt?.effective_price ?? 0,
-    ammSandwichedOut: ammReceipt?.amount_out ?? 0,
-    ammBotProfitQuote: settlement.comparison.amm_sandwich_profit_quote,
+    amountIn: v,
+    slippagePct,
+    limitPrice,
+    feeBps,
+    ammPlainPrice,
+    ammPlainOut: plainOut,
+    ammPlainLpFeeQuote,
+    frontRunAmount: bestF,
+    frontRunIsBase: false,
+    botProfitable,
+    victimExceedsSlippageWithoutAttack,
+    ammSandwichedPrice,
+    ammSandwichedOut,
+    ammBotProfitQuote,
+    victimLossVsPlainQuote,
+    extraLpFeesQuote,
+    totalSandwichedLpFeesQuote,
+    fairbatchPrice,
+    fairbatchOut,
     fairbatchBotProfitQuote: 0,
-    userSavedQuote: settlement.comparison.user_value_saved_quote,
-    frontRunAmount: frontRun?.amount_in ?? 0,
+    fairbatchExceedsLimit,
+    fairbatchVsAttackedQuote,
+    fairbatchVsPlainQuote,
+    fairbatchVsPlainPct,
+    userSavedQuote: fairbatchVsAttackedQuote,
     settlement,
   };
 }

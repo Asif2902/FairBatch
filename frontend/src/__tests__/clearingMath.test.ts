@@ -337,9 +337,105 @@ describe('Hybrid CoW + FM-AMM Batch Clearing & Sequential Baseline Math', () => 
       ry: 300_000,
       side: 'SellBase',
       amountIn: 2,
+      slippagePct: 8,
     });
     expect(sim.fairbatchBotProfitQuote).toBe(0);
     expect(sim.ammBotProfitQuote).toBeGreaterThan(0);
     expect(sim.fairbatchOut).toBeGreaterThan(sim.ammSandwichedOut);
+    expect(sim.ammSandwichedPrice).toBeGreaterThanOrEqual(sim.limitPrice - 1e-6);
+  });
+
+  it('reconciles 3-column sandwich math (plain AMM vs slippage-capped bot vs FairBatch) for SellBase, BuyBase, and tiny orders', () => {
+    // Live Sepolia reserves example: 101.5442 fWETH / 299,200 fUSDC, 2 fWETH sell, 8% slippage cap
+    const sellSim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 8,
+    });
+
+    // Plain unattacked 0.30% AMM gives ~5,762.17 fUSDC; FairBatch gives ~5,669.66 (~1.61% worse on large one-sided sell)
+    expect(sellSim.ammPlainOut).toBeCloseTo(5762.17, 1);
+    expect(sellSim.fairbatchOut).toBeCloseTo(5669.66, 1);
+    expect(sellSim.fairbatchVsPlainQuote).toBeLessThan(0);
+    expect(sellSim.fairbatchVsPlainPct).toBeCloseTo(-1.6055, 2);
+
+    // Slippage-capped bot keeps victim's trade strictly valid (>= minPrice $2,710.78)
+    expect(sellSim.limitPrice).toBeCloseTo(2710.78, 1);
+    expect(sellSim.ammSandwichedPrice).toBeGreaterThanOrEqual(sellSim.limitPrice - 1e-6);
+    expect(sellSim.ammSandwichedOut).toBeCloseTo(5421.56, 1);
+    expect(sellSim.ammBotProfitQuote).toBeCloseTo(288.13, 1);
+    expect(sellSim.extraLpFeesQuote).toBeCloseTo(52.48, 1);
+
+    // Exact accounting identities:
+    //   1. victimLossVsPlainQuote === ammBotProfitQuote + extraLpFeesQuote
+    //   2. fairbatchVsAttackedQuote === fairbatchVsPlainQuote + victimLossVsPlainQuote
+    expect(sellSim.ammBotProfitQuote + sellSim.extraLpFeesQuote).toBeCloseTo(
+      sellSim.victimLossVsPlainQuote,
+      6,
+    );
+    expect(sellSim.fairbatchVsPlainQuote + sellSim.victimLossVsPlainQuote).toBeCloseTo(
+      sellSim.fairbatchVsAttackedQuote,
+      6,
+    );
+
+    // Tighter slippage tolerance (5%) caps bot smaller than 8% while keeping trade valid
+    const mediumSim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 5,
+    });
+    expect(mediumSim.victimExceedsSlippageWithoutAttack).toBe(false);
+    expect(mediumSim.frontRunAmount).toBeGreaterThan(0);
+    expect(mediumSim.frontRunAmount).toBeLessThan(sellSim.frontRunAmount);
+    expect(mediumSim.ammSandwichedPrice).toBeGreaterThanOrEqual(mediumSim.limitPrice - 1e-6);
+
+    // Very tight slippage tolerance (2%): even unattacked 0.30% AMM exceeds 2% on 2/101.54 pool -> no sandwich fits
+    const tightSim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 2,
+    });
+    expect(tightSim.victimExceedsSlippageWithoutAttack).toBe(true);
+    expect(tightSim.frontRunAmount).toBe(0);
+    expect(tightSim.ammBotProfitQuote).toBe(0);
+
+    // BuyBase: 6,000 fUSDC buy at 8% slippage also stays valid (<= maxPrice) and reconciles identically
+    const buySim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'BuyBase',
+      amountIn: 6_000,
+      slippagePct: 8,
+    });
+    expect(buySim.ammSandwichedPrice).toBeLessThanOrEqual(buySim.limitPrice + 1e-6);
+    expect(buySim.ammBotProfitQuote).toBeGreaterThan(0);
+    expect(buySim.ammBotProfitQuote + buySim.extraLpFeesQuote).toBeCloseTo(
+      buySim.victimLossVsPlainQuote,
+      6,
+    );
+    expect(buySim.fairbatchVsPlainQuote + buySim.victimLossVsPlainQuote).toBeCloseTo(
+      buySim.fairbatchVsAttackedQuote,
+      6,
+    );
+
+    // Tiny trade (0.05 fWETH): sandwich bot cannot clear 0.60% round-trip fees -> 0 front-run, $0 profit;
+    // FairBatch's 0% swap fee beats the unattacked 0.30% AMM!
+    const tinySim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 0.05,
+      slippagePct: 8,
+    });
+    expect(tinySim.botProfitable).toBe(false);
+    expect(tinySim.frontRunAmount).toBe(0);
+    expect(tinySim.ammBotProfitQuote).toBe(0);
+    expect(tinySim.fairbatchVsPlainQuote).toBeGreaterThan(0);
   });
 });

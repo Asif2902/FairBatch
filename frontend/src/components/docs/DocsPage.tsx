@@ -361,6 +361,19 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                     </td>
                   </tr>
                   <tr>
+                    <td className="px-3 py-2.5 font-bold">Price vs an unattacked swap</td>
+                    <td className="px-3 py-2.5 text-pine-800 font-semibold">
+                      Average execution along the x·y=k curve minus 0.30% fee (better on large
+                      one-sided trades when no bot attacks)
+                    </td>
+                    <td className="px-3 py-2.5 text-brass-900">
+                      0% swap fee, but large one-sided orders clear near the post-trade marginal
+                      price p* (can be ~1–2% worse than an unattacked AMM so LPs keep the surplus);
+                      tiny orders (&lt;0.30% impact) are about equal or slightly better, and
+                      opposite-side flow matches P2P at zero impact
+                    </td>
+                  </tr>
+                  <tr>
                     <td className="px-3 py-2.5 font-bold">Opposite buyer/seller flow</td>
                     <td className="px-3 py-2.5">
                       Each trader pays pool spread and fees separately
@@ -580,6 +593,22 @@ export const DocsPage: React.FC<DocsPageProps> = ({
               FAQ &amp; Troubleshooting
             </h2>
             <div className="divide-y divide-rule text-xs leading-relaxed">
+              <div className="py-2.5">
+                <strong className="text-sm text-ink">Is FairBatch always cheaper?</strong>
+                <p className="mt-1 text-ink-soft">
+                  <strong>No — and here is the honest trade-off:</strong> FairBatch eliminates
+                  ordering attacks inside a round ($0.00 intra-round sandwich profit) and matches
+                  opposite-side buyers and sellers peer-to-peer (CoW) with zero pool impact and zero
+                  swap fee. However, for a <strong>large one-sided order</strong> with no opposing
+                  traders, FairBatch&apos;s FM-AMM equation{' '}
+                  <code>p* = (R_y + 2·D_y) / (R_x + 2·S_x)</code> prices near the post-trade
+                  marginal price so passive LPs capture the rebalancing surplus — which can give a
+                  slightly worse payout than an <em>unattacked</em> 0.30% x·y=k swap (for example,
+                  ~1.6% lower on a 2 fWETH sell into a ~101.5 fWETH pool). For tiny trades (below
+                  ~0.30% pool impact), FairBatch&apos;s 0% swap fee makes it roughly equal to or
+                  slightly better than an unattacked 0.30% AMM.
+                </p>
+              </div>
               <div className="py-2.5">
                 <strong className="text-sm text-ink">Why do I wait ~1 minute for a round?</strong>
                 <p className="mt-1 text-ink-soft">

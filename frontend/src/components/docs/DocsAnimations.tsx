@@ -4,11 +4,12 @@ import {
   CheckCircle2,
   Flame,
   Lock,
+  Scale,
   ShieldCheck,
   Unlock,
 } from 'lucide-react';
 import { runSandwichSimulation } from '../../lib/clearingMath';
-import { formatPrice, formatToken, formatUsd } from '../../lib/format';
+import { formatPrice, formatTokenAmount, formatUsd } from '../../lib/format';
 
 interface DocsAnimationsProps {
   rx: number;
@@ -189,18 +190,44 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
             <div className="font-display text-base font-bold text-ink">
               {currentSandwich.title}
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="mt-3 grid gap-3 lg:grid-cols-3">
+              <div className="border-l-2 border-cobalt-600 bg-cobalt-50/70 p-3">
+                <div className="flex items-center gap-1.5 font-mono text-xs font-bold uppercase text-cobalt-800">
+                  <Scale className="h-3.5 w-3.5 text-cobalt-700" />
+                  <span>Normal AMM, no attacker</span>
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-ink">
+                  Baseline 0.30% x·y=k swap executing alone with no bot in the block. Pays{' '}
+                  {formatUsd(sim.ammPlainLpFeeQuote, 2)} in baseline 0.30% LP fees at effective
+                  price ${formatPrice(sim.ammPlainPrice, 2)}.
+                </p>
+                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-cobalt-600/25 pt-2 font-mono text-xs tabular-nums">
+                  <span>
+                    You get:{' '}
+                    <strong>
+                      {formatTokenAmount(sim.ammPlainOut, 'quote')} {quoteSymbol}
+                    </strong>
+                  </span>
+                  <span className="font-bold text-cobalt-800">Bot profit: $0.00</span>
+                </div>
+              </div>
+
               <div className="border-l-2 border-vermilion-500 bg-vermilion-50 p-3">
                 <div className="flex items-center gap-1.5 font-mono text-xs font-bold uppercase text-vermilion-800">
                   <Flame className="h-3.5 w-3.5 text-vermilion-600" />
-                  <span>Normal sequential AMM (0.30% x·y=k)</span>
+                  <span>Normal AMM + bot ({sim.slippagePct}% cap)</span>
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-ink">
-                  {currentSandwich.normalDesc}
+                  {currentSandwich.normalDesc} (Assumed front-run:{' '}
+                  {formatTokenAmount(sim.frontRunAmount, 'base')} {baseSymbol}, capped so your
+                  price stays ≥ ${formatPrice(sim.limitPrice, 2)}.)
                 </p>
                 <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-vermilion-500/30 pt-2 font-mono text-xs tabular-nums">
                   <span>
-                    You get: <strong>{formatPrice(sim.ammSandwichedOut, 2)} {quoteSymbol}</strong>
+                    You get:{' '}
+                    <strong>
+                      {formatTokenAmount(sim.ammSandwichedOut, 'quote')} {quoteSymbol}
+                    </strong>
                   </span>
                   <span className="font-bold text-vermilion-700">
                     Bot profit: {formatUsd(sim.ammBotProfitQuote, 2)}
@@ -211,14 +238,17 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
               <div className="border-l-2 border-pine-600 bg-pine-50 p-3">
                 <div className="flex items-center gap-1.5 font-mono text-xs font-bold uppercase text-pine-800">
                   <ShieldCheck className="h-3.5 w-3.5 text-pine-700" />
-                  <span>FairBatch uniform clearing round</span>
+                  <span>FairBatch uniform round</span>
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-ink">
                   {currentSandwich.fairbatchDesc}
                 </p>
                 <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-pine-600/30 pt-2 font-mono text-xs tabular-nums">
                   <span>
-                    You get: <strong>{formatPrice(sim.fairbatchOut, 2)} {quoteSymbol}</strong>
+                    You get:{' '}
+                    <strong>
+                      {formatTokenAmount(sim.fairbatchOut, 'quote')} {quoteSymbol}
+                    </strong>
                   </span>
                   <span className="font-bold text-pine-800">Bot profit: $0.00</span>
                 </div>
@@ -228,10 +258,22 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
 
           <p className="text-xs leading-relaxed text-ink-muted">
             <strong>Caption (Illustrative example):</strong> Computed from current pool reserves (
-            {formatToken(rx, 2)} {baseSymbol} / {formatPrice(ry, 0)} {quoteSymbol}, spot $
-            {formatPrice(sim.spot, 2)}) using the same sequential 0.30% x·y=k sandwich model as the
-            in-app simulator. Inside a single FairBatch round, buying and selling at the same uniform
-            clearing price p* (${formatPrice(sim.fairbatchPrice, 2)}) yields $0.00 sandwich profit.
+            {formatTokenAmount(rx, 'base')} {baseSymbol} / {formatPrice(ry, 0)} {quoteSymbol}, spot $
+            {formatPrice(sim.spot, 2)}) with an {sim.slippagePct}% slippage cap. Against the
+            attacked AMM, FairBatch pays{' '}
+            <strong>
+              {sim.fairbatchVsAttackedQuote >= 0 ? '+' : ''}
+              {formatUsd(sim.fairbatchVsAttackedQuote, 2)}
+            </strong>{' '}
+            more (bot profit {formatUsd(sim.ammBotProfitQuote, 2)} + extra LP fees{' '}
+            {formatUsd(sim.extraLpFeesQuote, 2)} = {formatUsd(sim.victimLossVsPlainQuote, 2)} user
+            loss). Against an unattacked AMM on a large one-sided order, FairBatch pays{' '}
+            <strong>
+              {sim.fairbatchVsPlainQuote >= 0 ? '+' : ''}
+              {formatUsd(sim.fairbatchVsPlainQuote, 2)} ({sim.fairbatchVsPlainPct.toFixed(2)}%)
+            </strong>{' '}
+            because FM-AMM clears one-sided imbalance near the post-trade marginal price p* ($
+            {formatPrice(sim.fairbatchPrice, 2)}) so LPs capture the rebalancing surplus.
           </p>
         </div>
       </article>
