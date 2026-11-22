@@ -157,14 +157,21 @@ EOF
   local rendered_ip="${tmp_dir}/Caddyfile.ip"
   local rendered_dom="${tmp_dir}/Caddyfile.dom"
   local rendered_unit="${tmp_dir}/fairbatch-keeper.service"
+  local discovered_node resolved_exec
+  discovered_node="$(command -v node)"
+  KEEPER_TYPE="typescript"
+  BASE_DIR="/opt/fairbatch"
+  resolved_exec="$(resolve_keeper_exec)"
+  assert_eq "\"${discovered_node}\" \"/opt/fairbatch/current/keeper/dist/index.js\"" "$resolved_exec" "resolve_keeper_exec discovers absolute node via command -v node and quotes ExecStart"
   render_caddyfile_ip "$rendered_ip" "/opt/fairbatch/current/frontend/dist" "3002"
   render_caddyfile_domain "$rendered_dom" "swap.example.com" "yes" "/opt/fairbatch/current/frontend/dist" "3002"
-  render_systemd_unit "$rendered_unit" "/usr/bin/node /opt/fairbatch/current/keeper/dist/index.js"
+  render_systemd_unit "$rendered_unit" "$resolved_exec"
 
   assert_ok "Caddyfile IP has same-origin /keeper/* proxy" grep -q 'handle_path /keeper/\*' "$rendered_ip"
   assert_ok "Caddyfile IP has SPA try_files fallback" grep -q 'try_files {path} /index.html' "$rendered_ip"
   assert_ok "Caddyfile domain renders www 308 redirect" grep -q 'www\.swap\.example\.com' "$rendered_dom"
   assert_ok "systemd unit enables NoNewPrivileges + ProtectSystem=strict" grep -q 'ProtectSystem=strict' "$rendered_unit"
+  assert_ok "systemd unit quotes absolute node path in ExecStart" grep -qE '^ExecStart="/.+node" "/opt/fairbatch/current/keeper/dist/index\.js"$' "$rendered_unit"
 
   # Prune releases keeps last 3 plus active
   local rel_dir="${tmp_dir}/releases"
@@ -279,6 +286,7 @@ EOF
   assert_ok "real deploy creates current/keeper/dist/index.js" test -f "${sandbox}/opt/fairbatch/current/keeper/dist/index.js"
   assert_ok "real deploy writes HTTPS domain Caddyfile" grep -q "swap.example.com" "${sandbox}/caddy/Caddyfile"
   assert_ok "real deploy writes hardened systemd unit" grep -q "NoNewPrivileges=true" "${sandbox}/systemd/fairbatch-keeper.service"
+  assert_ok "real deploy systemd ExecStart quotes discovered absolute node path" grep -qE '^ExecStart="/.+node" ".*/current/keeper/dist/index\.js"$' "${sandbox}/systemd/fairbatch-keeper.service"
   assert_ok "real deploy persists non-secret deploy.conf" grep -q "DEPLOY_DOMAIN=swap.example.com" "${sandbox}/etc/deploy.conf"
   assert_fail "deploy.conf NEVER contains private key" grep -q "${throwaway_key#0x}" "${sandbox}/etc/deploy.conf"
   assert_fail "real deploy output NEVER leaks private key" grep -q "${throwaway_key#0x}" <<< "$deploy_out"

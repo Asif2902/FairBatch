@@ -1355,11 +1355,14 @@ ensure_service_user() {
 
 resolve_keeper_exec() {
   if [[ "$KEEPER_TYPE" == "rust" ]]; then
-    printf '%s/current/keeper/target/release/fairbatch-keeper\n' "$BASE_DIR"
+    printf '"%s/current/keeper/target/release/fairbatch-keeper"\n' "$BASE_DIR"
   else
     local node_bin
-    node_bin="$(command -v node || printf '/usr/bin/node')"
-    printf '%s %s/current/keeper/dist/index.js\n' "$node_bin" "$BASE_DIR"
+    node_bin="$(command -v node 2>/dev/null || true)"
+    if [[ -z "$node_bin" || "$node_bin" != /* ]]; then
+      node_bin="/usr/bin/node"
+    fi
+    printf '"%s" "%s/current/keeper/dist/index.js"\n' "$node_bin" "$BASE_DIR"
   fi
 }
 
