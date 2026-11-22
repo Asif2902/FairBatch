@@ -1,6 +1,29 @@
 # FairBatch
 
-**Pitch:** FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** whose pricing engine (`src/clearing.fe`) is statically proven pure by Fe's capability system (`0` `uses` clauses), eliminating intra-batch sandwich extraction (`$0.00` bot profit) and arrival-order slippage on Ethereum Sepolia.
+## Judge quick start
+
+FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** and deployed live on **Ethereum Sepolia**. Instead of executing swaps sequentially in block arrival order, FairBatch groups Direct, Sealed Commit-Reveal, and EIP-712/ERC-1271 signed orders into discrete rounds and clears every filled order at one uniform price $p^*$ via a compiler-enforced zero-effect (`uses ()`) pricing engine ([`src/clearing.fe`](./src/clearing.fe)), yielding `$0.00` intra-round sandwich profit. Visitors connect directly to Sepolia through a zero-backend React/`viem` web app with beginner-friendly **Simple** mode, a **Pro** clearing terminal, an interactive MEV simulator, in-app `/docs`, an optional trustless keeper/relayer ([`keeper/`](./keeper)), and one-script VPS deployment ([`deploy.sh`](./deploy.sh)).
+
+- **Live demo (Ethereum Sepolia):** `https://<LIVE_URL_PLACEHOLDER>` *(hosted URL to be filled in before submission)*
+- **Key links:** In-app `/docs` (`#/docs`, source [`DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx)) · [Server Deployment Guide (`docs/DEPLOYMENT.md`)](./docs/DEPLOYMENT.md) · [Live Sepolia Verification](#live-sepolia-verification) · [Fresh-Clone Verification Log (`docs/VERIFICATION.md`)](./docs/VERIFICATION.md)
+
+**Run & verify locally in 3 commands:**
+
+```sh
+git clone https://github.com/Asif2902/FairBatch.git && cd FairBatch
+fe fmt --check && fe check && fe test && fe build && node scripts/verify_deployed_bytecode.mjs
+cd frontend && npm ci && npm test && npm run dev
+```
+
+## Where to look
+
+| Contest Criterion | Concrete Files & Tests | What to Inspect |
+| :--- | :--- | :--- |
+| **Technical quality** | [`src/lib.fe`](./src/lib.fe), [`src/clearing.fe`](./src/clearing.fe), [`src/math.fe`](./src/math.fe), [`src/intent.fe`](./src/intent.fe), [`src/tests.fe`](./src/tests.fe) (**69 Fe tests**), [`scripts/verify_deployed_bytecode.mjs`](./scripts/verify_deployed_bytecode.mjs), [`frontend/src/__tests__/`](./frontend/src/__tests__) (**54 Vitest tests**), [`keeper/src/__tests__/`](./keeper/src/__tests__) (**10 Vitest tests**), [`backend/`](./backend) (**30 Cargo tests**), [`deploy/tests/test_deploy.sh`](./deploy/tests/test_deploy.sh) | 512-bit LND invariant & directional solvency checks, 64-order batch settlement (`evm_settle_full_64_order_batch`), EIP-1153 reentrancy guard, blacklist-safe pull claims, LP slippage + `MINIMUM_LIQUIDITY` burn, commit-slot reservation, and byte-for-byte Sepolia bytecode verification. |
+| **Fe-specific value** | [`src/clearing.fe`](./src/clearing.fe) (`uses ()`), `BatchClock` / `MockClock` in [`src/lib.fe`](./src/lib.fe) & [`src/faucet.fe`](./src/faucet.fe) (9 `effect_*` tests), `std::evm::mutex::Mutex`, `std::evm::eip712` & `is_valid_signature_now` in [`src/intent.fe`](./src/intent.fe), `core::fixed::Wad`, `std::evm::multicall::MulticallMsg`, and [Fe `26.5.0` Tooling Feedback](#fe-2650-tooling-feedback) | Compiler-enforced effect purity in the pricing kernel, deterministic effect-injected clock tests without cheatcodes, Cancun `TLOAD`/`TSTORE` mutex, stdlib EOA + ERC-1271 verification, granular `uses (...)` projections, and measured Cancun vs. Sepolia EIP-8037 gas analysis. |
+| **Originality** | [`src/clearing.fe`](./src/clearing.fe), [`src/lib.fe`](./src/lib.fe), [`src/tests.fe`](./src/tests.fe) (`proof_mev_sandwich_zero_profit`, `property_order_permutation_invariance`, `evm_commit_reveal_bond_refund_to_stateful_receiver`) | On-chain Fe `26.5.0` Hybrid CoW + FM-AMM uniform-clearing batch auction ($p^* = (R_y + 2 D_y)/(R_x + 2 S_x)$) uniting Direct, Sealed Commit-Reveal (with 200k-gas smart-wallet bond refund + permissionless slasher bounty), and EIP-712/ERC-1271 intents in one contract. |
+| **Usefulness** | [`config/deployment.json`](./config/deployment.json), [`frontend/src/components/SimpleExperience.tsx`](./frontend/src/components/SimpleExperience.tsx), [`frontend/src/components/OrderTicket.tsx`](./frontend/src/components/OrderTicket.tsx), [`frontend/src/components/SandwichSimulationModal.tsx`](./frontend/src/components/SandwichSimulationModal.tsx), [`keeper/`](./keeper), [`deploy.sh`](./deploy.sh) | Zero-backend Sepolia web app with guided **Simple** mode (Swap, Earn, Faucet, gas onboarding, aggregated Collect), full **Pro** terminal (top balance/approval strip, 3 order modes, depth chart, honest 3-column MEV simulator + live trade-size table), optional trustless keeper/relayer, and one-script HTTPS deployment. |
+| **Documentation / demo** | [`frontend/src/components/docs/DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx), [`frontend/src/components/docs/DocsAnimations.tsx`](./frontend/src/components/docs/DocsAnimations.tsx), [`frontend/src/__tests__/labelParity.test.tsx`](./frontend/src/__tests__/labelParity.test.tsx), [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md), [`docs/VERIFICATION.md`](./docs/VERIFICATION.md), [`docs/RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`docs/screenshots/`](./docs/screenshots) | In-app `/docs` (`#/docs`) with plain-English User Guide, Developer Reference, 5 interactive CSS/SVG visuals, Threat Matrix, and Glossary; automated UI button label parity test across `/docs` and `README.md`; verified fresh-clone test transcript; and real Sepolia screenshots. |
 
 ---
 
@@ -124,12 +147,12 @@ flowchart TB
 | [`src/tests.fe`](./src/tests.fe) | **69 Fe tests** covering clearing math, properties, MEV zero-profit proof, `MockClock` transitions (batches, LP locks, faucet, slashing), full EVM lifecycles, 64-order settlement, and security revert boundaries. |
 | [`config/deployment.json`](./config/deployment.json) | Single source of truth for live Ethereum Sepolia contract addresses, token metadata, market windows, and faucet config. |
 | [`deployments/sepolia.json`](./deployments/sepolia.json) | Full Sepolia deployment manifest with tx hashes, block numbers, gas usage, and Etherscan links. |
-| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**53 Vitest tests**). |
+| [`frontend/`](./frontend) | React 18 + TypeScript + TailwindCSS + `viem` exchange terminal connected directly to Sepolia, including lazy-loaded in-app `/docs` (`#/docs`) (**54 Vitest tests**). |
 | [`keeper/`](./keeper) | **Optional** TypeScript + `viem` permissionless settlement keeper (`5s` grace, empty-round throttle), slasher (`60s` grace), and EIP-712 intent relayer (`POST /relay/intent`) (**10 Vitest tests**, see [`keeper/README.md`](./keeper/README.md)). |
 | [`deploy.sh`](./deploy.sh) & [`deploy/`](./deploy) | One-script Ubuntu 22.04/24.04 & Debian 12 server deployment (Caddy HTTPS + same-origin `/keeper/*` proxy, hardened systemd keeper, atomic releases, rollback & DNS wizard — see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)). |
 | [`backend/`](./backend) | Optional Rust reference solver & sequential-AMM MEV simulator (**30 Cargo tests**, see [`backend/README.md`](./backend/README.md)). |
-| [`scripts/`](./scripts) | PowerShell deployment and verification scripts (`deploy_sepolia.ps1`, `prepare_deployment.ps1`, `check_setup.ps1`). |
-| [`docs/`](./docs) | [`DEPLOYMENT.md`](./docs/DEPLOYMENT.md), [`PROJECT_STRUCTURE.md`](./docs/PROJECT_STRUCTURE.md), [`RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`design/CLEARING_LEDGER.md`](./docs/design/CLEARING_LEDGER.md), and [`screenshots/`](./docs/screenshots). |
+| [`scripts/`](./scripts) | Bytecode verification (`verify_deployed_bytecode.mjs`) and PowerShell deployment/setup scripts (`deploy_sepolia.ps1`, `prepare_deployment.ps1`, `check_setup.ps1`). |
+| [`docs/`](./docs) | [`VERIFICATION.md`](./docs/VERIFICATION.md), [`DEPLOYMENT.md`](./docs/DEPLOYMENT.md), [`PROJECT_STRUCTURE.md`](./docs/PROJECT_STRUCTURE.md), [`RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`design/CLEARING_LEDGER.md`](./docs/design/CLEARING_LEDGER.md), and [`screenshots/`](./docs/screenshots). |
 
 ---
 
@@ -183,7 +206,7 @@ Requires Node.js 20+ and `npm`. No `.env` file or local backend is needed — ad
 ```sh
 cd frontend
 npm ci
-npm test          # 53 passed; 0 failed (Vitest)
+npm test          # 54 passed; 0 failed (Vitest)
 npm run build     # tsc -b && vite build (emits lazy DocsPage chunk)
 npm run dev       # Opens http://localhost:5173 (Simple, Pro, and /docs) connected to Sepolia
 ```
@@ -218,6 +241,26 @@ cd backend
 cargo clippy --all-targets -- -D warnings
 cargo test        # 30 passed; 0 failed (20 unit + 10 integration/parity tests)
 ```
+
+---
+
+## Verification
+
+Full reproducible verification details — exact commands, tool versions (`fe`, `node`, `npm`, `cargo`), pass counts, date, verified commit SHA, and verbatim output from a fresh clone of the pushed remote — are documented in **[`docs/VERIFICATION.md`](./docs/VERIFICATION.md)**.
+
+### Deployed Bytecode Matches This Commit (`scripts/verify_deployed_bytecode.mjs`)
+
+Run `fe build && node scripts/verify_deployed_bytecode.mjs` to compare every locally compiled runtime artifact (`out/*.runtime.bin`) against live Ethereum Sepolia bytecode (`eth_getCode`) for all four contracts in [`config/deployment.json`](./config/deployment.json). Because Fe `26.5.0` (Sonatina) appends constructor immutables as a contiguous trailer after the static runtime bytecode, the verifier checks **both** exact byte-for-byte static prefix equality **and** exact byte-for-byte reconstruction of the immutable trailer from `config/deployment.json` (`0` bytes masked; exits non-zero on any single-byte mismatch):
+
+| Contract | Sepolia Address | Verified Layout (`eth_getCode`) | Static Runtime SHA-256 | Result |
+| :--- | :--- | :---: | :--- | :---: |
+| **`FairBatch`** | `0x6fa21b7ada82e8b04fca51fdc60793c3fd80265f` | `23,038 B` = `22,686 B` static + `352 B` immutables | `57cb7240176c487a...9015af35` | **PASS (4/4)** |
+| **`fWETH` (`MockERC20`)** | `0xe9903189bf3e418759feb26f11a7d1c99be0e556` | `1,594 B` = `1,530 B` static + `64 B` immutables | `b07e38cee1dddb19...8576009` | **PASS** |
+| **`fUSDC` (`MockERC20`)** | `0xbd2c54af6dd7e5e14d5b97d393eb2c8e2e8ebcca` | `1,594 B` = `1,530 B` static + `64 B` immutables | `b07e38cee1dddb19...8576009` | **PASS** |
+| **`Faucet`** | `0xe355220e8e9a650d082d49f130f0bfe344a792c7` | `1,346 B` = `1,186 B` static + `160 B` immutables | `8ca8ba7f408c0da1...64b0a51` | **PASS** |
+
+- **Source freeze audit since Sepolia redeploy (`ff98649`):** `git diff ff98649..HEAD -- src/ ':(exclude)src/tests.fe'` is **empty** (zero production contract changes). `git diff ff98649..HEAD -- src/` shows only `fe fmt` whitespace formatting in `src/tests.fe` (commit `d5239106`), leaving all compiled production bytecode byte-for-byte identical to the live Sepolia contracts.
+- **CI note:** Continuous integration is defined in [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) (`ubuntu-latest`, Fe `v26.5.0`, Node 22, Rust stable, ShellCheck, live bytecode verification, and full `deploy.sh` tests). GitHub Actions jobs could not start on this account due to an account billing lock, so no CI badge is displayed and the full fresh-clone verification log is provided verbatim in [`docs/VERIFICATION.md`](./docs/VERIFICATION.md).
 
 ---
 
@@ -348,7 +391,7 @@ The gap is **not** warm-vs-cold storage (both columns use separate cold transact
 - **Pre-existing work:** Started from the official contest starter template [`fe-lang/builders-challenge-starter`](https://github.com/fe-lang/builders-challenge-starter) (Oct 27, 2026, commits `0646e48..f9d9aa9`: `LICENSE`, initial `.gitignore`, initial `.github/workflows/ci.yml`, starter `README.md`, and sample `Vault`). All FairBatch smart contracts (`src/*.fe`), tests, deployment scripts, frontend, off-chain Rust reference tool, and documentation were created during the contest window (Nov 3–24, 2026).
 - **Division of team work:**
   - **Jubayir (`jubayir-hub-69`):** Initial FairBatch Fe `26.5.0` contract implementation (`clearing.fe`, `math.fe`, `intent.fe`, `lib.fe`, `mock_erc20.fe`, initial 37-test suite), off-chain Rust parity solver and MEV simulator (`backend/`), mathematical research (`docs/RESEARCH_AND_FEASIBILITY.md`), initial UI, and first Sepolia deployment.
-  - **Asif Iqbal (`Asif2902`):** Clearing Ledger frontend redesign (Simple + Pro UX), live Sepolia `viem` integration (`frontend/src/onchain/*`), EIP-7702/smart-wallet 200k-gas bond refund fix, optional LP time-locking, Sepolia `Faucet` contract, contract security hardening (slasher payouts, token access control, LP slippage & `MINIMUM_LIQUIDITY`, `BatchClock` injection, commit-slot reservation), expanded 69-test Fe suite, Cancun vs. Sepolia gas investigation, final Sepolia redeployment + live E2E verification, and documentation.
+  - **Asif Iqbal (`Asif2902`):** Clearing Ledger frontend redesign (Simple + Pro UX, in-app `/docs` + 5 interactive visuals, honest 3-column MEV simulator), live Sepolia `viem` integration (`frontend/src/onchain/*`), EIP-7702/smart-wallet 200k-gas bond refund fix, optional LP time-locking, Sepolia `Faucet` contract, contract security hardening (slasher payouts, token access control, LP slippage & `MINIMUM_LIQUIDITY`, `BatchClock` injection, commit-slot reservation), expanded 69-test Fe suite, optional TypeScript keeper & EIP-712 intent relayer (`keeper/`), one-script VPS deployment (`deploy.sh`), deployed bytecode verifier (`scripts/verify_deployed_bytecode.mjs`), Cancun vs. Sepolia gas investigation, final Sepolia redeployment + live E2E verification, and documentation.
 - **Third-party code:** Zero third-party smart contract code was copied into `src/`; contracts use only Fe `26.5.0`'s built-in `core` and `std` libraries. Off-chain tooling uses standard open-source npm (`react`, `viem`, `vite`, `typescript`, `tailwindcss`, `vitest`, `@testing-library/react`) and Cargo (`axum`, `tokio`, `serde`, `sha3`, `k256`, `reqwest`) dependencies. The FM-AMM pricing equation follows Canidio & Fritsch (2023, arXiv:2307.02074).
 - **AI assistance:** AI coding assistants were used during development for drafting, refactoring, differential testing, and documentation. All contract logic, tests, gas measurements, and live Sepolia deployments were executed, reviewed, and verified by the team against the `fe 26.5.0 (3dab95f)`, Foundry, Rust, and Node.js toolchains.
 
