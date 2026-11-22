@@ -142,3 +142,11 @@ export function formatDuration(totalSeconds: number): string {
   if (minutes > 0) return rem > 0 ? `${minutes}m ${String(rem).padStart(2, '0')}s` : `${minutes}m`;
   return `${rem}s`;
 }
+
+export function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}

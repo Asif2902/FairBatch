@@ -11,7 +11,7 @@ import type { BatchPhase, LocalSecretVaultEntry } from '../../types';
 import type { ChainCommitment, ChainOrder, RawBatchInfo } from '../../onchain/state';
 import { remainingSecondsForPhase } from '../../onchain/state';
 import type { RuntimeConfig } from '../../onchain/config';
-import { formatTokenAmount } from '../../lib/format';
+import { formatTokenAmount, pluralize } from '../../lib/format';
 import { simplePhaseName } from '../../lib/glossary';
 import { UI_LABELS } from '../../lib/uiLabels';
 
@@ -145,12 +145,10 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
           </div>
 
           <div className="text-right font-mono text-xs text-ink-muted tabular-nums">
-            <div>
-              {userOrders.length} active order{userOrders.length === 1 ? '' : 's'}
-            </div>
+            <div>{pluralize(userOrders.length, 'active order')}</div>
             {unrevealedWithSecret.length > 0 && (
               <div className="font-bold text-brass-800">
-                {unrevealedWithSecret.length} sealed awaiting reveal
+                {pluralize(unrevealedWithSecret.length, 'sealed commitment')} awaiting reveal
               </div>
             )}
           </div>

@@ -8,6 +8,7 @@ import {
   formatPrice,
   formatToken,
   getChainLabel,
+  pluralize,
   shortenAddress,
 } from '../lib/format';
 import { PRO_TOOLTIPS, proPhaseName } from '../lib/glossary';
@@ -62,9 +63,12 @@ export const ProStatsRow: React.FC<ProStatsRowProps> = ({
           <span className="font-mono text-xs font-bold text-ink">
             {proPhaseName(livePhase)}
           </span>
-          <span className="font-mono text-xs text-ink-muted tabular-nums">
-            · {state.orders.length} order{state.orders.length === 1 ? '' : 's'} ·{' '}
-            {Number(batch.commitCount)} commitment{Number(batch.commitCount) === 1 ? '' : 's'}
+          <span
+            data-testid="pro-stats-counts"
+            className="font-mono text-xs text-ink-muted tabular-nums"
+          >
+            · {pluralize(state.orders.length, 'order')} ·{' '}
+            {pluralize(Number(batch.commitCount), 'commitment')}
           </span>
         </div>
 

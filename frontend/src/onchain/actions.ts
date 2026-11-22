@@ -10,6 +10,7 @@ import {
   type TransactionReceipt,
 } from 'viem';
 import type { LocalSecretVaultEntry, OrderSide, SignedIntentArtifact } from '../types';
+import { pluralize } from '../lib/format';
 import { keccak256Utf8 } from '../lib/keccak';
 import { erc20Abi, fairBatchAbi, fairBatchEvents, faucetAbi, faucetEvents } from './abi';
 import { ensureWalletReady, getPublicClient } from './client';
@@ -822,7 +823,7 @@ export async function claimMany(
   onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; claimed: number }> {
   if (items.length === 0) throw new Error('No claims selected.');
-  onStatus?.(`Confirm collecting ${items.length} completed orders in your wallet…`);
+  onStatus?.(`Confirm collecting ${pluralize(items.length, 'completed order')} in your wallet…`);
   const calls = items.map((item) =>
     encodeFunctionData({
       abi: fairBatchAbi,

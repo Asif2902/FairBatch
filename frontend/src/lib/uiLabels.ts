@@ -25,7 +25,8 @@ export const UI_LABELS = {
 
   // Simple Collect Actions
   collectTokens: 'Collect tokens',
-  collectAllOrders: (count: number) => `Collect all ${count} orders`,
+  collectAllOrders: (count: number) =>
+    count === 1 ? 'Collect 1 order' : `Collect all ${count} orders`,
   collectAllOrdersPattern: 'Collect all N orders',
 
   // Pro Settlement, Claims & Slashing Actions

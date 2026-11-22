@@ -15,6 +15,7 @@ import {
   formatTokenAmount,
   formatUsd,
   pickReconciledDecimals,
+  pluralize,
 } from '../../lib/format';
 import { PRO_TOOLTIPS } from '../../lib/glossary';
 import { UI_LABELS } from '../../lib/uiLabels';
@@ -121,7 +122,7 @@ function summarizeReceipts(
     return `You sold ${fmtFixed(totalSold, baseDecimals)} ${config.baseSymbol} total, received ${fmtFixed(
       totalReceived,
       quoteDecimals,
-    )} ${config.quoteSymbol} total across ${distinctRounds.length} rounds (${parts} ${config.baseSymbol} → ${fmtFixed(
+    )} ${config.quoteSymbol} total across ${pluralize(distinctRounds.length, 'round')} (${parts} ${config.baseSymbol} → ${fmtFixed(
       totalReceived,
       quoteDecimals,
     )} ${config.quoteSymbol}) at weighted average price $${formatPrice(
@@ -155,7 +156,7 @@ function summarizeReceipts(
     return `You sold ${fmtFixed(totalSoldQuote, quoteDecimals)} ${config.quoteSymbol} total, received ${fmtFixed(
       totalReceivedBase,
       baseDecimals,
-    )} ${config.baseSymbol} total across ${distinctRounds.length} rounds (${parts} ${config.quoteSymbol} → ${fmtFixed(
+    )} ${config.baseSymbol} total across ${pluralize(distinctRounds.length, 'round')} (${parts} ${config.quoteSymbol} → ${fmtFixed(
       totalReceivedBase,
       baseDecimals,
     )} ${config.baseSymbol}) at weighted average price $${formatPrice(
@@ -172,9 +173,9 @@ function summarizeReceipts(
     (acc, i) => acc + (i.side === 'SellBase' ? i.payout_out : i.refund_in),
     0,
   );
-  return `You have ${items.length} completed orders ${
+  return `You have ${pluralize(items.length, 'completed order')} ${
     isMultiRound
-      ? `across ${distinctRounds.length} rounds (prices differ by round)`
+      ? `across ${pluralize(distinctRounds.length, 'round')} (prices differ by round)`
       : `in Round #${distinctRounds[0]}`
   } ready to collect (${fmtFixed(totalBaseOut, baseDecimals)} ${config.baseSymbol} + ${fmtFixed(
     totalQuoteOut,
@@ -317,8 +318,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
         <div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-label text-pine-800">
           <Coins className="h-4 w-4" aria-hidden="true" />
           <span>
-            Ready to collect · {orderedUnclaimed.length} completed order
-            {orderedUnclaimed.length === 1 ? '' : 's'}
+            Ready to collect · {pluralize(orderedUnclaimed.length, 'completed order')}
           </span>
         </div>
         <h2 className="mt-2 font-display text-2xl font-bold text-ink">

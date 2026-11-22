@@ -28,6 +28,7 @@ import {
   formatPrice,
   formatSignedOrderAmount,
   formatTokenAmount,
+  pluralize,
   shortenAddress,
 } from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
@@ -576,42 +577,45 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
 
         {/* Amount */}
         <div>
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
             <label htmlFor="ticket-amount-input" className="eyebrow">
               You pay
             </label>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span
-                data-testid="order-ticket-balance"
-                className="font-mono text-[11px] text-ink-muted tabular-nums"
-              >
-                Balance:{' '}
-                <strong className="text-ink">
-                  {formatTokenAmount(activePayBalance, activePayKind)} {activePaySymbol}
-                </strong>
-              </span>
-              {QUICK_PCT_CHIPS.map((chip) => (
-                <button
-                  key={chip.label}
-                  type="button"
-                  data-testid={`order-ticket-pct-${Math.round(chip.frac * 100)}`}
-                  disabled={activePayBalance <= 0}
-                  onClick={() => applyBalanceFraction(chip.frac)}
-                  className="border border-rule bg-paper-bright px-1.5 py-0.5 font-mono text-[10px] text-ink-muted transition hover:border-ink hover:text-ink disabled:opacity-40"
-                >
-                  {chip.label}
-                </button>
-              ))}
+            <span
+              data-testid="order-ticket-balance"
+              className="font-mono text-[11px] text-ink-muted tabular-nums"
+            >
+              Balance:{' '}
+              <strong className="text-ink">
+                {formatTokenAmount(activePayBalance, activePayKind)} {activePaySymbol}
+              </strong>
+            </span>
+          </div>
+          <div
+            data-testid="order-ticket-quick-chips"
+            className="mt-1.5 grid grid-cols-5 gap-1"
+          >
+            {QUICK_PCT_CHIPS.map((chip) => (
               <button
+                key={chip.label}
                 type="button"
-                data-testid="order-ticket-max"
-                onClick={handleSetMax}
+                data-testid={`order-ticket-pct-${Math.round(chip.frac * 100)}`}
                 disabled={activePayBalance <= 0}
-                className="border border-rule-strong bg-paper-bright px-1.5 py-0.5 font-mono text-[10px] font-bold text-vermilion-700 transition hover:border-vermilion-600 disabled:opacity-40"
+                onClick={() => applyBalanceFraction(chip.frac)}
+                className="min-h-[28px] whitespace-nowrap border border-rule bg-paper-bright px-1 py-0.5 text-center font-mono text-[10px] text-ink-muted transition hover:border-ink hover:text-ink disabled:opacity-40"
               >
-                Max
+                {chip.label}
               </button>
-            </div>
+            ))}
+            <button
+              type="button"
+              data-testid="order-ticket-max"
+              onClick={handleSetMax}
+              disabled={activePayBalance <= 0}
+              className="min-h-[28px] whitespace-nowrap border border-rule-strong bg-paper-bright px-1 py-0.5 text-center font-mono text-[10px] font-bold text-vermilion-700 transition hover:border-vermilion-600 disabled:opacity-40"
+            >
+              Max
+            </button>
           </div>
           <div className="mt-1.5 flex items-baseline gap-2 border-b-2 border-ink pb-1">
             <input
@@ -1124,9 +1128,12 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
         <div className="border-t border-rule pt-3">
           <div className="flex items-baseline justify-between gap-2">
             <span className="eyebrow">Queued in Batch #{state.batch_id}</span>
-            <span className="font-mono text-[10px] text-ink-faint tabular-nums">
-              {state.orders.length} orders ·{' '}
-              {state.commitments.filter((c) => !c.revealed).length} sealed
+            <span
+              data-testid="order-ticket-queued-summary"
+              className="font-mono text-[10px] text-ink-faint tabular-nums"
+            >
+              {pluralize(state.orders.length, 'order')} ·{' '}
+              {pluralize(state.commitments.filter((c) => !c.revealed).length, 'sealed commitment')}
             </span>
           </div>
 

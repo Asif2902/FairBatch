@@ -524,10 +524,13 @@ describe('FairBatch on-chain terminal', () => {
     expect(screen.getByTestId('pro-approval-base')).toHaveTextContent('Approved');
     expect(screen.getByTestId('pro-approval-quote')).toHaveTextContent('Approved');
 
-    // Order slip starts empty (placeholder) and provides 25/50/75/100% + Max balance chips
+    // Order slip starts empty (placeholder) and keeps 25/50/75/100%/Max chips on a single 5-column row
     const payInput = screen.getByLabelText(/You pay/i) as HTMLInputElement;
     expect(payInput.value).toBe('');
     expect(screen.getByTestId('order-ticket-balance')).toHaveTextContent('Balance: 5.00 fWETH');
+    const chipsRow = screen.getByTestId('order-ticket-quick-chips');
+    expect(chipsRow).toHaveClass('grid-cols-5');
+    expect(chipsRow.querySelectorAll('button')).toHaveLength(5);
     fireEvent.click(screen.getByTestId('order-ticket-pct-25'));
     expect(payInput).toHaveValue(1.25);
     fireEvent.click(screen.getByTestId('order-ticket-pct-50'));
@@ -753,6 +756,52 @@ describe('FairBatch on-chain terminal', () => {
     expect(screen.queryByTestId('pro-keeper-auto-settling')).not.toBeInTheDocument();
     expect(screen.getByTestId('settle-batch-button')).toHaveTextContent(
       /Settle Batch #8 & open next/i,
+    );
+  });
+
+  it('pluralizes orders and commitments accurately across Pro stats row and order slip queue', () => {
+    const oneSnap = makeSnapshot('Open', ALICE);
+    oneSnap.batch.commitCount = 1n;
+    oneSnap.state.orders = [
+      {
+        order_id: 0,
+        trader: ALICE,
+        label: 'Alice',
+        side: 'SellBase',
+        amount_in: 0.5,
+        limit_price: 2700,
+        submission_type: 'Direct',
+        is_attacker: false,
+      },
+    ];
+    oneSnap.state.commitments = [
+      {
+        commit_id: 0,
+        trader: ALICE,
+        commitment_hash: `0x${'11'.repeat(32)}`,
+        bond_eth: 0.0001,
+        revealed: false,
+        slashed: false,
+      },
+    ];
+    controller = makeController({ account: ALICE, snapshot: oneSnap });
+    const { rerender } = renderPro();
+
+    expect(screen.getByTestId('pro-stats-counts')).toHaveTextContent('1 order · 1 commitment');
+    expect(screen.getByTestId('order-ticket-queued-summary')).toHaveTextContent(
+      '1 order · 1 sealed commitment',
+    );
+
+    const zeroSnap = makeSnapshot('Open', ALICE);
+    zeroSnap.batch.commitCount = 0n;
+    zeroSnap.state.orders = [];
+    zeroSnap.state.commitments = [];
+    controller = makeController({ account: ALICE, snapshot: zeroSnap });
+    rerender(<App />);
+
+    expect(screen.getByTestId('pro-stats-counts')).toHaveTextContent('0 orders · 0 commitments');
+    expect(screen.getByTestId('order-ticket-queued-summary')).toHaveTextContent(
+      '0 orders · 0 sealed commitments',
     );
   });
 });

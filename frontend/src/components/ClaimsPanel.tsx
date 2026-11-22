@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import type { ClaimableDto } from '../types';
 import type { RuntimeConfig } from '../onchain/config';
-import { formatTokenAmount, shortenAddress } from '../lib/format';
+import { formatTokenAmount, pluralize, shortenAddress } from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
 import { UI_LABELS } from '../lib/uiLabels';
 import { InfoTooltip } from './InfoTooltip';
@@ -79,7 +79,7 @@ export const ClaimsPanel: React.FC<ClaimsPanelProps> = ({
       await onClaimMany(myUnclaimed);
       setToast({
         kind: 'success',
-        text: `Multicall claimed ${myUnclaimed.length} settled receipt(s).`,
+        text: `Multicall claimed ${pluralize(myUnclaimed.length, 'settled receipt')}.`,
       });
     } catch (err) {
       setToast({
