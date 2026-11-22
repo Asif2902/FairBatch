@@ -1181,6 +1181,33 @@ compare_eth_lt() {
   ' "$eth_a" "$eth_b"
 }
 
+env_file_exists() {
+  local target="$1"
+  if [[ -f "$target" ]]; then
+    return 0
+  fi
+  if [[ "$MOCK_MODE" != "1" && "${EUID:-$(id -u)}" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+    run_priv test -f "$target"
+    return $?
+  fi
+  return 1
+}
+
+parse_env_file_priv() {
+  local target="$1"
+  if [[ -r "$target" ]]; then
+    parse_env_file_safe "$target"
+    return $?
+  fi
+  local tmp_read
+  tmp_read="$(umask 077 && mktemp)"
+  run_priv cat "$target" > "$tmp_read"
+  parse_env_file_safe "$tmp_read"
+  local rc=$?
+  rm -f "$tmp_read"
+  return "$rc"
+}
+
 verify_env_and_chain() {
   log_step "2. Environment, Secret & On-Chain Checks"
   local template="${REPO_DIR}/deploy/env.example"
@@ -1190,17 +1217,8 @@ verify_env_and_chain() {
     exit 1
   fi
 
-  if [[ -f "$ENV_FILE" ]]; then
-    if [[ "$MOCK_MODE" != "1" && "${EUID:-$(id -u)}" -ne 0 && ! -r "$ENV_FILE" ]]; then
-      # Copy temporarily via sudo to validate without echoing values
-      local tmp_read
-      tmp_read="$(umask 077 && mktemp)"
-      run_priv cat "$ENV_FILE" > "$tmp_read"
-      parse_env_file_safe "$tmp_read"
-      rm -f "$tmp_read"
-    else
-      parse_env_file_safe "$ENV_FILE"
-    fi
+  if env_file_exists "$ENV_FILE"; then
+    parse_env_file_priv "$ENV_FILE"
     log_ok "Loaded environment keys from ${ENV_FILE} (values redacted)."
   else
     log_warn "Environment file not found at ${ENV_FILE}."
@@ -1985,7 +2003,14 @@ EOF
 }
 
 load_deploy_conf() {
-  [[ -f "$CONF_FILE" ]] || return 0
+  env_file_exists "$CONF_FILE" || return 0
+  local conf_src="$CONF_FILE"
+  local tmp_conf=""
+  if [[ ! -r "$CONF_FILE" ]]; then
+    tmp_conf="$(umask 077 && mktemp)"
+    run_priv cat "$CONF_FILE" > "$tmp_conf"
+    conf_src="$tmp_conf"
+  fi
   local line key val
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
@@ -2001,7 +2026,8 @@ load_deploy_conf() {
       DEPLOY_SERVER_IPV4) SERVER_IPV4="$val" ;;
       DEPLOY_LAST_RELEASE) ACTIVE_RELEASE_ID="$val" ;;
     esac
-  done < "$CONF_FILE"
+  done < "$conf_src"
+  [[ -n "$tmp_conf" ]] && rm -f "$tmp_conf"
 }
 
 print_final_summary() {
@@ -2053,16 +2079,8 @@ cmd_status() {
   current_rel="$(resolve_active_release_id)"
   ACTIVE_RELEASE_ID="$current_rel"
 
-  if [[ -f "$ENV_FILE" ]]; then
-    if [[ "$MOCK_MODE" != "1" && "${EUID:-$(id -u)}" -ne 0 && ! -r "$ENV_FILE" ]]; then
-      local tmp_read
-      tmp_read="$(umask 077 && mktemp)"
-      run_priv cat "$ENV_FILE" > "$tmp_read"
-      parse_env_file_safe "$tmp_read"
-      rm -f "$tmp_read"
-    else
-      parse_env_file_safe "$ENV_FILE"
-    fi
+  if env_file_exists "$ENV_FILE"; then
+    parse_env_file_priv "$ENV_FILE"
     DEPLOY_KEEPER_PORT="${ENV_VALUES[KEEPER_PORT]:-$DEPLOY_KEEPER_PORT}"
     if KEEPER_PUBLIC_ADDRESS="$(derive_public_address_from_env 2>/dev/null)"; then
       local rpc_url="${ENV_VALUES[KEEPER_RPC_URL]:-}"
