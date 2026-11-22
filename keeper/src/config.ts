@@ -178,7 +178,7 @@ export function loadKeeperConfig(argv: string[] = process.argv.slice(2)): Keeper
     dryRun,
     pollMs: Math.floor(parseNumber(process.env.KEEPER_POLL_MS, 2_000, 500)),
     graceSeconds: Math.floor(parseNumber(process.env.KEEPER_GRACE_SECONDS, 5, 0)),
-    emptyRoundMinutes: parseNumber(process.env.KEEPER_EMPTY_ROUND_MINUTES, 10, 0),
+    emptyRoundMinutes: parseNumber(process.env.KEEPER_EMPTY_ROUND_MINUTES, 0, 0),
     slashEnabled: parseBool(process.env.KEEPER_SLASH, true),
     slashGraceSeconds: Math.floor(parseNumber(process.env.KEEPER_SLASH_GRACE_SECONDS, 60, 0)),
     minBalanceWei: parseEther(String(parseNumber(process.env.KEEPER_MIN_BALANCE_ETH, 0.005, 0))),

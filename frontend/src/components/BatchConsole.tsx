@@ -182,6 +182,17 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
             >
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cobalt-700" aria-hidden="true" />
               <span>Settling automatically in about {keeperGraceSeconds}s.</span>
+              <button
+                type="button"
+                data-testid="settle-batch-button-manual"
+                disabled={!account || busy}
+                onClick={() => void onSettle()}
+                className="ml-auto shrink-0 whitespace-nowrap text-xs font-bold text-cobalt-800 underline decoration-dotted underline-offset-2 transition hover:text-ink disabled:opacity-50"
+              >
+                {busyAction === 'settle'
+                  ? 'Settling batch…'
+                  : `Don't wait — ${UI_LABELS.settleBatchAndOpenNext(Number(batch.batchId))}`}
+              </button>
             </div>
           ) : (
             <div className="space-y-2.5 border-l-2 border-vermilion-500 bg-vermilion-50 px-3.5 py-3">

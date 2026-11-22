@@ -260,6 +260,15 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
             >
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cobalt-700" aria-hidden="true" />
               <span>Settling automatically in about {keeperGraceSeconds}s.</span>
+              <button
+                type="button"
+                data-testid="simple-finalize-round-manual"
+                disabled={busy}
+                onClick={() => void onSettleRound()}
+                className="ml-auto shrink-0 whitespace-nowrap text-xs font-bold text-cobalt-800 underline decoration-dotted underline-offset-2 transition hover:text-ink disabled:opacity-50"
+              >
+                {busyAction === 'settle' ? 'Starting…' : `Don't wait — ${UI_LABELS.startNextRound}`}
+              </button>
             </div>
           ) : (
             <button

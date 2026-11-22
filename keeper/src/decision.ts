@@ -40,7 +40,8 @@ export type SettlementDecision =
  *
  * - Non-empty Ready batches wait `graceSeconds` (default 5s) past `revealDeadline`
  *   so any public user can settle first.
- * - Empty Ready batches settle at most once per `emptyRoundMinutes` (default 10m)
+ * - Empty Ready batches wait the same grace period; if `emptyRoundMinutes` > 0 they are
+ *   additionally throttled to once per that many minutes (default 0 = no throttle)
  *   and only when the keeper balance is >= `minBalanceWei`.
  */
 export function decideSettlementAction(input: SettlementPolicyInput): SettlementDecision {
