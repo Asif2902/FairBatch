@@ -395,6 +395,31 @@ describe('Hybrid CoW + FM-AMM Batch Clearing & Sequential Baseline Math', () => 
     expect(mediumSim.frontRunAmount).toBeLessThan(sellSim.frontRunAmount);
     expect(mediumSim.ammSandwichedPrice).toBeGreaterThanOrEqual(mediumSim.limitPrice - 1e-6);
 
+    // Very tight slippage tolerance (0.5% and 1%):
+    // - Small retail trade (0.1 fWETH) stays valid without a bot (~0.40% impact) and is unprofitable to attack ($0 bot profit)
+    // - Large trade (2 fWETH) reverts even without a bot (~2.22% impact > 1%)
+    const tightRetail05 = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 0.1,
+      slippagePct: 0.5,
+    });
+    expect(tightRetail05.victimExceedsSlippageWithoutAttack).toBe(false);
+    expect(tightRetail05.botProfitable).toBe(false);
+    expect(tightRetail05.ammBotProfitQuote).toBe(0);
+
+    const tightLarge1 = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 1,
+    });
+    expect(tightLarge1.victimExceedsSlippageWithoutAttack).toBe(true);
+    expect(tightLarge1.frontRunAmount).toBe(0);
+    expect(tightLarge1.ammBotProfitQuote).toBe(0);
+
     // Very tight slippage tolerance (2%): even unattacked 0.30% AMM exceeds 2% on 2/101.54 pool -> no sandwich fits
     const tightSim = runSandwichSimulation({
       rx: 101.5442,

@@ -24,7 +24,7 @@ interface SandwichSimulationModalProps {
   onClose: () => void;
 }
 
-const SLIPPAGE_PRESETS = [2, 5, 8, 12] as const;
+const SLIPPAGE_PRESETS = [0.5, 1, 2, 5, 8, 12] as const;
 
 export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = ({
   isOpen,
@@ -203,7 +203,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                 Slippage cap ({sim.slippagePct}% · {side === 'SellBase' ? 'min' : 'max'} $
                 {formatPrice(sim.limitPrice, 2)})
               </span>
-              <div className="mt-2 grid grid-cols-4 gap-1">
+              <div className="mt-2 grid grid-cols-3 gap-1 sm:grid-cols-6">
                 {SLIPPAGE_PRESETS.map((pct) => (
                   <button
                     key={pct}
@@ -211,7 +211,7 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                     data-testid={`sim-slippage-${pct}`}
                     aria-pressed={slippagePct === pct}
                     onClick={() => setSlippagePct(pct)}
-                    className={`min-h-[38px] border font-mono text-xs font-bold transition ${
+                    className={`min-h-[38px] border font-mono text-[11px] font-bold transition ${
                       slippagePct === pct
                         ? 'border-ink bg-ink text-paper'
                         : 'border-rule-strong bg-paper-bright text-ink-soft hover:border-ink'
@@ -236,7 +236,9 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                 <span>Normal AMM, no attacker</span>
               </div>
               <div className="mt-1 font-mono text-[11px] text-ink-muted">
-                0.30% fee · constant-product x·y=k
+                {sim.victimExceedsSlippageWithoutAttack
+                  ? `Would revert at ${sim.slippagePct}% limit (even with no bot)`
+                  : '0.30% fee · constant-product x·y=k'}
               </div>
               <dl className="mt-3 space-y-2 text-sm">
                 <div className="flex justify-between gap-2">
@@ -274,10 +276,12 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                 <span>Normal AMM + sandwich bot</span>
               </div>
               <div className="mt-1 font-mono text-[11px] text-ink-muted tabular-nums">
-                Capped at {sim.slippagePct}% limit · bot size:{' '}
-                {sim.botProfitable
-                  ? `${formatTokenAmount(sim.frontRunAmount, botKind)} ${botUnit}`
-                  : `0 ${botUnit} (unprofitable)`}
+                Capped at {sim.slippagePct}% limit ·{' '}
+                {sim.victimExceedsSlippageWithoutAttack
+                  ? 'reverts even without a bot'
+                  : sim.botProfitable
+                    ? `bot size: ${formatTokenAmount(sim.frontRunAmount, botKind)} ${botUnit}`
+                    : `bot size: 0 ${botUnit} (unprofitable)`}
               </div>
               <dl className="mt-3 space-y-2 text-sm">
                 <div className="flex justify-between gap-2">
@@ -479,14 +483,26 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                           </span>
                         </td>
                         <td className="px-2.5 py-1.5 text-right text-ink">
-                          {formatTokenAmount(row.sim.ammPlainOut, outKind)} {outSym}
+                          {row.sim.victimExceedsSlippageWithoutAttack ? (
+                            <span className="text-brass-900">Reverts (&gt;{sim.slippagePct}%)</span>
+                          ) : (
+                            <>
+                              {formatTokenAmount(row.sim.ammPlainOut, outKind)} {outSym}
+                            </>
+                          )}
                         </td>
                         <td className="px-2.5 py-1.5 text-right text-vermilion-800">
-                          {formatTokenAmount(row.sim.ammSandwichedOut, outKind)} {outSym}
-                          {row.sim.ammBotProfitQuote > 0 && (
-                            <span className="ml-1 text-[10px] text-ink-muted">
-                              (bot {formatUsd(row.sim.ammBotProfitQuote, 0)})
-                            </span>
+                          {row.sim.victimExceedsSlippageWithoutAttack ? (
+                            <span className="text-brass-900">Reverts (no bot)</span>
+                          ) : (
+                            <>
+                              {formatTokenAmount(row.sim.ammSandwichedOut, outKind)} {outSym}
+                              {row.sim.ammBotProfitQuote > 0 && (
+                                <span className="ml-1 text-[10px] text-ink-muted">
+                                  (bot {formatUsd(row.sim.ammBotProfitQuote, 0)})
+                                </span>
+                              )}
+                            </>
                           )}
                         </td>
                         <td className="px-2.5 py-1.5 text-right font-bold text-pine-800">
@@ -507,6 +523,14 @@ export const SandwichSimulationModal: React.FC<SandwichSimulationModalProps> = (
                 </tbody>
               </table>
             </div>
+            <p
+              data-testid="sim-slippage-sensitivity-note"
+              className="text-xs leading-relaxed text-ink-soft"
+            >
+              Sandwich profit depends on trade size and slippage tolerance; with tight tolerance
+              small trades are not profitable to attack, and large trades may revert even without a
+              bot.
+            </p>
             <p
               data-testid="sim-breakeven-note"
               className="text-xs leading-relaxed text-ink-muted"

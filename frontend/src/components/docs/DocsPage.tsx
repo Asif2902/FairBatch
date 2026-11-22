@@ -141,6 +141,8 @@ const SEPOLIA_E2E_TXS = [
   { label: 'multicall([claim(3, 1), claim(3, 2)])', hash: '0xa6d27d2179434b5e8ac0778e1d8263022ee9a2f78ba0a66debd9d851d811dd3e', cancunGas: '120,150', sepoliaGas: '158,150' },
 ] as const;
 
+const GUIDE_SLIPPAGE_PRESETS = [0.5, 1, 2, 5, 8, 12] as const;
+
 export const DocsPage: React.FC<DocsPageProps> = ({
   config,
   rx,
@@ -149,6 +151,7 @@ export const DocsPage: React.FC<DocsPageProps> = ({
   onBackToExchange,
 }) => {
   const [activeSection, setActiveSection] = useState<DocsSectionId>('user');
+  const [guideSlippagePct, setGuideSlippagePct] = useState<number>(5);
 
   useEffect(() => {
     if (!anchor) return;
@@ -181,9 +184,9 @@ export const DocsPage: React.FC<DocsPageProps> = ({
         rx: Math.max(1, rx),
         ry: Math.max(1, ry),
         side: 'SellBase',
-        slippagePct: 8,
+        slippagePct: guideSlippagePct,
       }),
-    [rx, ry],
+    [rx, ry, guideSlippagePct],
   );
   const liveBreakEven = useMemo(
     () => computeUnattackedBreakEvenSize(Math.max(1, rx)),
@@ -440,12 +443,36 @@ export const DocsPage: React.FC<DocsPageProps> = ({
               <h3 className="font-display text-base font-bold text-ink">
                 Live trade-size comparison (computed from current Sepolia reserves)
               </h3>
-              <p className="text-xs text-ink-soft">
-                One-sided {config.baseSymbol} sells into current reserves (
-                {formatTokenAmount(rx, 'base')} {config.baseSymbol} / {formatPrice(ry, 0)}{' '}
-                {config.quoteSymbol}), comparing an unattacked 0.30% x·y=k AMM, the same AMM under
-                a sandwich bot capped at 8% slippage, and FairBatch uniform clearing:
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-ink-soft">
+                  One-sided {config.baseSymbol} sells into current reserves (
+                  {formatTokenAmount(rx, 'base')} {config.baseSymbol} / {formatPrice(ry, 0)}{' '}
+                  {config.quoteSymbol}), comparing an unattacked 0.30% x·y=k AMM, the same AMM under
+                  a sandwich bot capped at {guideSlippagePct}% slippage, and FairBatch uniform
+                  clearing:
+                </p>
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="font-mono text-[11px] font-bold text-ink-muted">
+                    Slippage:
+                  </span>
+                  {GUIDE_SLIPPAGE_PRESETS.map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      data-testid={`docs-guide-slippage-${pct}`}
+                      aria-pressed={guideSlippagePct === pct}
+                      onClick={() => setGuideSlippagePct(pct)}
+                      className={`min-h-[28px] border px-2 font-mono text-[11px] font-bold transition ${
+                        guideSlippagePct === pct
+                          ? 'border-ink bg-ink text-paper'
+                          : 'border-rule-strong bg-paper-soft text-ink-soft hover:border-ink'
+                      }`}
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="overflow-x-auto border border-rule">
                 <table
                   data-testid="docs-size-table"
@@ -455,7 +482,9 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                     <tr>
                       <th className="px-3 py-2">Sell size ({config.baseSymbol})</th>
                       <th className="px-3 py-2 text-right">Normal AMM (no attacker)</th>
-                      <th className="px-3 py-2 text-right">AMM + capped bot (8%)</th>
+                      <th className="px-3 py-2 text-right">
+                        AMM + capped bot ({guideSlippagePct}%)
+                      </th>
                       <th className="px-3 py-2 text-right">FairBatch</th>
                       <th className="px-3 py-2 text-right">FB vs no-attack</th>
                     </tr>
@@ -470,15 +499,28 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                           </span>
                         </td>
                         <td className="px-3 py-2 text-right text-ink">
-                          {formatTokenAmount(row.sim.ammPlainOut, 'quote')} {config.quoteSymbol}
+                          {row.sim.victimExceedsSlippageWithoutAttack ? (
+                            <span className="text-brass-900">Reverts (&gt;{guideSlippagePct}%)</span>
+                          ) : (
+                            <>
+                              {formatTokenAmount(row.sim.ammPlainOut, 'quote')}{' '}
+                              {config.quoteSymbol}
+                            </>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right text-vermilion-800">
-                          {formatTokenAmount(row.sim.ammSandwichedOut, 'quote')}{' '}
-                          {config.quoteSymbol}
-                          {row.sim.ammBotProfitQuote > 0 && (
-                            <span className="ml-1 text-[10px] text-ink-muted">
-                              (bot {formatUsd(row.sim.ammBotProfitQuote, 0)})
-                            </span>
+                          {row.sim.victimExceedsSlippageWithoutAttack ? (
+                            <span className="text-brass-900">Reverts (no bot)</span>
+                          ) : (
+                            <>
+                              {formatTokenAmount(row.sim.ammSandwichedOut, 'quote')}{' '}
+                              {config.quoteSymbol}
+                              {row.sim.ammBotProfitQuote > 0 && (
+                                <span className="ml-1 text-[10px] text-ink-muted">
+                                  (bot {formatUsd(row.sim.ammBotProfitQuote, 0)})
+                                </span>
+                              )}
+                            </>
                           )}
                         </td>
                         <td className="px-3 py-2 text-right font-bold text-pine-800">
@@ -499,6 +541,14 @@ export const DocsPage: React.FC<DocsPageProps> = ({
                   </tbody>
                 </table>
               </div>
+              <p
+                data-testid="docs-guide-sensitivity-note"
+                className="text-xs leading-relaxed text-ink-soft"
+              >
+                Sandwich profit depends on trade size and slippage tolerance; with tight tolerance
+                small trades are not profitable to attack, and large trades may revert even without
+                a bot.
+              </p>
               <p data-testid="docs-breakeven-note" className="text-xs leading-relaxed text-ink-muted">
                 <strong>Break-even size note:</strong> For a one-sided swap with no opposing CoW
                 orders, FairBatch&apos;s uniform clearing output{' '}

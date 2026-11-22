@@ -423,6 +423,15 @@ describe('Simple mode end-to-end flows', () => {
     expect(screen.getByTestId('sim-size-table')).toHaveTextContent(/0\.05 fWETH/i);
     expect(screen.getByTestId('sim-size-table')).toHaveTextContent(/2 fWETH/i);
     expect(screen.getByTestId('sim-breakeven-note')).toHaveTextContent(/0\.30%/i);
+    expect(screen.getByTestId('sim-slippage-sensitivity-note')).toHaveTextContent(
+      'Sandwich profit depends on trade size and slippage tolerance; with tight tolerance small trades are not profitable to attack, and large trades may revert even without a bot.',
+    );
+    // 0.5% and 1% tight slippage presets are available and mark large trades as reverting even without a bot
+    fireEvent.click(screen.getByTestId('sim-slippage-0.5'));
+    expect(screen.getByTestId('sim-size-table')).toHaveTextContent(/Reverts \(>0\.5%\)/i);
+    fireEvent.click(screen.getByTestId('sim-slippage-1'));
+    expect(screen.getByTestId('sim-size-table')).toHaveTextContent(/Reverts \(>1%\)/i);
+    fireEvent.click(screen.getByTestId('sim-slippage-8'));
     expect(screen.getByTestId('sandwich-reconciliation').textContent).not.toMatch(
       /kept in your pocket/i,
     );
@@ -577,6 +586,13 @@ describe('Simple mode end-to-end flows', () => {
     expect(screen.getByTestId('docs-size-table')).toHaveTextContent(/0\.05 fWETH/i);
     expect(screen.getByTestId('docs-size-table')).toHaveTextContent(/2 fWETH/i);
     expect(screen.getByTestId('docs-breakeven-note')).toHaveTextContent(/0\.30%/i);
+    expect(screen.getByTestId('docs-guide-sensitivity-note')).toHaveTextContent(
+      'Sandwich profit depends on trade size and slippage tolerance; with tight tolerance small trades are not profitable to attack, and large trades may revert even without a bot.',
+    );
+    fireEvent.click(screen.getByTestId('docs-guide-slippage-0.5'));
+    expect(screen.getByTestId('docs-size-table')).toHaveTextContent(/Reverts \(>0\.5%\)/i);
+    fireEvent.click(screen.getByTestId('docs-guide-slippage-1'));
+    expect(screen.getByTestId('docs-size-table')).toHaveTextContent(/Reverts \(>1%\)/i);
     expect(screen.getByText(/Is FairBatch always cheaper\?/i)).toBeInTheDocument();
     expect(screen.getByText(/Not fully free — what you still pay gas for/i)).toBeInTheDocument();
 
@@ -591,6 +607,16 @@ describe('Simple mode end-to-end flows', () => {
     // Visuals & Animations (5 diagrams)
     fireEvent.click(screen.getByTestId('docs-tab-visuals'));
     expect(screen.getByTestId('docs-anim-sandwich')).toBeInTheDocument();
+    // Visual 1 defaults to 5% (valid without a bot for 2 fWETH) and exposes 0.5% / 1% options + sensitivity sentence
+    expect(screen.getByTestId('docs-visual1-slippage-5')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('docs-anim-sandwich')).not.toHaveTextContent(/Reverts \(>5%\)/i);
+    expect(screen.getByTestId('docs-visual1-sensitivity-note')).toHaveTextContent(
+      'Sandwich profit depends on trade size and slippage tolerance; with tight tolerance small trades are not profitable to attack, and large trades may revert even without a bot.',
+    );
+    fireEvent.click(screen.getByTestId('docs-visual1-slippage-0.5'));
+    expect(screen.getByTestId('docs-anim-sandwich')).toHaveTextContent(/Reverts \(>0\.5%\)/i);
+    fireEvent.click(screen.getByTestId('docs-visual1-slippage-1'));
+    expect(screen.getByTestId('docs-anim-sandwich')).toHaveTextContent(/Reverts \(>1%\)/i);
     expect(screen.getByTestId('docs-anim-lifecycle')).toBeInTheDocument();
     expect(screen.getByTestId('docs-anim-one-price')).toBeInTheDocument();
     expect(screen.getByTestId('docs-anim-sealed')).toBeInTheDocument();

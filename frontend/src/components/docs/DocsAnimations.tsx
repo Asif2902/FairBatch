@@ -120,6 +120,8 @@ const SEALED_STEPS = [
   },
 ] as const;
 
+const VISUAL1_SLIPPAGE_PRESETS = [0.5, 1, 2, 5, 8, 12] as const;
+
 export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
   rx,
   ry,
@@ -127,6 +129,7 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
   quoteSymbol,
 }) => {
   const [sandwichStep, setSandwichStep] = useState<number>(0);
+  const [visualSlippagePct, setVisualSlippagePct] = useState<number>(5);
   const [lifecycleIdx, setLifecycleIdx] = useState<number>(0);
   const [sealedIdx, setSealedIdx] = useState<number>(0);
 
@@ -137,6 +140,19 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
         ry: Math.max(1, ry),
         side: 'SellBase',
         amountIn: 2,
+        slippagePct: visualSlippagePct,
+      }),
+    [rx, ry, visualSlippagePct],
+  );
+
+  const tightRetailSim = useMemo(
+    () =>
+      runSandwichSimulation({
+        rx: Math.max(1, rx),
+        ry: Math.max(1, ry),
+        side: 'SellBase',
+        amountIn: 0.1,
+        slippagePct: 1,
       }),
     [rx, ry],
   );
@@ -147,9 +163,9 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
         rx: Math.max(1, rx),
         ry: Math.max(1, ry),
         side: 'SellBase',
-        slippagePct: 8,
+        slippagePct: visualSlippagePct,
       }),
-    [rx, ry],
+    [rx, ry, visualSlippagePct],
   );
 
   const breakEven = useMemo(() => computeUnattackedBreakEvenSize(Math.max(1, rx)), [rx]);
@@ -204,6 +220,30 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
             ))}
           </div>
 
+          <div className="flex flex-wrap items-center justify-between gap-2 border border-rule bg-paper-soft px-3 py-2">
+            <span className="font-mono text-[11px] font-bold uppercase text-ink-soft">
+              Slippage tolerance ({visualSlippagePct}% · min ${formatPrice(sim.limitPrice, 2)}):
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {VISUAL1_SLIPPAGE_PRESETS.map((pct) => (
+                <button
+                  key={pct}
+                  type="button"
+                  data-testid={`docs-visual1-slippage-${pct}`}
+                  aria-pressed={visualSlippagePct === pct}
+                  onClick={() => setVisualSlippagePct(pct)}
+                  className={`min-h-[30px] border px-2 font-mono text-[11px] font-bold transition ${
+                    visualSlippagePct === pct
+                      ? 'border-ink bg-ink text-paper'
+                      : 'border-rule-strong bg-paper-bright text-ink-soft hover:border-ink'
+                  }`}
+                >
+                  {pct}%
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="border border-rule bg-paper-soft p-3.5">
             <div className="font-display text-base font-bold text-ink">
               {currentSandwich.title}
@@ -215,16 +255,32 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
                   <span>Normal AMM, no attacker</span>
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-ink">
-                  Baseline 0.30% x·y=k swap executing alone with no bot in the block. Pays{' '}
-                  {formatUsd(sim.ammPlainLpFeeQuote, 2)} in baseline 0.30% LP fees at effective
-                  price ${formatPrice(sim.ammPlainPrice, 2)}.
+                  {sim.victimExceedsSlippageWithoutAttack ? (
+                    <>
+                      Even with no bot in the block, a 2 {baseSymbol} sell hits effective price $
+                      {formatPrice(sim.ammPlainPrice, 2)} — below your {sim.slippagePct}% limit ($
+                      {formatPrice(sim.limitPrice, 2)}), so the AMM swap reverts.
+                    </>
+                  ) : (
+                    <>
+                      Baseline 0.30% x·y=k swap executing alone with no bot in the block. Pays{' '}
+                      {formatUsd(sim.ammPlainLpFeeQuote, 2)} in baseline 0.30% LP fees at effective
+                      price ${formatPrice(sim.ammPlainPrice, 2)}.
+                    </>
+                  )}
                 </p>
                 <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-cobalt-600/25 pt-2 font-mono text-xs tabular-nums">
                   <span>
-                    You get:{' '}
-                    <strong>
-                      {formatTokenAmount(sim.ammPlainOut, 'quote')} {quoteSymbol}
-                    </strong>
+                    {sim.victimExceedsSlippageWithoutAttack ? (
+                      <strong className="text-brass-900">Reverts (&gt;{sim.slippagePct}%)</strong>
+                    ) : (
+                      <>
+                        You get:{' '}
+                        <strong>
+                          {formatTokenAmount(sim.ammPlainOut, 'quote')} {quoteSymbol}
+                        </strong>
+                      </>
+                    )}
                   </span>
                   <span className="font-bold text-cobalt-800">Bot profit: $0.00</span>
                 </div>
@@ -236,16 +292,31 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
                   <span>Normal AMM + bot ({sim.slippagePct}% cap)</span>
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-ink">
-                  {currentSandwich.normalDesc} (Assumed front-run:{' '}
-                  {formatTokenAmount(sim.frontRunAmount, 'base')} {baseSymbol}, capped so your
-                  price stays ≥ ${formatPrice(sim.limitPrice, 2)}.)
+                  {sim.victimExceedsSlippageWithoutAttack ? (
+                    <>
+                      At a tight {sim.slippagePct}% cap, this 2 {baseSymbol} sell reverts even
+                      without an attacker, so no sandwich fits (assumed front-run: 0 {baseSymbol}).
+                    </>
+                  ) : (
+                    <>
+                      {currentSandwich.normalDesc} (Assumed front-run:{' '}
+                      {formatTokenAmount(sim.frontRunAmount, 'base')} {baseSymbol}, capped so your
+                      price stays ≥ ${formatPrice(sim.limitPrice, 2)}.)
+                    </>
+                  )}
                 </p>
                 <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-vermilion-500/30 pt-2 font-mono text-xs tabular-nums">
                   <span>
-                    You get:{' '}
-                    <strong>
-                      {formatTokenAmount(sim.ammSandwichedOut, 'quote')} {quoteSymbol}
-                    </strong>
+                    {sim.victimExceedsSlippageWithoutAttack ? (
+                      <strong className="text-brass-900">Reverts (no bot)</strong>
+                    ) : (
+                      <>
+                        You get:{' '}
+                        <strong>
+                          {formatTokenAmount(sim.ammSandwichedOut, 'quote')} {quoteSymbol}
+                        </strong>
+                      </>
+                    )}
                   </span>
                   <span className="font-bold text-vermilion-700">
                     Bot profit: {formatUsd(sim.ammBotProfitQuote, 2)}
@@ -280,7 +351,9 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
                 <tr>
                   <th className="px-2.5 py-2">Sell size ({baseSymbol})</th>
                   <th className="px-2.5 py-2 text-right">Normal AMM (no attacker)</th>
-                  <th className="px-2.5 py-2 text-right">AMM + capped bot (8%)</th>
+                  <th className="px-2.5 py-2 text-right">
+                    AMM + capped bot ({visualSlippagePct}%)
+                  </th>
                   <th className="px-2.5 py-2 text-right">FairBatch</th>
                 </tr>
               </thead>
@@ -294,10 +367,22 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
                       </span>
                     </td>
                     <td className="px-2.5 py-1.5 text-right">
-                      {formatTokenAmount(row.sim.ammPlainOut, 'quote')} {quoteSymbol}
+                      {row.sim.victimExceedsSlippageWithoutAttack ? (
+                        <span className="text-brass-900">Reverts (&gt;{visualSlippagePct}%)</span>
+                      ) : (
+                        <>
+                          {formatTokenAmount(row.sim.ammPlainOut, 'quote')} {quoteSymbol}
+                        </>
+                      )}
                     </td>
                     <td className="px-2.5 py-1.5 text-right text-vermilion-800">
-                      {formatTokenAmount(row.sim.ammSandwichedOut, 'quote')} {quoteSymbol}
+                      {row.sim.victimExceedsSlippageWithoutAttack ? (
+                        <span className="text-brass-900">Reverts (no bot)</span>
+                      ) : (
+                        <>
+                          {formatTokenAmount(row.sim.ammSandwichedOut, 'quote')} {quoteSymbol}
+                        </>
+                      )}
                     </td>
                     <td className="px-2.5 py-1.5 text-right font-bold text-pine-800">
                       {formatTokenAmount(row.sim.fairbatchOut, 'quote')} {quoteSymbol}
@@ -307,6 +392,21 @@ export const DocsAnimations: React.FC<DocsAnimationsProps> = ({
               </tbody>
             </table>
           </div>
+
+          <p
+            data-testid="docs-visual1-sensitivity-note"
+            className="border-l-2 border-cobalt-600 bg-cobalt-50/60 px-3 py-2 text-xs leading-relaxed text-ink"
+          >
+            Sandwich profit depends on trade size and slippage tolerance; with tight tolerance
+            small trades are not profitable to attack, and large trades may revert even without a
+            bot. For contrast: at tight <strong>1%</strong> tolerance, a retail{' '}
+            <strong>0.1 {baseSymbol}</strong> sell stays valid with <strong>$0.00</strong> bot
+            profit ({formatTokenAmount(tightRetailSim.fairbatchOut, 'quote')} {quoteSymbol} on
+            FairBatch vs. {formatTokenAmount(tightRetailSim.ammPlainOut, 'quote')} {quoteSymbol} on
+            a plain 0.30% AMM), whereas a 2 {baseSymbol} sell reverts without a bot and needs a
+            wider tolerance (such as the default <strong>5%</strong> shown above) to execute on an
+            AMM.
+          </p>
 
           <p className="text-xs leading-relaxed text-ink-muted">
             <strong>Caption (Illustrative example · live reserves):</strong> Computed from current
