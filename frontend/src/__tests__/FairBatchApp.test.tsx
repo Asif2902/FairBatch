@@ -6,6 +6,7 @@ import type { FaucetState, LiquidityLockState, OnchainSnapshot, WalletBalances }
 import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
 import { computeBatchSettlement } from '../lib/clearingMath';
 import { formatPrice } from '../lib/format';
+import { BatchConsole } from '../components/BatchConsole';
 import App from '../App';
 
 const ALICE = '0x9AFe5CeF11fC10756faef213f7A30D9873B5d372';
@@ -373,6 +374,7 @@ describe('FairBatch on-chain terminal', () => {
     renderPro();
 
     fireEvent.click(screen.getByRole('tab', { name: /Commit-Reveal/i }));
+    fireEvent.change(screen.getByLabelText(/You pay/i), { target: { value: '2.0' } });
     fireEvent.click(
       screen.getByRole('button', { name: /Seal & lock commitment/i }),
     );
@@ -384,7 +386,7 @@ describe('FairBatch on-chain terminal', () => {
       expect.objectContaining({
         side: 'SellBase',
         amountIn: '2.0',
-        limitPrice: '2650',
+        limitPrice: '2760',
         bondEth: '0.001',
       }),
     );
@@ -522,10 +524,33 @@ describe('FairBatch on-chain terminal', () => {
     expect(screen.getByTestId('pro-approval-base')).toHaveTextContent('Approved');
     expect(screen.getByTestId('pro-approval-quote')).toHaveTextContent('Approved');
 
-    // Order slip Balance + Max follows sell/buy direction
+    // Order slip starts empty (placeholder) and provides 25/50/75/100% + Max balance chips
+    const payInput = screen.getByLabelText(/You pay/i) as HTMLInputElement;
+    expect(payInput.value).toBe('');
     expect(screen.getByTestId('order-ticket-balance')).toHaveTextContent('Balance: 5.00 fWETH');
+    fireEvent.click(screen.getByTestId('order-ticket-pct-25'));
+    expect(payInput).toHaveValue(1.25);
+    fireEvent.click(screen.getByTestId('order-ticket-pct-50'));
+    expect(payInput).toHaveValue(2.5);
+    fireEvent.click(screen.getByTestId('order-ticket-pct-75'));
+    expect(payInput).toHaveValue(3.75);
+    fireEvent.click(screen.getByTestId('order-ticket-pct-100'));
+    expect(payInput).toHaveValue(5);
     fireEvent.click(screen.getByTestId('order-ticket-max'));
-    expect(screen.getByLabelText(/You pay/i)).toHaveValue(5);
+    expect(payInput).toHaveValue(5);
+
+    // Default minimum price = spot (3000) * (1 - 0.08) = 2760, and label matches the value
+    const limitInput = screen.getByLabelText(/Minimum price/i) as HTMLInputElement;
+    expect(limitInput).toHaveValue(2760);
+    expect(screen.getByTestId('order-ticket-limit-badge')).toHaveTextContent(
+      'Spot −8% · $2,760.00',
+    );
+    // Selecting 5% slippage updates both the limit price (3000 * 0.95 = 2850) and the matching label
+    fireEvent.click(screen.getByTestId('order-ticket-slippage-5'));
+    expect(limitInput).toHaveValue(2850);
+    expect(screen.getByTestId('order-ticket-limit-badge')).toHaveTextContent(
+      'Spot −5% · $2,850.00',
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /Buy fWETH/i }));
     expect(screen.getByTestId('order-ticket-balance')).toHaveTextContent('Balance: 20,000.00 fUSDC');
@@ -578,7 +603,48 @@ describe('FairBatch on-chain terminal', () => {
     expect(screen.queryByTestId('account-balance-quote')).not.toBeInTheDocument();
     expect(screen.getByTestId('account-approvals-summary')).toBeInTheDocument();
 
-    // Default Pro order input (2.0 fWETH) exceeds 0.7548 balance -> inline message & disabled submit
+    // Pro order input starts empty ('') with NO insufficient-balance error before typing
+    const payInput = screen.getByLabelText(/You pay/i) as HTMLInputElement;
+    expect(payInput.value).toBe('');
+    expect(screen.queryByTestId('order-ticket-insufficient-balance')).not.toBeInTheDocument();
+    expect(screen.getByTestId('order-ticket-direct-submit')).toBeDisabled();
+
+    // Spot updates default minimum price automatically unless the user edited it
+    const limitInput = screen.getByLabelText(/Minimum price/i) as HTMLInputElement;
+    expect(limitInput).toHaveValue(2760);
+    const updatedSpotSnap = makeSnapshot('Open', ALICE, {
+      balances: {
+        eth: 50_000_000_000_000_000n,
+        base: 754_800_000_000_000_000n,
+        quote: 100_000_000n,
+        lpShares: 50n * 10n ** 18n,
+      },
+    });
+    updatedSpotSnap.state.reserves.spot_price = 2946.5;
+    controller = makeController({ account: ALICE, snapshot: updatedSpotSnap });
+    rerender(<App />);
+    expect(limitInput).toHaveValue(2710.78);
+    expect(screen.getByTestId('order-ticket-limit-badge')).toHaveTextContent(
+      'Spot −8% · $2,710.78',
+    );
+
+    // Once the user edits the limit price manually, spot changes do NOT overwrite their edit
+    fireEvent.change(limitInput, { target: { value: '2680' } });
+    const thirdSpotSnap = makeSnapshot('Open', ALICE, {
+      balances: {
+        eth: 50_000_000_000_000_000n,
+        base: 754_800_000_000_000_000n,
+        quote: 100_000_000n,
+        lpShares: 50n * 10n ** 18n,
+      },
+    });
+    thirdSpotSnap.state.reserves.spot_price = 3100;
+    controller = makeController({ account: ALICE, snapshot: thirdSpotSnap });
+    rerender(<App />);
+    expect(limitInput).toHaveValue(2680);
+
+    // Typing an amount > 0.7548 balance shows the insufficient-balance error and keeps submit disabled
+    fireEvent.change(payInput, { target: { value: '2.0' } });
     expect(screen.getByTestId('order-ticket-insufficient-balance')).toHaveTextContent(
       'Insufficient fWETH balance (0.7548)',
     );
@@ -638,6 +704,55 @@ describe('FairBatch on-chain terminal', () => {
     rerender(<App />);
     expect(screen.getByTestId('order-ticket-insufficient-gas')).toHaveTextContent(
       /Insufficient Sepolia ETH for gas/i,
+    );
+  });
+
+  it('shows "Settling automatically in about 5s" in Pro Ready panel when keeper is healthy and manual button when offline', () => {
+    const snap = makeSnapshot('Ready', ALICE);
+    const { rerender } = render(
+      <BatchConsole
+        batch={snap.batch}
+        phase="Ready"
+        chainNow={snap.blockTimestamp}
+        orderCount={2}
+        account={ALICE}
+        commitments={[]}
+        busyAction={null}
+        refreshing={false}
+        keeperHealthy={true}
+        keeperGraceSeconds={5}
+        onSettle={vi.fn(async () => undefined)}
+        onSlash={vi.fn(async () => undefined)}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('pro-keeper-auto-settling')).toHaveTextContent(
+      /Settling automatically in about 5s/i,
+    );
+    expect(screen.queryByTestId('settle-batch-button')).not.toBeInTheDocument();
+
+    rerender(
+      <BatchConsole
+        batch={snap.batch}
+        phase="Ready"
+        chainNow={snap.blockTimestamp}
+        orderCount={2}
+        account={ALICE}
+        commitments={[]}
+        busyAction={null}
+        refreshing={false}
+        keeperHealthy={false}
+        keeperGraceSeconds={5}
+        onSettle={vi.fn(async () => undefined)}
+        onSlash={vi.fn(async () => undefined)}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('pro-keeper-auto-settling')).not.toBeInTheDocument();
+    expect(screen.getByTestId('settle-batch-button')).toHaveTextContent(
+      /Settle Batch #8 & open next/i,
     );
   });
 });

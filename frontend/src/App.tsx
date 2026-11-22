@@ -615,6 +615,8 @@ export const App: React.FC = () => {
                         commitments={snapshot.allCommitments}
                         busyAction={fb.busyAction}
                         refreshing={fb.refreshing}
+                        keeperHealthy={keeperStatus.healthy}
+                        keeperGraceSeconds={keeperStatus.graceSeconds}
                         onSettle={async () => {
                           await handleSettle();
                         }}

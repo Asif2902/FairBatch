@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock3,
   Gavel,
+  Loader2,
   RefreshCw,
   ShieldAlert,
   Timer,
@@ -25,6 +26,8 @@ interface BatchConsoleProps {
   commitments: ChainCommitment[];
   busyAction: string | null;
   refreshing: boolean;
+  keeperHealthy?: boolean;
+  keeperGraceSeconds?: number;
   onSettle: () => Promise<void>;
   onSlash: (batchId: number, commitId: number) => Promise<void>;
   onRefresh: () => void;
@@ -46,6 +49,8 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
   commitments,
   busyAction,
   refreshing,
+  keeperHealthy = false,
+  keeperGraceSeconds = 5,
   onSettle,
   onSlash,
   onRefresh,
@@ -170,31 +175,41 @@ export const BatchConsole: React.FC<BatchConsoleProps> = ({
         </div>
 
         {phase === 'Ready' ? (
-          <div className="space-y-2.5 border-l-2 border-vermilion-500 bg-vermilion-50 px-3.5 py-3">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-vermilion-600" />
-              <p className="text-sm leading-relaxed text-vermilion-800">
-                The window is closed. Settlement is permissionless: any connected wallet can
-                compute the uniform clearing price and open Batch #{Number(batch.batchId) + 1}.
-              </p>
-            </div>
-            <button
-              type="button"
-              data-testid="settle-batch-button"
-              disabled={!account || busy}
-              onClick={() => void onSettle()}
-              className="tap-target inline-flex w-full items-center justify-center gap-2 border border-pine-700 bg-pine-600 px-3.5 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
+          keeperHealthy ? (
+            <div
+              data-testid="pro-keeper-auto-settling"
+              className="flex items-center gap-2.5 border-l-2 border-cobalt-600 bg-cobalt-50 px-3.5 py-3 text-sm font-medium text-cobalt-900"
             >
-              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-              <span>
-                {!account
-                  ? 'Connect a wallet to settle'
-                  : busyAction === 'settle'
-                    ? 'Settling batch…'
-                    : UI_LABELS.settleBatchAndOpenNext(Number(batch.batchId))}
-              </span>
-            </button>
-          </div>
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cobalt-700" aria-hidden="true" />
+              <span>Settling automatically in about {keeperGraceSeconds}s.</span>
+            </div>
+          ) : (
+            <div className="space-y-2.5 border-l-2 border-vermilion-500 bg-vermilion-50 px-3.5 py-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-vermilion-600" />
+                <p className="text-sm leading-relaxed text-vermilion-800">
+                  The window is closed. Settlement is permissionless: any connected wallet can
+                  compute the uniform clearing price and open Batch #{Number(batch.batchId) + 1}.
+                </p>
+              </div>
+              <button
+                type="button"
+                data-testid="settle-batch-button"
+                disabled={!account || busy}
+                onClick={() => void onSettle()}
+                className="tap-target inline-flex w-full items-center justify-center gap-2 border border-pine-700 bg-pine-600 px-3.5 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-pine-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                <span>
+                  {!account
+                    ? 'Connect a wallet to settle'
+                    : busyAction === 'settle'
+                      ? 'Settling batch…'
+                      : UI_LABELS.settleBatchAndOpenNext(Number(batch.batchId))}
+                </span>
+              </button>
+            </div>
+          )
         ) : phase === 'Settled' ? (
           <div className="flex items-start gap-2 border-l-2 border-pine-600 bg-pine-50 px-3.5 py-3 text-sm leading-relaxed text-pine-800">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />

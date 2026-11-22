@@ -258,13 +258,15 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
 
   if (unclaimed.length === 0) return null;
 
-  const primary = unclaimed[0];
-  const distinctRounds = Array.from(new Set(unclaimed.map((i) => i.batch_id))).sort(
-    (a, b) => a - b,
+  // Sort ready orders ascending by (batch_id, order_id) so rows always match the headline round order.
+  const orderedUnclaimed = [...unclaimed].sort(
+    (a, b) => a.batch_id - b.batch_id || a.order_id - b.order_id,
   );
+  const primary = orderedUnclaimed[0];
+  const distinctRounds = Array.from(new Set(orderedUnclaimed.map((i) => i.batch_id)));
 
   // Pick reconciled precision so individually displayed row amounts always sum to the headline total.
-  const baseValues = unclaimed.flatMap((i) => {
+  const baseValues = orderedUnclaimed.flatMap((i) => {
     const arr: number[] = [];
     if (i.side === 'SellBase') {
       arr.push(i.amount_filled > 0 ? i.amount_filled : i.amount_in);
@@ -274,7 +276,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
     }
     return arr;
   });
-  const quoteValues = unclaimed.flatMap((i) => {
+  const quoteValues = orderedUnclaimed.flatMap((i) => {
     const arr: number[] = [];
     if (i.side === 'SellBase') {
       if (i.payout_out > 0) arr.push(i.payout_out);
@@ -298,10 +300,10 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
       : null;
 
   const handleCollect = async () => {
-    if (unclaimed.length === 1) {
-      await onCollectOne(unclaimed[0]);
+    if (orderedUnclaimed.length === 1) {
+      await onCollectOne(orderedUnclaimed[0]);
     } else {
-      await onCollectAll(unclaimed);
+      await onCollectAll(orderedUnclaimed);
     }
   };
 
@@ -315,8 +317,8 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
         <div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-label text-pine-800">
           <Coins className="h-4 w-4" aria-hidden="true" />
           <span>
-            Ready to collect · {unclaimed.length} completed order
-            {unclaimed.length === 1 ? '' : 's'}
+            Ready to collect · {orderedUnclaimed.length} completed order
+            {orderedUnclaimed.length === 1 ? '' : 's'}
           </span>
         </div>
         <h2 className="mt-2 font-display text-2xl font-bold text-ink">
@@ -328,7 +330,7 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
           data-testid="simple-collect-summary"
           className="mt-1.5 text-base leading-relaxed text-ink"
         >
-          {summarizeReceipts(unclaimed, config, baseDecimals, quoteDecimals)}
+          {summarizeReceipts(orderedUnclaimed, config, baseDecimals, quoteDecimals)}
         </p>
 
         {realSavingsQuote !== null && (
@@ -352,9 +354,9 @@ export const SimpleCollectCard: React.FC<SimpleCollectCardProps> = ({
       <div className="space-y-4 p-5">
         <div className="space-y-2">
           <div className="eyebrow">
-            {unclaimed.length > 1 ? 'All ready orders (per-round details)' : 'Order receipt'}
+            {orderedUnclaimed.length > 1 ? 'All ready orders (per-round details)' : 'Order receipt'}
           </div>
-          {unclaimed.map((item) => {
+          {orderedUnclaimed.map((item) => {
             const outSym =
               item.side === 'SellBase' ? config.quoteSymbol : config.baseSymbol;
             const inSym =

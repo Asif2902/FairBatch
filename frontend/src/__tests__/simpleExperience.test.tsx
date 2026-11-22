@@ -292,29 +292,45 @@ describe('Simple mode end-to-end flows', () => {
     });
   });
 
-  it('shows Waiting card when the connected wallet has a live order in the active round', () => {
+  it('shows Waiting card when the connected wallet has a live order in the active round and highlights Ready to finish (not Ready to collect) when Ready', () => {
+    const activeOrders: OrderDto[] = [
+      {
+        order_id: 0,
+        trader: ALICE,
+        label: 'Alice',
+        side: 'SellBase',
+        amount_in: 0.5,
+        limit_price: 2760,
+        submission_type: 'Direct',
+        is_attacker: false,
+      },
+    ];
     controller = makeCtrl({
       account: ALICE,
       livePhase: 'Open',
       snapshot: buildSnapshot({
         phase: 'Open',
-        orders: [
-          {
-            order_id: 0,
-            trader: ALICE,
-            label: 'Alice',
-            side: 'SellBase',
-            amount_in: 0.5,
-            limit_price: 2760,
-            submission_type: 'Direct',
-            is_attacker: false,
-          },
-        ],
+        orders: activeOrders,
       }),
     });
-    render(<App />);
+    const { rerender } = render(<App />);
     expect(screen.getByTestId('simple-waiting-card')).toBeInTheDocument();
     expect(screen.getByText(/Waiting for this round to close/i)).toBeInTheDocument();
+    expect(screen.getByTestId('waiting-stage-collecting')).toHaveAttribute('data-active', 'true');
+    expect(screen.getByTestId('waiting-stage-collect')).toHaveAttribute('data-active', 'false');
+
+    // When timer finishes (Ready) but round is unsettled, highlight "Ready to finish", NOT "Ready to collect"
+    controller = makeCtrl({
+      account: ALICE,
+      livePhase: 'Ready',
+      snapshot: buildSnapshot({
+        phase: 'Ready',
+        orders: activeOrders,
+      }),
+    });
+    rerender(<App />);
+    expect(screen.getByTestId('waiting-stage-finish')).toHaveAttribute('data-active', 'true');
+    expect(screen.getByTestId('waiting-stage-collect')).toHaveAttribute('data-active', 'false');
   });
 
   it('collects multiple settled receipts in one multicall and opens Earn tab with custom lock', async () => {
@@ -455,22 +471,9 @@ describe('Simple mode end-to-end flows', () => {
     expect(screen.getByTestId('simple-collect-row-11-1')).toHaveTextContent(/Sold 0\.05 fWETH @ \$2,976\.00/i);
   });
 
-  it('shows per-round prices, weighted average, reconciled decimals, and omits "this round" across multiple rounds', () => {
+  it('shows per-round prices, weighted average, reconciled decimals, matching round order, and omits "this round" across multiple rounds', () => {
+    // Pass Round #13 before Round #12 to verify Collect card sorts rows to match headline order (#12, #13)
     const multiRoundDiffPrices: ClaimableDto[] = [
-      {
-        batch_id: 12,
-        order_id: 0,
-        trader: ALICE,
-        label: 'Alice R12',
-        side: 'SellBase',
-        status: 'Filled',
-        amount_in: 0.001,
-        amount_filled: 0.001,
-        payout_out: 2.9465,
-        refund_in: 0,
-        effective_price: 2946.5,
-        claimed: false,
-      },
       {
         batch_id: 13,
         order_id: 0,
@@ -485,12 +488,26 @@ describe('Simple mode end-to-end flows', () => {
         effective_price: 2966.5,
         claimed: false,
       },
+      {
+        batch_id: 12,
+        order_id: 0,
+        trader: ALICE,
+        label: 'Alice R12',
+        side: 'SellBase',
+        status: 'Filled',
+        amount_in: 0.001,
+        amount_filled: 0.001,
+        payout_out: 2.9465,
+        refund_in: 0,
+        effective_price: 2946.5,
+        claimed: false,
+      },
     ];
     controller = makeCtrl({
       account: ALICE,
       snapshot: buildSnapshot({ claimable: multiRoundDiffPrices }),
     });
-    render(<App />);
+    const { container } = render(<App />);
 
     const summary = screen.getByTestId('simple-collect-summary');
     // Must NEVER say "this round" when multiple rounds are aggregated
@@ -501,6 +518,11 @@ describe('Simple mode end-to-end flows', () => {
     // Reconciled decimals: 2.9465 + 2.9665 = 5.9130 (at 2 decimals 2.95+2.97=5.92 != 5.91 -> bumps to 4 decimals!)
     expect(summary).toHaveTextContent(/5\.9130 fUSDC total/i);
     expect(summary).toHaveTextContent(/0\.002 fWETH total/i);
+    const rows = Array.from(container.querySelectorAll('[data-testid^="simple-collect-row-"]'));
+    expect(rows.map((r) => r.getAttribute('data-testid'))).toEqual([
+      'simple-collect-row-12-0',
+      'simple-collect-row-13-0',
+    ]);
     expect(screen.getByTestId('simple-collect-row-12-0')).toHaveTextContent(
       /Sold 0\.001 fWETH @ \$2,946\.50/i,
     );
@@ -595,7 +617,7 @@ describe('Simple mode end-to-end flows', () => {
       />,
     );
     expect(screen.getByTestId('simple-ready-banner')).toHaveTextContent(
-      /Round closes, settling automatically in about 5s/i,
+      /Settling automatically in about 5s/i,
     );
     expect(screen.queryByTestId('simple-start-next-round')).not.toBeInTheDocument();
 

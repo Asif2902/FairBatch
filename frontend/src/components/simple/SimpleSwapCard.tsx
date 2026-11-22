@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownUp,
@@ -147,7 +147,10 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
 }) => {
   const [side, setSide] = useState<OrderSide>('SellBase');
   const [amountInput, setAmountInput] = useState<string>('0.5');
+  const [amountTouched, setAmountTouched] = useState<boolean>(false);
   const [slippagePct, setSlippagePct] = useState<number>(8);
+  const [limitEdited, setLimitEdited] = useState<boolean>(false);
+  const [limitInput, setLimitInput] = useState<string>('');
   const [orderMode, setOrderMode] = useState<SimpleOrderMode>('direct');
   const [bondEth, setBondEth] = useState<string>(() =>
     Math.max(0.001, Number(minBondWei) / 1e18).toString(),
@@ -171,31 +174,48 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
 
   const parsedAmount = Number(amountInput);
   const validAmount = Number.isFinite(parsedAmount) && parsedAmount > 0;
-  const insufficientBalance = Boolean(account && balances && validAmount && parsedAmount > payBalance + 1e-9);
+  const insufficientBalance = Boolean(
+    account && balances && validAmount && parsedAmount > payBalance + 1e-9,
+  );
+  const showInsufficientBalanceError = Boolean(
+    amountTouched && amountInput.trim() !== '' && insufficientBalance,
+  );
   const bondEthNum = Number(bondEth) || 0;
   const insufficientBondEth = Boolean(
     orderMode === 'sealed' &&
-      account &&
-      balances &&
-      bondEthNum > 0 &&
-      (bondEthNum > ethBal + 1e-9 || ethBal <= bondEthNum + 1e-9),
+    account &&
+    balances &&
+    bondEthNum > 0 &&
+    (bondEthNum > ethBal + 1e-9 || ethBal <= bondEthNum + 1e-9),
   );
   const insufficientGasEth = Boolean(
     account &&
-      !wrongNetwork &&
-      balances &&
-      balances.eth === 0n &&
-      !((orderMode === 'signed' || (livePhase === 'Reveal' && orderMode === 'direct')) &&
-        relayerHealthy &&
-        !preferSelfSubmit),
+    !wrongNetwork &&
+    balances &&
+    balances.eth === 0n &&
+    !((orderMode === 'signed' || (livePhase === 'Reveal' && orderMode === 'direct')) &&
+      relayerHealthy &&
+      !preferSelfSubmit),
   );
 
-  // Equivalent limit price derived from max slippage tolerance (keeps 8% safe default).
-  const limitPriceNum = useMemo(() => {
+  // Default limit price = current spot × (1 ∓ selected slippage tolerance).
+  const defaultLimitNum = useMemo(() => {
     const tol = Math.max(0.5, Math.min(45, slippagePct)) / 100;
     const raw = side === 'SellBase' ? spot * (1 - tol) : spot * (1 + tol);
-    return Math.max(1, Number(raw.toFixed(2)));
+    return Math.max(0.01, Number(raw.toFixed(2)));
   }, [side, spot, slippagePct]);
+
+  useEffect(() => {
+    if (!limitEdited) {
+      setLimitInput(defaultLimitNum.toFixed(2).replace(/\.00$/, ''));
+    }
+  }, [defaultLimitNum, limitEdited]);
+
+  const parsedCustomLimit = Number(limitInput);
+  const limitPriceNum =
+    limitEdited && Number.isFinite(parsedCustomLimit) && parsedCustomLimit > 0
+      ? parsedCustomLimit
+      : defaultLimitNum;
 
   // Real current queue fair price vs projected fair price with user's draft order.
   const queueSettlement = useMemo(
@@ -214,30 +234,30 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
     const draftOrders =
       livePhase === 'Ready'
         ? [
-            {
-              order_id: 999999,
-              trader: account ?? '0x0000000000000000000000000000000000000000',
-              label: 'You',
-              side,
-              amount_in: parsedAmount,
-              limit_price: limitPriceNum,
-              submission_type: 'Direct' as const,
-              is_attacker: false,
-            },
-          ]
+          {
+            order_id: 999999,
+            trader: account ?? '0x0000000000000000000000000000000000000000',
+            label: 'You',
+            side,
+            amount_in: parsedAmount,
+            limit_price: limitPriceNum,
+            submission_type: 'Direct' as const,
+            is_attacker: false,
+          },
+        ]
         : [
-            ...state.orders,
-            {
-              order_id: 999999,
-              trader: account ?? '0x0000000000000000000000000000000000000000',
-              label: 'You',
-              side,
-              amount_in: parsedAmount,
-              limit_price: limitPriceNum,
-              submission_type: 'Direct' as const,
-              is_attacker: false,
-            },
-          ];
+          ...state.orders,
+          {
+            order_id: 999999,
+            trader: account ?? '0x0000000000000000000000000000000000000000',
+            label: 'You',
+            side,
+            amount_in: parsedAmount,
+            limit_price: limitPriceNum,
+            submission_type: 'Direct' as const,
+            is_attacker: false,
+          },
+        ];
 
     const simulated = computeBatchSettlement(
       state.batch_id,
@@ -272,6 +292,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
 
   const handleFlip = () => {
     setLocalError(null);
+    setAmountTouched(false);
     const nextSide: OrderSide = side === 'SellBase' ? 'BuyBase' : 'SellBase';
     setSide(nextSide);
     if (nextSide === 'SellBase') {
@@ -283,6 +304,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
 
   const applyQuickChip = (fraction: number) => {
     setLocalError(null);
+    setAmountTouched(true);
     if (payBalance > 0) {
       const target = payBalance * fraction;
       setAmountInput(cleanDecimal(target, side === 'SellBase' ? 4 : 2));
@@ -369,9 +391,9 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
   const unrevealedCommits = userPendingCommits.filter((c) => !c.revealed && !c.slashed);
   const canClaimFaucetNow = Boolean(
     config.tokenFaucetEnabled &&
-      account &&
-      !wrongNetwork &&
-      (faucet ? faucet.canClaim || Number(faucet.nextClaimAt) <= chainNow : true),
+    account &&
+    !wrongNetwork &&
+    (faucet ? faucet.canClaim || Number(faucet.nextClaimAt) <= chainNow : true),
   );
 
   const primaryButtonText = (() => {
@@ -407,49 +429,35 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
       {livePhase === 'Ready' && (
         <div
           data-testid="simple-ready-banner"
-          className={`flex flex-col gap-2.5 border-b-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5 ${
-            keeperHealthy
-              ? 'border-cobalt-600 bg-cobalt-50'
-              : 'border-vermilion-500 bg-vermilion-50'
-          }`}
+          className={`flex flex-col gap-2.5 border-b-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5 ${keeperHealthy
+            ? 'border-cobalt-600 bg-cobalt-50'
+            : 'border-vermilion-500 bg-vermilion-50'
+            }`}
         >
           <div className="min-w-0 flex-1">
             <div
-              className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold uppercase tracking-label ${
-                keeperHealthy ? 'text-cobalt-800' : 'text-vermilion-800'
-              }`}
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-xs font-bold uppercase tracking-label ${keeperHealthy ? 'text-cobalt-800' : 'text-vermilion-800'
+                }`}
             >
               <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>Round #{state.batch_id} finished</span>
             </div>
             <p className="mt-1 text-sm leading-snug text-ink">
               {keeperHealthy
-                ? `Round closes, settling automatically in about ${keeperGraceSeconds}s.`
+                ? `Settling automatically in about ${keeperGraceSeconds}s.`
                 : SIMPLE_COPY.readyBanner}
             </p>
           </div>
-          {account && !wrongNetwork && (
-            keeperHealthy ? (
-              <button
-                type="button"
-                data-testid="simple-manual-settle-fallback"
-                disabled={busy}
-                onClick={() => void onStartNextRound()}
-                className="shrink-0 whitespace-nowrap border border-cobalt-600/50 bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-cobalt-800 transition hover:border-ink disabled:opacity-50"
-              >
-                {busyAction === 'settle' ? 'Starting…' : UI_LABELS.startNextRound}
-              </button>
-            ) : (
-              <button
-                type="button"
-                data-testid="simple-start-next-round"
-                disabled={busy}
-                onClick={() => void onStartNextRound()}
-                className="tap-target w-full shrink-0 whitespace-nowrap bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50 sm:w-auto"
-              >
-                {busyAction === 'settle' ? 'Starting…' : SIMPLE_COPY.readyButton}
-              </button>
-            )
+          {account && !wrongNetwork && !keeperHealthy && (
+            <button
+              type="button"
+              data-testid="simple-start-next-round"
+              disabled={busy}
+              onClick={() => void onStartNextRound()}
+              className="tap-target w-full shrink-0 whitespace-nowrap bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50 sm:w-auto"
+            >
+              {busyAction === 'settle' ? 'Starting…' : SIMPLE_COPY.readyButton}
+            </button>
           )}
         </div>
       )}
@@ -551,6 +559,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
               value={amountInput}
               onChange={(e) => {
                 setLocalError(null);
+                setAmountTouched(true);
                 setAmountInput(e.target.value);
               }}
               placeholder="0.0"
@@ -570,7 +579,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
             </select>
           </div>
 
-          {insufficientBalance && (
+          {showInsufficientBalanceError && (
             <p
               role="alert"
               data-testid="simple-insufficient-balance"
@@ -642,9 +651,9 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
             >
               {previewWithOrder && previewWithOrder.estimatedOut > 0
                 ? formatTokenAmount(
-                    previewWithOrder.estimatedOut,
-                    side === 'SellBase' ? 'quote' : 'base',
-                  )
+                  previewWithOrder.estimatedOut,
+                  side === 'SellBase' ? 'quote' : 'base',
+                )
                 : '0.00'}
             </div>
             <span className="border border-rule-strong bg-paper-bright px-3 py-1.5 font-display text-sm font-bold text-ink">
@@ -687,7 +696,16 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
             onClick={() => setAdvancedOpen((v) => !v)}
             className="tap-target flex w-full items-center justify-between px-4 text-left text-sm font-bold text-ink-soft transition hover:text-ink"
           >
-            <span>Advanced · Max price slippage ({slippagePct}%)</span>
+            <span>
+              Advanced · {side === 'SellBase' ? 'Minimum' : 'Maximum'} price (
+              {limitEdited
+                ? `Custom $${formatPrice(limitPriceNum, 2)}`
+                : `Spot ${side === 'SellBase' ? '−' : '+'}${slippagePct}% · $${formatPrice(
+                    limitPriceNum,
+                    2,
+                  )}`}
+              )
+            </span>
             {advancedOpen ? (
               <ChevronUp className="h-4 w-4 text-ink-muted" />
             ) : (
@@ -701,10 +719,13 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                   <button
                     key={pct}
                     type="button"
-                    aria-pressed={slippagePct === pct}
-                    onClick={() => setSlippagePct(pct)}
+                    aria-pressed={!limitEdited && slippagePct === pct}
+                    onClick={() => {
+                      setSlippagePct(pct);
+                      setLimitEdited(false);
+                    }}
                     className={`tap-target flex-1 border px-3 font-mono text-xs font-bold transition ${
-                      slippagePct === pct
+                      !limitEdited && slippagePct === pct
                         ? 'border-ink bg-ink text-paper'
                         : 'border-rule-strong bg-paper-soft text-ink-soft hover:border-ink'
                     }`}
@@ -756,11 +777,10 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                     type="button"
                     aria-pressed={selected}
                     onClick={() => setOrderMode(modeId)}
-                    className={`w-full border p-3 text-left transition ${
-                      selected
-                        ? 'border-ink bg-paper-soft'
-                        : 'border-rule bg-paper-bright hover:border-rule-strong'
-                    }`}
+                    className={`w-full border p-3 text-left transition ${selected
+                      ? 'border-ink bg-paper-soft'
+                      : 'border-rule bg-paper-bright hover:border-rule-strong'
+                      }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-display text-sm font-bold text-ink">

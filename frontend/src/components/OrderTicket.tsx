@@ -73,6 +73,26 @@ interface OrderTicketProps {
   onRelayIntent?: (artifact: SignedIntentArtifact) => Promise<void>;
 }
 
+const SLIPPAGE_PRESETS = [2, 5, 8, 12] as const;
+const QUICK_PCT_CHIPS = [
+  { label: '25%', frac: 0.25 },
+  { label: '50%', frac: 0.5 },
+  { label: '75%', frac: 0.75 },
+  { label: '100%', frac: 1 },
+] as const;
+
+function computeDefaultLimitNum(spot: number, side: OrderSide, slippagePct: number): number {
+  const safeSpot = Number.isFinite(spot) && spot > 0 ? spot : 3000;
+  const tol = Math.max(0.5, Math.min(45, slippagePct)) / 100;
+  const raw = side === 'SellBase' ? safeSpot * (1 - tol) : safeSpot * (1 + tol);
+  return Math.max(0.01, Number(raw.toFixed(2)));
+}
+
+function formatLimitValue(val: number): string {
+  if (!Number.isFinite(val) || val <= 0) return '0';
+  return val.toFixed(2).replace(/\.00$/, '');
+}
+
 export const OrderTicket: React.FC<OrderTicketProps> = ({
   state,
   config,
@@ -94,8 +114,13 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<TicketTab>('direct');
   const [side, setSide] = useState<OrderSide>('SellBase');
-  const [amountInput, setAmountInput] = useState<string>('2.0');
-  const [limitPriceInput, setLimitPriceInput] = useState<string>('2650');
+  const [amountInput, setAmountInput] = useState<string>('');
+  const [amountTouched, setAmountTouched] = useState<boolean>(false);
+  const [slippagePct, setSlippagePct] = useState<number>(8);
+  const [limitEdited, setLimitEdited] = useState<boolean>(false);
+  const [limitPriceInput, setLimitPriceInput] = useState<string>(() =>
+    formatLimitValue(computeDefaultLimitNum(state.reserves.spot_price, 'SellBase', 8)),
+  );
 
   // Commit-Reveal specific state
   const [salt, setSalt] = useState<string>(() => generateRandomSaltHex());
@@ -110,6 +135,18 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const [localError, setLocalError] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<string | null>(null);
 
+  const defaultLimitNum = useMemo(
+    () => computeDefaultLimitNum(state.reserves.spot_price, side, slippagePct),
+    [state.reserves.spot_price, side, slippagePct],
+  );
+
+  // Auto-update limit price when spot, side, or slippage tolerance changes unless the user edited it.
+  useEffect(() => {
+    if (!limitEdited) {
+      setLimitPriceInput(formatLimitValue(defaultLimitNum));
+    }
+  }, [defaultLimitNum, limitEdited]);
+
   const amountNum = Number.parseFloat(amountInput) || 0;
   const limitPriceNum = Number.parseFloat(limitPriceInput) || 0;
   const bondEthNum = Number.parseFloat(bondEthInput) || 0.001;
@@ -120,8 +157,11 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const activePayBalance = side === 'SellBase' ? baseBalanceHuman : quoteBalanceHuman;
   const activePaySymbol = side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
   const activePayKind = side === 'SellBase' ? 'base' : 'quote';
-  const insufficientPayBalance = Boolean(
-    account && balances && amountNum > activePayBalance + 1e-9,
+  const exceedsPayBalance = Boolean(
+    account && balances && amountNum > 0 && amountNum > activePayBalance + 1e-9,
+  );
+  const showInsufficientPayError = Boolean(
+    amountTouched && amountInput.trim() !== '' && exceedsPayBalance,
   );
   const insufficientGasEth = Boolean(account && balances && balances.eth === 0n);
   const insufficientBondEth = Boolean(
@@ -137,15 +177,21 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
     return () => window.clearTimeout(timer);
   }, [localFeedback]);
 
-  const handleSetMax = () => {
+  const applyBalanceFraction = (fraction: number) => {
     if (activePayBalance <= 0) return;
     const maxDecimals = side === 'SellBase' ? 4 : 2;
-    const formatted = activePayBalance
+    const target = activePayBalance * fraction;
+    const formatted = target
       .toFixed(maxDecimals)
       .replace(/(\.\d*?)0+$/, '$1')
       .replace(/\.$/, '');
+    setAmountTouched(true);
     setAmountInput(formatted);
     setSignedArtifact(null);
+  };
+
+  const handleSetMax = () => {
+    applyBalanceFraction(1);
   };
 
   const traderLabel = account ? shortenAddress(account) : 'Wallet not connected';
@@ -153,15 +199,11 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const handleFlipSide = (nextSide: OrderSide) => {
     setSide(nextSide);
     setSignedArtifact(null);
-    if (nextSide === 'SellBase') {
-      setAmountInput('2.0');
+    setAmountTouched(false);
+    setAmountInput('');
+    if (!limitEdited) {
       setLimitPriceInput(
-        String(Math.max(1000, Math.round(state.reserves.spot_price * 0.9))),
-      );
-    } else {
-      setAmountInput('6000');
-      setLimitPriceInput(
-        String(Math.round(state.reserves.spot_price * 1.1)),
+        formatLimitValue(computeDefaultLimitNum(state.reserves.spot_price, nextSide, slippagePct)),
       );
     }
   };
@@ -548,6 +590,18 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   {formatTokenAmount(activePayBalance, activePayKind)} {activePaySymbol}
                 </strong>
               </span>
+              {QUICK_PCT_CHIPS.map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  data-testid={`order-ticket-pct-${Math.round(chip.frac * 100)}`}
+                  disabled={activePayBalance <= 0}
+                  onClick={() => applyBalanceFraction(chip.frac)}
+                  className="border border-rule bg-paper-bright px-1.5 py-0.5 font-mono text-[10px] text-ink-muted transition hover:border-ink hover:text-ink disabled:opacity-40"
+                >
+                  {chip.label}
+                </button>
+              ))}
               <button
                 type="button"
                 data-testid="order-ticket-max"
@@ -557,22 +611,6 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               >
                 Max
               </button>
-              {(side === 'SellBase'
-                ? ['1.0', '2.5', '5.0']
-                : ['3000', '7500', '15000']
-              ).map((presetVal) => (
-                <button
-                  key={presetVal}
-                  type="button"
-                  onClick={() => {
-                    setAmountInput(presetVal);
-                    setSignedArtifact(null);
-                  }}
-                  className="border border-rule bg-paper-bright px-1.5 py-0.5 font-mono text-[10px] text-ink-muted transition hover:border-ink hover:text-ink"
-                >
-                  {presetVal}
-                </button>
-              ))}
             </div>
           </div>
           <div className="mt-1.5 flex items-baseline gap-2 border-b-2 border-ink pb-1">
@@ -581,18 +619,20 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               type="number"
               step="any"
               min="0"
+              placeholder="0.00"
               value={amountInput}
               onChange={(e) => {
+                setAmountTouched(true);
                 setAmountInput(e.target.value);
                 setSignedArtifact(null);
               }}
-              className="w-full bg-transparent font-display text-[2.15rem] font-bold leading-none tracking-tight text-ink tabular-nums focus:outline-none"
+              className="w-full bg-transparent font-display text-[2.15rem] font-bold leading-none tracking-tight text-ink tabular-nums placeholder:text-ink-faint focus:outline-none"
             />
             <span className="shrink-0 font-mono text-[11px] font-bold uppercase tracking-label text-ink-muted">
               {side === 'SellBase' ? config.baseSymbol : config.quoteSymbol}
             </span>
           </div>
-          {insufficientPayBalance && (
+          {showInsufficientPayError && (
             <p
               role="alert"
               data-testid="order-ticket-insufficient-balance"
@@ -614,25 +654,58 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
 
         {/* Limit price */}
         <div className="ledger-inset px-3 py-2.5">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label htmlFor="ticket-limit-input" className="eyebrow">
               {side === 'SellBase' ? 'Minimum price' : 'Maximum price'}
             </label>
             <button
               type="button"
+              data-testid="order-ticket-limit-badge"
               onClick={() => {
-                const factor = side === 'SellBase' ? 0.92 : 1.08;
-                setLimitPriceInput(
-                  String(Math.round(state.reserves.spot_price * factor)),
-                );
+                setLimitEdited(false);
+                setLimitPriceInput(formatLimitValue(defaultLimitNum));
                 setSignedArtifact(null);
               }}
               className="font-mono text-[10px] text-vermilion-600 underline decoration-dotted underline-offset-2 transition hover:text-vermilion-700"
             >
-              Spot ±8% · ${formatPrice(state.reserves.spot_price, 0)}
+              {limitEdited
+                ? `Custom ($${formatPrice(limitPriceNum, 2)}) · Reset Spot ${
+                    side === 'SellBase' ? '−' : '+'
+                  }${slippagePct}% ($${formatPrice(defaultLimitNum, 2)})`
+                : `Spot ${side === 'SellBase' ? '−' : '+'}${slippagePct}% · $${formatPrice(
+                    limitPriceNum,
+                    2,
+                  )}`}
             </button>
           </div>
-          <div className="mt-1 flex items-baseline gap-2">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {SLIPPAGE_PRESETS.map((pct) => (
+              <button
+                key={pct}
+                type="button"
+                data-testid={`order-ticket-slippage-${pct}`}
+                aria-pressed={!limitEdited && slippagePct === pct}
+                onClick={() => {
+                  setSlippagePct(pct);
+                  setLimitEdited(false);
+                  setLimitPriceInput(
+                    formatLimitValue(
+                      computeDefaultLimitNum(state.reserves.spot_price, side, pct),
+                    ),
+                  );
+                  setSignedArtifact(null);
+                }}
+                className={`border px-1.5 py-0.5 font-mono text-[10px] font-bold transition ${
+                  !limitEdited && slippagePct === pct
+                    ? 'border-ink bg-ink text-paper'
+                    : 'border-rule bg-paper-bright text-ink-muted hover:border-ink hover:text-ink'
+                }`}
+              >
+                {side === 'SellBase' ? `−${pct}%` : `+${pct}%`}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
             <input
               id="ticket-limit-input"
               type="number"
@@ -640,6 +713,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               min="0"
               value={limitPriceInput}
               onChange={(e) => {
+                setLimitEdited(true);
                 setLimitPriceInput(e.target.value);
                 setSignedArtifact(null);
               }}
@@ -702,7 +776,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   !(state.phase === 'Ready' && Boolean(onSettleAndSubmitDirect))) ||
                 busyAction !== null ||
                 amountNum <= 0 ||
-                insufficientPayBalance ||
+                exceedsPayBalance ||
                 insufficientGasEth
               }
               className="tap-target group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
@@ -807,7 +881,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   state.phase !== 'Open' ||
                   busyAction !== null ||
                   amountNum <= 0 ||
-                  insufficientPayBalance ||
+                  exceedsPayBalance ||
                   insufficientBondEth ||
                   insufficientGasEth
                 }
@@ -956,7 +1030,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   !intentOpen ||
                   busyAction !== null ||
                   amountNum <= 0 ||
-                  insufficientPayBalance
+                  exceedsPayBalance
                 }
                 onClick={handleSignIntent}
                 className="border border-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-cobalt-700 transition hover:bg-cobalt-50 disabled:opacity-40"
@@ -971,7 +1045,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                     !signedArtifact ||
                     !intentOpen ||
                     busyAction !== null ||
-                    insufficientPayBalance
+                    exceedsPayBalance
                   }
                   onClick={handleRelayIntent}
                   className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
@@ -985,7 +1059,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                     !signedArtifact ||
                     !intentOpen ||
                     busyAction !== null ||
-                    insufficientPayBalance ||
+                    exceedsPayBalance ||
                     insufficientGasEth
                   }
                   onClick={handleSubmitIntent}
@@ -1008,7 +1082,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                     !signedArtifact ||
                     !intentOpen ||
                     busyAction !== null ||
-                    insufficientPayBalance ||
+                    exceedsPayBalance ||
                     insufficientGasEth
                   }
                   onClick={handleSubmitIntent}

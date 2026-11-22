@@ -59,14 +59,26 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
   const remaining = remainingSecondsForPhase(batch, livePhase, chainNow);
   const busy = busyAction !== null;
 
-  const stages: Array<{ id: 'collecting' | 'pricing' | 'collect'; label: string }> = [
+  const stages: Array<{
+    id: 'collecting' | 'pricing' | 'finish' | 'collect';
+    label: string;
+  }> = [
     { id: 'collecting', label: 'Collecting' },
     { id: 'pricing', label: 'Pricing' },
+    { id: 'finish', label: 'Ready to finish' },
     { id: 'collect', label: 'Ready to collect' },
   ];
 
+  // Do NOT highlight "Ready to collect" until the round is settled.
+  // While the timer is done (Ready) but unsettled, highlight "Ready to finish".
   const activeStageIndex =
-    livePhase === 'Open' ? 0 : livePhase === 'Reveal' ? 1 : 2;
+    livePhase === 'Open'
+      ? 0
+      : livePhase === 'Reveal'
+        ? 1
+        : livePhase === 'Ready'
+          ? 2
+          : 3;
 
   const unrevealedWithSecret = userPendingCommits
     .filter((c) => !c.revealed && !c.slashed)
@@ -144,15 +156,17 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
           </div>
         </div>
 
-        {/* 3 plain stages: Collecting -> Pricing -> Ready to collect */}
-        <ol className="grid grid-cols-3 gap-2" aria-label="Round stages">
+        {/* 4 plain stages: Collecting -> Pricing -> Ready to finish -> Ready to collect */}
+        <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Round stages">
           {stages.map((stage, idx) => {
             const done = idx < activeStageIndex;
             const current = idx === activeStageIndex;
             return (
               <li
                 key={stage.id}
-                className={`border px-3 py-2.5 text-center text-xs font-bold ${
+                data-testid={`waiting-stage-${stage.id}`}
+                data-active={current ? 'true' : 'false'}
+                className={`border px-2.5 py-2.5 text-center text-xs font-bold ${
                   current
                     ? 'border-vermilion-600 bg-vermilion-50 text-vermilion-800'
                     : done
@@ -244,21 +258,10 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
           keeperHealthy ? (
             <div
               data-testid="simple-keeper-auto-settling"
-              className="flex flex-wrap items-center justify-between gap-3 border border-cobalt-600/60 bg-cobalt-50 px-4 py-3.5 text-sm text-cobalt-900"
+              className="flex items-center gap-2 border border-cobalt-600/60 bg-cobalt-50 px-4 py-3.5 text-sm font-medium text-cobalt-900"
             >
-              <span className="flex items-center gap-2 font-medium">
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cobalt-700" aria-hidden="true" />
-                <span>Round closes, settling automatically in about {keeperGraceSeconds}s.</span>
-              </span>
-              <button
-                type="button"
-                data-testid="simple-finalize-round"
-                disabled={busy}
-                onClick={() => void onSettleRound()}
-                className="shrink-0 border border-cobalt-700 bg-paper-bright px-3 py-1.5 font-mono text-xs font-bold text-cobalt-800 transition hover:border-ink disabled:opacity-50"
-              >
-                {busyAction === 'settle' ? 'Starting…' : UI_LABELS.startNextRound}
-              </button>
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-cobalt-700" aria-hidden="true" />
+              <span>Settling automatically in about {keeperGraceSeconds}s.</span>
             </div>
           ) : (
             <button
