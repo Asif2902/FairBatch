@@ -42,7 +42,7 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
   account,
   walletChainId,
   wrongNetwork,
-  balances,
+  balances: _balances,
   allowances,
   faucet,
   busyAction,
@@ -169,38 +169,19 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-px border border-rule bg-rule">
-              <div className="bg-paper-bright p-2.5">
-                <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
-                  Sepolia ETH
-                </div>
-                <div className="mt-1 font-mono text-sm font-bold text-ink tabular-nums">
-                  {formatToken(human(balances?.eth, 18), 4)}
-                </div>
-              </div>
-              <div className="bg-paper-bright p-2.5">
-                <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
-                  LP shares
-                </div>
-                <div className="mt-1 font-mono text-sm font-bold text-plum-700 tabular-nums">
-                  {formatToken(human(balances?.lpShares, 18), 2)}
-                </div>
-              </div>
-              <div className="bg-paper-bright p-2.5">
-                <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
-                  {config.baseSymbol}
-                </div>
-                <div
-                  data-testid="account-balance-base"
-                  className="mt-1 font-mono text-sm font-bold text-ink tabular-nums"
-                >
-                  {formatToken(human(balances?.base, config.baseDecimals), 3)}
-                </div>
-                <div className="mt-1 flex items-center gap-1 font-mono text-xs text-ink-muted">
+            <div
+              data-testid="account-approvals-summary"
+              className="flex flex-wrap items-center justify-between gap-2 border border-rule bg-paper-soft px-3 py-2 text-xs text-ink-muted"
+            >
+              <span className="font-mono">
+                Balances shown in top bar
+              </span>
+              <div className="flex flex-wrap items-center gap-3 font-mono">
+                <span className="inline-flex items-center gap-1">
                   {allowances && allowances.base > 0n ? (
                     <>
                       <CheckCircle2 className="h-3 w-3 text-pine-600" />
-                      approved
+                      <span className="text-pine-700">{config.baseSymbol} approved</span>
                     </>
                   ) : (
                     <>
@@ -209,29 +190,18 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
                         type="button"
                         disabled={busy}
                         onClick={() => void onApprove('base')}
-                        className="underline decoration-dotted underline-offset-2 hover:text-ink"
+                        className="font-bold text-cobalt-700 underline decoration-dotted underline-offset-2 hover:text-ink disabled:opacity-40"
                       >
-                        approve
+                        Approve {config.baseSymbol}
                       </button>
                     </>
                   )}
-                </div>
-              </div>
-              <div className="bg-paper-bright p-2.5">
-                <div className="font-mono text-xs uppercase tracking-label text-ink-muted">
-                  {config.quoteSymbol}
-                </div>
-                <div
-                  data-testid="account-balance-quote"
-                  className="mt-1 font-mono text-sm font-bold text-ink tabular-nums"
-                >
-                  {formatToken(human(balances?.quote, config.quoteDecimals), 2)}
-                </div>
-                <div className="mt-1 flex items-center gap-1 font-mono text-xs text-ink-muted">
+                </span>
+                <span className="inline-flex items-center gap-1">
                   {allowances && allowances.quote > 0n ? (
                     <>
                       <CheckCircle2 className="h-3 w-3 text-pine-600" />
-                      approved
+                      <span className="text-pine-700">{config.quoteSymbol} approved</span>
                     </>
                   ) : (
                     <>
@@ -240,13 +210,13 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
                         type="button"
                         disabled={busy}
                         onClick={() => void onApprove('quote')}
-                        className="underline decoration-dotted underline-offset-2 hover:text-ink"
+                        className="font-bold text-cobalt-700 underline decoration-dotted underline-offset-2 hover:text-ink disabled:opacity-40"
                       >
-                        approve
+                        Approve {config.quoteSymbol}
                       </button>
                     </>
                   )}
-                </div>
+                </span>
               </div>
             </div>
 

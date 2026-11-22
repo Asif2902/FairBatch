@@ -11,7 +11,7 @@ import type { BatchPhase, LocalSecretVaultEntry } from '../../types';
 import type { ChainCommitment, ChainOrder, RawBatchInfo } from '../../onchain/state';
 import { remainingSecondsForPhase } from '../../onchain/state';
 import type { RuntimeConfig } from '../../onchain/config';
-import { formatPrice, formatToken } from '../../lib/format';
+import { formatTokenAmount } from '../../lib/format';
 import { simplePhaseName } from '../../lib/glossary';
 
 interface SimpleWaitingCardProps {
@@ -176,8 +176,8 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
               >
                 <span className="font-bold text-ink">
                   {order.side === 'SellBase'
-                    ? `Swapping ${formatToken(order.amount_in, 4)} ${config.baseSymbol} → ${config.quoteSymbol}`
-                    : `Swapping ${formatPrice(order.amount_in, 2)} ${config.quoteSymbol} → ${config.baseSymbol}`}
+                    ? `Swapping ${formatTokenAmount(order.amount_in, 'base')} ${config.baseSymbol} → ${config.quoteSymbol}`
+                    : `Swapping ${formatTokenAmount(order.amount_in, 'quote')} ${config.quoteSymbol} → ${config.baseSymbol}`}
                 </span>
                 <span className="font-mono text-xs text-ink-muted">
                   Included in Round #{roundId}
@@ -207,12 +207,12 @@ export const SimpleWaitingCard: React.FC<SimpleWaitingCardProps> = ({
                   <div className="font-bold">
                     {secret
                       ? secret.side === 'SellBase'
-                        ? `${formatToken(secret.amount_in, 4)} ${config.baseSymbol} → ${config.quoteSymbol}`
-                        : `${formatPrice(secret.amount_in, 2)} ${config.quoteSymbol} → ${config.baseSymbol}`
+                        ? `${formatTokenAmount(secret.amount_in, 'base')} ${config.baseSymbol} → ${config.quoteSymbol}`
+                        : `${formatTokenAmount(secret.amount_in, 'quote')} ${config.quoteSymbol} → ${config.baseSymbol}`
                       : `Sealed order #${commit.commit_id}`}
                   </div>
                   <div className="text-xs text-ink-muted">
-                    Deposit: {formatToken(commit.bond_eth, 4)} ETH ·{' '}
+                    Deposit: {formatTokenAmount(commit.bond_eth, 'eth')} ETH ·{' '}
                     {secret ? 'Secret saved in this browser' : 'Secret not found in this browser'}
                   </div>
                 </div>

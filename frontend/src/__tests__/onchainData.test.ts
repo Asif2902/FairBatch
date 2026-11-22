@@ -20,9 +20,12 @@ import {
   formatDuration,
   formatInvariant,
   formatPrice,
+  formatSignedOrderAmount,
   formatToken,
+  formatTokenAmount,
   formatUsd,
   getChainLabel,
+  pickReconciledDecimals,
   shortenAddress,
 } from '../lib/format';
 import type { ClaimableDto } from '../types';
@@ -348,5 +351,23 @@ describe('Number, address, and duration formatting', () => {
     expect(formatDuration(125)).toBe('2m 05s');
     expect(formatDuration(43_200)).toBe('12h');
     expect(formatDuration(90_000)).toBe('1d 1h');
+  });
+
+  it('never displays -0.00 or 0.00 for strictly non-zero token amounts and reconciles row sums', () => {
+    expect(formatToken(0.001, 4, 2)).toBe('0.001');
+    expect(formatToken(0.00001, 4, 2)).toBe('<0.0001');
+    expect(formatToken(-0.00001, 4, 2)).toBe('-<0.0001');
+    expect(formatToken(0.001, 2, 2)).toBe('<0.01');
+    expect(formatToken(-0.001, 2, 2)).toBe('-<0.01');
+    expect(formatTokenAmount(0.001, 'base')).toBe('0.001');
+    expect(formatTokenAmount(0.7548, 'base')).toBe('0.7548');
+    expect(formatTokenAmount(0.004, 'quote')).toBe('<0.01');
+    expect(formatSignedOrderAmount(0.001, 'base', '-')).toBe('−0.001');
+    expect(formatSignedOrderAmount(0.00001, 'base', '-')).toBe('−<0.0001');
+    expect(formatSignedOrderAmount(0.001, 'base', '-')).not.toBe('−0.00');
+    expect(formatSignedOrderAmount(2946.5, 'quote', '+')).toBe('+2,946.50');
+    // Two 2.9465 payouts round to 2.95+2.95=5.90 at 2 decimals vs 5.89 total -> needs 4 decimals
+    expect(pickReconciledDecimals([2.9465, 2.9465], 2, 4)).toBe(4);
+    expect(pickReconciledDecimals([297.6, 148.8], 2, 4)).toBe(2);
   });
 });

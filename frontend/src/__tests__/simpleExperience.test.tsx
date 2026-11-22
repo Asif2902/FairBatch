@@ -622,4 +622,95 @@ describe('Simple mode end-to-end flows', () => {
     );
     fetchSpy.mockRestore();
   });
+
+  it('validates balances, sealed deposit, and gas in Simple Swap and Simple Earn while keeping Max working', () => {
+    const lowBaseSnap = buildSnapshot({
+      baseBal: 754_800_000_000_000_000n, // 0.7548 fWETH
+      quoteBal: 50n * 10n ** 6n,
+      lpShares: 10n * 10n ** 18n,
+    });
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: lowBaseSnap,
+    });
+    const { rerender } = render(<App />);
+
+    // Enter amount > balance on Simple Swap
+    const swapInput = screen.getByTestId('simple-pay-input');
+    fireEvent.change(swapInput, { target: { value: '2' } });
+    expect(screen.getByTestId('simple-insufficient-balance')).toHaveTextContent(
+      'Insufficient fWETH balance (0.7548)',
+    );
+    expect(screen.getByTestId('simple-swap-button')).toBeDisabled();
+
+    // Clicking Max fills 0.7548 and re-enables swap button
+    fireEvent.click(screen.getByRole('button', { name: 'Max' }));
+    expect(screen.queryByTestId('simple-insufficient-balance')).not.toBeInTheDocument();
+    expect(screen.getByTestId('simple-swap-button')).toBeEnabled();
+
+    // Sealed order with insufficient ETH for bond + gas disables button
+    const tinyEthSnap = buildSnapshot({
+      baseBal: 754_800_000_000_000_000n,
+      quoteBal: 50n * 10n ** 6n,
+      lpShares: 10n * 10n ** 18n,
+    });
+    tinyEthSnap.balances.eth = 50_000_000_000_000n; // 0.00005 ETH (< 0.0001 bond)
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: tinyEthSnap,
+    });
+    rerender(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /More privacy options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Private \(sealed\)/i }));
+    expect(screen.getByTestId('simple-insufficient-bond')).toHaveTextContent(
+      /Insufficient ETH balance/i,
+    );
+    expect(screen.getByTestId('simple-swap-button')).toBeDisabled();
+
+    // Zero ETH shows explicit gas warning and disables swap
+    const zeroEthSnap = buildSnapshot({
+      baseBal: 754_800_000_000_000_000n,
+      quoteBal: 50n * 10n ** 6n,
+      lpShares: 10n * 10n ** 18n,
+    });
+    zeroEthSnap.balances.eth = 0n;
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: zeroEthSnap,
+    });
+    rerender(<App />);
+    expect(screen.getByTestId('simple-insufficient-gas')).toHaveTextContent(
+      /Insufficient Sepolia ETH for gas/i,
+    );
+    expect(screen.getByTestId('simple-swap-button')).toBeDisabled();
+
+    // Switch to Simple Earn with healthy ETH and validate add/withdraw inputs
+    controller = makeCtrl({
+      account: ALICE,
+      snapshot: lowBaseSnap,
+    });
+    rerender(<App />);
+    fireEvent.click(screen.getByTestId('simple-tab-earn'));
+
+    // Default add inputs are 0.02 fWETH / 60 fUSDC, while quote balance is 50 fUSDC -> quote insufficient!
+    expect(screen.getByTestId('simple-earn-insufficient-quote')).toHaveTextContent(
+      'Insufficient fUSDC balance (50.00)',
+    );
+    expect(screen.getByTestId('simple-earn-add-button')).toBeDisabled();
+
+    // Enter 2 fWETH -> base insufficient too
+    fireEvent.change(screen.getByTestId('simple-earn-base-input'), { target: { value: '2' } });
+    expect(screen.getByTestId('simple-earn-insufficient-base')).toHaveTextContent(
+      'Insufficient fWETH balance (0.7548)',
+    );
+
+    // Withdraw section is visible below on Simple Earn; enter > 10 shares
+    fireEvent.change(screen.getByTestId('simple-earn-withdraw-input'), {
+      target: { value: '25' },
+    });
+    expect(screen.getByTestId('simple-earn-insufficient-withdraw')).toHaveTextContent(
+      'Insufficient LP shares balance (10.00)',
+    );
+    expect(screen.getByTestId('simple-earn-withdraw-button')).toBeDisabled();
+  });
 });

@@ -24,7 +24,12 @@ import {
   computeLocalCommitmentHash,
   generateRandomSaltHex,
 } from '../lib/keccak';
-import { formatPrice, formatToken, shortenAddress } from '../lib/format';
+import {
+  formatPrice,
+  formatSignedOrderAmount,
+  formatTokenAmount,
+  shortenAddress,
+} from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
 import { InfoTooltip } from './InfoTooltip';
 
@@ -114,6 +119,17 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
   const ethBalanceHuman = balances ? Number(formatUnits(balances.eth, 18)) : 0;
   const activePayBalance = side === 'SellBase' ? baseBalanceHuman : quoteBalanceHuman;
   const activePaySymbol = side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
+  const activePayKind = side === 'SellBase' ? 'base' : 'quote';
+  const insufficientPayBalance = Boolean(
+    account && balances && amountNum > activePayBalance + 1e-9,
+  );
+  const insufficientGasEth = Boolean(account && balances && balances.eth === 0n);
+  const insufficientBondEth = Boolean(
+    account &&
+      balances &&
+      bondEthNum > 0 &&
+      (bondEthNum > ethBalanceHuman + 1e-9 || ethBalanceHuman <= bondEthNum + 1e-9),
+  );
 
   useEffect(() => {
     if (!localFeedback) return;
@@ -529,10 +545,7 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               >
                 Balance:{' '}
                 <strong className="text-ink">
-                  {side === 'SellBase'
-                    ? formatToken(activePayBalance, 4)
-                    : formatPrice(activePayBalance, 2)}{' '}
-                  {activePaySymbol}
+                  {formatTokenAmount(activePayBalance, activePayKind)} {activePaySymbol}
                 </strong>
               </span>
               <button
@@ -579,6 +592,24 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               {side === 'SellBase' ? config.baseSymbol : config.quoteSymbol}
             </span>
           </div>
+          {insufficientPayBalance && (
+            <p
+              role="alert"
+              data-testid="order-ticket-insufficient-balance"
+              className="mt-1.5 font-mono text-xs font-bold text-vermilion-700"
+            >
+              Insufficient {activePaySymbol} balance ({formatTokenAmount(activePayBalance, activePayKind)})
+            </p>
+          )}
+          {insufficientGasEth && (
+            <p
+              role="alert"
+              data-testid="order-ticket-insufficient-gas"
+              className="mt-1 font-mono text-xs font-bold text-vermilion-700"
+            >
+              Insufficient Sepolia ETH for gas ({formatTokenAmount(ethBalanceHuman, 'eth')} ETH)
+            </p>
+          )}
         </div>
 
         {/* Limit price */}
@@ -639,13 +670,15 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               </span>
               <span className="text-right font-mono font-semibold text-ink tabular-nums">
                 {preview.myFill?.status === 'Filled'
-                  ? `100% → ${formatToken(preview.myFill.payout_out, 2)} ${
-                      side === 'SellBase' ? config.quoteSymbol : config.baseSymbol
-                    }`
+                  ? `100% → ${formatTokenAmount(
+                      preview.myFill.payout_out,
+                      side === 'SellBase' ? 'quote' : 'base',
+                    )} ${side === 'SellBase' ? config.quoteSymbol : config.baseSymbol}`
                   : preview.myFill?.status === 'PartialFill'
-                    ? `Pro-rata → ${formatToken(preview.myFill.payout_out, 2)} ${
-                        side === 'SellBase' ? config.quoteSymbol : config.baseSymbol
-                      }`
+                    ? `Pro-rata → ${formatTokenAmount(
+                        preview.myFill.payout_out,
+                        side === 'SellBase' ? 'quote' : 'base',
+                      )} ${side === 'SellBase' ? config.quoteSymbol : config.baseSymbol}`
                     : 'Out-of-the-money · full refund'}
               </span>
             </div>
@@ -663,10 +696,14 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
           <form onSubmit={handleDirectSubmit}>
             <button
               type="submit"
+              data-testid="order-ticket-direct-submit"
               disabled={
                 (state.phase !== 'Open' &&
                   !(state.phase === 'Ready' && Boolean(onSettleAndSubmitDirect))) ||
-                busyAction !== null
+                busyAction !== null ||
+                amountNum <= 0 ||
+                insufficientPayBalance ||
+                insufficientGasEth
               }
               className="tap-target group flex w-full items-center justify-between bg-vermilion-500 px-4 py-3 text-left text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -720,7 +757,8 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                       data-testid="order-ticket-eth-balance"
                       className="mt-0.5 font-mono text-[10px] text-ink-muted tabular-nums"
                     >
-                      ETH Balance: <strong className="text-ink">{formatToken(ethBalanceHuman, 4)} ETH</strong>
+                      ETH Balance:{' '}
+                      <strong className="text-ink">{formatTokenAmount(ethBalanceHuman, 'eth')} ETH</strong>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -739,6 +777,18 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                   </div>
                 </div>
 
+                {insufficientBondEth && (
+                  <p
+                    role="alert"
+                    data-testid="order-ticket-insufficient-bond"
+                    className="mt-1.5 font-mono text-xs font-bold text-vermilion-700"
+                  >
+                    {bondEthNum > ethBalanceHuman + 1e-9
+                      ? `Insufficient ETH balance (${formatTokenAmount(ethBalanceHuman, 'eth')})`
+                      : `Insufficient ETH balance (${formatTokenAmount(ethBalanceHuman, 'eth')}) for deposit + gas`}
+                  </p>
+                )}
+
                 <div className="mt-2.5">
                   <div className="eyebrow">keccak256 commitment</div>
                   <div
@@ -752,7 +802,15 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
 
               <button
                 type="submit"
-                disabled={state.phase !== 'Open' || busyAction !== null}
+                data-testid="order-ticket-commit-submit"
+                disabled={
+                  state.phase !== 'Open' ||
+                  busyAction !== null ||
+                  amountNum <= 0 ||
+                  insufficientPayBalance ||
+                  insufficientBondEth ||
+                  insufficientGasEth
+                }
                 className="flex w-full items-center justify-between bg-brass-500 px-4 py-3 text-left text-paper shadow-glow-brass transition hover:bg-brass-600 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <span className="font-display text-sm font-bold tracking-tight">
@@ -894,7 +952,12 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                disabled={!intentOpen || busyAction !== null}
+                disabled={
+                  !intentOpen ||
+                  busyAction !== null ||
+                  amountNum <= 0 ||
+                  insufficientPayBalance
+                }
                 onClick={handleSignIntent}
                 className="border border-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-cobalt-700 transition hover:bg-cobalt-50 disabled:opacity-40"
               >
@@ -904,7 +967,12 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                 <button
                   type="button"
                   data-testid="pro-relay-intent-button"
-                  disabled={!signedArtifact || !intentOpen || busyAction !== null}
+                  disabled={
+                    !signedArtifact ||
+                    !intentOpen ||
+                    busyAction !== null ||
+                    insufficientPayBalance
+                  }
                   onClick={handleRelayIntent}
                   className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -913,7 +981,13 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
               ) : (
                 <button
                   type="button"
-                  disabled={!signedArtifact || !intentOpen || busyAction !== null}
+                  disabled={
+                    !signedArtifact ||
+                    !intentOpen ||
+                    busyAction !== null ||
+                    insufficientPayBalance ||
+                    insufficientGasEth
+                  }
                   onClick={handleSubmitIntent}
                   className="bg-cobalt-600 px-3 py-2.5 text-[11px] font-bold text-paper shadow-glow-cobalt transition hover:bg-cobalt-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -930,7 +1004,13 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                 <button
                   type="button"
                   data-testid="pro-submit-intent-myself"
-                  disabled={!signedArtifact || !intentOpen || busyAction !== null}
+                  disabled={
+                    !signedArtifact ||
+                    !intentOpen ||
+                    busyAction !== null ||
+                    insufficientPayBalance ||
+                    insufficientGasEth
+                  }
                   onClick={handleSubmitIntent}
                   className="shrink-0 border border-rule-strong bg-paper-bright px-2.5 py-1 font-mono text-[10px] font-bold text-ink transition hover:border-ink disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -1007,8 +1087,8 @@ export const OrderTicket: React.FC<OrderTicketProps> = ({
                         }
                       >
                         {ord.side === 'SellBase'
-                          ? `−${formatToken(ord.amount_in, 2)} ${config.baseSymbol}`
-                          : `+${formatPrice(ord.amount_in, 0)} ${config.quoteSymbol}`}
+                          ? `${formatSignedOrderAmount(ord.amount_in, 'base', '-')} ${config.baseSymbol}`
+                          : `${formatSignedOrderAmount(ord.amount_in, 'quote', '+')} ${config.quoteSymbol}`}
                       </span>
                       <span className="border border-rule px-1 py-0.5 text-[8px] uppercase tracking-label text-ink-faint">
                         {ord.submission_type === 'Eip712Intent'

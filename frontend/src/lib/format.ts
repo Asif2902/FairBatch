@@ -19,12 +19,93 @@ export function formatUsd(value: number, decimals = 2): string {
   );
 }
 
+/**
+ * Formats a token quantity without ever displaying "0.00" or "-0.00" for a
+ * strictly non-zero amount (shows "<0.0001" / "<0.01" below display precision).
+ */
 export function formatToken(value: number, maxDecimals = 4, minDecimals = 2): string {
-  if (!Number.isFinite(value)) return '0.00';
+  const cap = Math.max(minDecimals, maxDecimals);
+  if (!Number.isFinite(value) || value === 0) {
+    return (0).toLocaleString('en-US', {
+      minimumFractionDigits: minDecimals,
+      maximumFractionDigits: cap,
+    });
+  }
+  const abs = Math.abs(value);
+  const threshold = Math.pow(10, -cap);
+  if (abs < threshold) {
+    const label = `<${threshold.toFixed(cap)}`;
+    return value < 0 ? `-${label}` : label;
+  }
   return value.toLocaleString('en-US', {
     minimumFractionDigits: minDecimals,
-    maximumFractionDigits: Math.max(minDecimals, maxDecimals),
+    maximumFractionDigits: cap,
   });
+}
+
+export type TokenFormatKind = 'base' | 'quote' | 'eth' | 'shares';
+
+/**
+ * Single shared token-amount formatter used across balance rows, inputs,
+ * receipts, and order lists so decimals stay consistent and non-zero amounts
+ * never round to "0.00" or "-0.00".
+ */
+export function formatTokenAmount(
+  value: number,
+  kind: TokenFormatKind = 'base',
+  overrideDecimals?: number,
+): string {
+  if (overrideDecimals !== undefined) {
+    return formatToken(value, overrideDecimals, overrideDecimals);
+  }
+  switch (kind) {
+    case 'quote':
+      return formatToken(value, 2, 2);
+    case 'base':
+    case 'eth':
+    case 'shares':
+      return formatToken(value, 4, 2);
+  }
+}
+
+/**
+ * Formats a signed order delta (e.g. "−0.001 fWETH", "−<0.0001 fWETH", "+50.00 fUSDC")
+ * without ever rendering "−0.00" for a non-zero order.
+ */
+export function formatSignedOrderAmount(
+  value: number,
+  kind: 'base' | 'quote',
+  direction: '-' | '+',
+): string {
+  const abs = Math.abs(value);
+  const sign = direction === '-' ? '−' : '+';
+  if (!Number.isFinite(abs) || abs === 0) {
+    return `${sign}${formatTokenAmount(0, kind)}`;
+  }
+  return `${sign}${formatTokenAmount(abs, kind)}`;
+}
+
+/**
+ * Picks the smallest decimal count in [minDecimals, maxDecimals] at which the
+ * sum of individually rounded row amounts equals the rounded sum, so displayed
+ * rows reconcile cleanly with the displayed headline total.
+ */
+export function pickReconciledDecimals(
+  values: number[],
+  minDecimals = 2,
+  maxDecimals = 4,
+): number {
+  if (values.length <= 1) return minDecimals;
+  const exactTotal = values.reduce((acc, v) => acc + v, 0);
+  for (let d = minDecimals; d <= maxDecimals; d += 1) {
+    const scale = Math.pow(10, d);
+    const roundedSum = values.reduce((acc, v) => acc + Math.round(v * scale), 0);
+    const totalRounded = Math.round(exactTotal * scale);
+    if (roundedSum === totalRounded) {
+      return d;
+    }
+  }
+  return maxDecimals;
 }
 
 export function formatInvariant(k: number): string {

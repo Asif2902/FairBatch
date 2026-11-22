@@ -13,7 +13,7 @@ import { formatUnits } from 'viem';
 import type { ClaimableDto, LocalSecretVaultEntry, OrderSide } from '../types';
 import type { FairBatchController } from '../onchain/useFairBatch';
 import { detectSimpleStep } from '../onchain/useFairBatch';
-import { formatDuration, formatPrice, formatToken } from '../lib/format';
+import { formatDuration, formatPrice, formatToken, formatTokenAmount } from '../lib/format';
 import {
   FIRST_VISIT_INTRO,
   LOW_GAS_THRESHOLD_WEI,
@@ -272,7 +272,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-brass-700" aria-hidden="true" />
             <div className="space-y-1">
               <p className="font-bold text-ink">
-                You need a little Sepolia ETH for gas ({formatToken(ethHuman, 4)} ETH in wallet)
+                You need a little Sepolia ETH for gas ({formatTokenAmount(ethHuman, 'eth')} ETH in wallet)
               </p>
               <p className="leading-snug text-ink-soft">
                 Swaps and token claims need a tiny amount of free Sepolia ETH for network gas, and

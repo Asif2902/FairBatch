@@ -30,7 +30,7 @@ import { remainingSecondsForPhase } from '../../onchain/state';
 import type { RuntimeConfig } from '../../onchain/config';
 import { computeBatchSettlement } from '../../lib/clearingMath';
 import { generateRandomSaltHex } from '../../lib/keccak';
-import { formatPrice, formatToken } from '../../lib/format';
+import { formatPrice, formatTokenAmount } from '../../lib/format';
 import { SIMPLE_COPY, SIMPLE_ORDER_MODES } from '../../lib/glossary';
 
 type SimpleOrderMode = 'direct' | 'sealed' | 'signed';
@@ -162,13 +162,32 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
   const spot = state.reserves.spot_price || 3000;
   const baseBal = human(balances?.base, config.baseDecimals);
   const quoteBal = human(balances?.quote, config.quoteDecimals);
+  const ethBal = human(balances?.eth, 18);
   const paySymbol = side === 'SellBase' ? config.baseSymbol : config.quoteSymbol;
   const receiveSymbol = side === 'SellBase' ? config.quoteSymbol : config.baseSymbol;
+  const payKind = side === 'SellBase' ? 'base' : 'quote';
   const payBalance = side === 'SellBase' ? baseBal : quoteBal;
 
   const parsedAmount = Number(amountInput);
   const validAmount = Number.isFinite(parsedAmount) && parsedAmount > 0;
-  const insufficientBalance = Boolean(account && validAmount && parsedAmount > payBalance + 1e-9);
+  const insufficientBalance = Boolean(account && balances && validAmount && parsedAmount > payBalance + 1e-9);
+  const bondEthNum = Number(bondEth) || 0;
+  const insufficientBondEth = Boolean(
+    orderMode === 'sealed' &&
+      account &&
+      balances &&
+      bondEthNum > 0 &&
+      (bondEthNum > ethBal + 1e-9 || ethBal <= bondEthNum + 1e-9),
+  );
+  const insufficientGasEth = Boolean(
+    account &&
+      !wrongNetwork &&
+      balances &&
+      balances.eth === 0n &&
+      !((orderMode === 'signed' || (livePhase === 'Reveal' && orderMode === 'direct')) &&
+        relayerHealthy &&
+        !preferSelfSubmit),
+  );
 
   // Equivalent limit price derived from max slippage tolerance (keeps 8% safe default).
   const limitPriceNum = useMemo(() => {
@@ -290,9 +309,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
     }
     if (insufficientBalance) {
       setLocalError(
-        `You only have ${
-          side === 'SellBase' ? formatToken(payBalance, 4) : formatPrice(payBalance, 2)
-        } ${paySymbol}. Lower the amount or claim free test tokens.`,
+        `Insufficient ${paySymbol} balance (${formatTokenAmount(payBalance, payKind)}). Lower the amount or claim free test tokens.`,
       );
       return;
     }
@@ -507,10 +524,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
               <span>
                 Balance:{' '}
                 <strong className="text-ink">
-                  {side === 'SellBase'
-                    ? formatToken(payBalance, 4)
-                    : formatPrice(payBalance, 2)}{' '}
-                  {paySymbol}
+                  {formatTokenAmount(payBalance, payKind)} {paySymbol}
                 </strong>
               </span>
               {payBalance > 0 && (
@@ -555,6 +569,25 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
             </select>
           </div>
 
+          {insufficientBalance && (
+            <p
+              role="alert"
+              data-testid="simple-insufficient-balance"
+              className="mt-2 font-mono text-xs font-bold text-vermilion-700"
+            >
+              Insufficient {paySymbol} balance ({formatTokenAmount(payBalance, payKind)})
+            </p>
+          )}
+          {insufficientGasEth && (
+            <p
+              role="alert"
+              data-testid="simple-insufficient-gas"
+              className="mt-1.5 font-mono text-xs font-bold text-vermilion-700"
+            >
+              Insufficient Sepolia ETH for gas ({formatTokenAmount(ethBal, 'eth')} ETH)
+            </p>
+          )}
+
           {/* Quick chips */}
           <div className="mt-3 flex flex-wrap gap-2">
             {[
@@ -596,8 +629,8 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
             <span className="font-mono text-xs text-ink-muted">
               Balance:{' '}
               {side === 'SellBase'
-                ? `${formatPrice(quoteBal, 2)} ${config.quoteSymbol}`
-                : `${formatToken(baseBal, 4)} ${config.baseSymbol}`}
+                ? `${formatTokenAmount(quoteBal, 'quote')} ${config.quoteSymbol}`
+                : `${formatTokenAmount(baseBal, 'base')} ${config.baseSymbol}`}
             </span>
           </div>
 
@@ -607,9 +640,10 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
               className="font-mono text-2xl font-bold text-pine-700 tabular-nums sm:text-3xl"
             >
               {previewWithOrder && previewWithOrder.estimatedOut > 0
-                ? side === 'SellBase'
-                  ? formatPrice(previewWithOrder.estimatedOut, 2)
-                  : formatToken(previewWithOrder.estimatedOut, 4)
+                ? formatTokenAmount(
+                    previewWithOrder.estimatedOut,
+                    side === 'SellBase' ? 'quote' : 'base',
+                  )
                 : '0.00'}
             </div>
             <span className="border border-rule-strong bg-paper-bright px-3 py-1.5 font-display text-sm font-bold text-ink">
@@ -761,7 +795,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                         Refundable deposit (ETH)
                       </label>
                       <span className="font-mono text-[11px] text-ink-muted tabular-nums">
-                        ETH balance: {formatToken(human(balances?.eth, 18), 4)} ETH · min{' '}
+                        ETH balance: {formatTokenAmount(ethBal, 'eth')} ETH · min{' '}
                         {Number(minBondWei) / 1e18} ETH
                       </span>
                     </div>
@@ -775,6 +809,17 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                       className="w-28 border border-rule-strong bg-paper-bright px-2.5 py-1.5 text-right font-mono text-sm font-bold text-ink"
                     />
                   </div>
+                  {insufficientBondEth && (
+                    <p
+                      role="alert"
+                      data-testid="simple-insufficient-bond"
+                      className="font-mono text-xs font-bold text-vermilion-700"
+                    >
+                      {bondEthNum > ethBal + 1e-9
+                        ? `Insufficient ETH balance (${formatTokenAmount(ethBal, 'eth')})`
+                        : `Insufficient ETH balance (${formatTokenAmount(ethBal, 'eth')}) for deposit + gas`}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -795,7 +840,7 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                       >
                         <div>
                           <div className="font-bold text-ink">
-                            Round #{commit.batch_id} · Deposit {formatToken(commit.bond_eth, 4)} ETH
+                            Round #{commit.batch_id} · Deposit {formatTokenAmount(commit.bond_eth, 'eth')} ETH
                           </div>
                           <div className="text-ink-muted">
                             {commit.revealed
@@ -905,7 +950,16 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
         <button
           type="submit"
           data-testid="simple-swap-button"
-          disabled={busy || sealedBlockedInFinalizing || (Boolean(account) && !wrongNetwork && (!validAmount || insufficientBalance))}
+          disabled={
+            busy ||
+            sealedBlockedInFinalizing ||
+            (Boolean(account) &&
+              !wrongNetwork &&
+              (!validAmount ||
+                insufficientBalance ||
+                insufficientBondEth ||
+                insufficientGasEth))
+          }
           className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:cursor-not-allowed disabled:opacity-45"
         >
           {busy ? (

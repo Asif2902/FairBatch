@@ -28,7 +28,7 @@ import { ContractConfigModal } from './components/ContractConfigModal';
 import { FeArchitectureModal } from './components/FeArchitectureModal';
 import { HowItWorksModal } from './components/HowItWorksModal';
 import { SandwichSimulationModal } from './components/SandwichSimulationModal';
-import { formatPrice, formatToken } from './lib/format';
+import { formatTokenAmount } from './lib/format';
 import {
   LOW_GAS_THRESHOLD_WEI,
   PUBLIC_SEPOLIA_FAUCETS,
@@ -395,7 +395,7 @@ export const App: React.FC = () => {
                         data-testid="pro-balance-eth"
                         className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums"
                       >
-                        {formatToken(ethHuman, 4)} ETH
+                        {formatTokenAmount(ethHuman, 'eth')} ETH
                       </div>
                       <div className="mt-0.5 font-mono text-[10px] text-ink-muted">
                         {lowGas ? 'Low gas (< 0.002 ETH)' : 'Gas & 0.0001 ETH deposit'}
@@ -410,7 +410,7 @@ export const App: React.FC = () => {
                         data-testid="pro-balance-base"
                         className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums"
                       >
-                        {formatToken(baseHuman, 4)} {fb.config.baseSymbol}
+                        {formatTokenAmount(baseHuman, 'base')} {fb.config.baseSymbol}
                       </div>
                       <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-ink-muted">
                         {baseApproved ? (
@@ -447,7 +447,7 @@ export const App: React.FC = () => {
                         data-testid="pro-balance-quote"
                         className="mt-0.5 font-mono text-sm font-bold text-ink tabular-nums"
                       >
-                        {formatPrice(quoteHuman, 2)} {fb.config.quoteSymbol}
+                        {formatTokenAmount(quoteHuman, 'quote')} {fb.config.quoteSymbol}
                       </div>
                       <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-ink-muted">
                         {quoteApproved ? (
@@ -484,7 +484,7 @@ export const App: React.FC = () => {
                         data-testid="pro-balance-lp"
                         className="mt-0.5 font-mono text-sm font-bold text-plum-700 tabular-nums"
                       >
-                        {formatToken(lpSharesHuman, 2)} shares
+                        {formatTokenAmount(lpSharesHuman, 'shares')} shares
                       </div>
                       <div className="mt-0.5 font-mono text-[10px] text-ink-muted">
                         FM-AMM passive pool

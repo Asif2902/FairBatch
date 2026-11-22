@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { BatchPhase, ClaimableDto, OrderDto, StateResponse } from '../types';
 import type { FairBatchController } from '../onchain/useFairBatch';
-import type { FaucetState, LiquidityLockState, OnchainSnapshot } from '../onchain/state';
+import type { FaucetState, LiquidityLockState, OnchainSnapshot, WalletBalances } from '../onchain/state';
 import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
 import { computeBatchSettlement } from '../lib/clearingMath';
 import { formatPrice } from '../lib/format';
@@ -71,8 +71,23 @@ let controller: FairBatchController;
 function makeSnapshot(
   phase: BatchPhase,
   _account: string | null = null,
-  overrides: { lpLock?: Partial<LiquidityLockState>; faucet?: Partial<FaucetState> } = {},
+  overrides: {
+    lpLock?: Partial<LiquidityLockState>;
+    faucet?: Partial<FaucetState>;
+    balances?: Partial<WalletBalances>;
+  } = {},
 ): OnchainSnapshot {
+  const balances: WalletBalances = {
+    eth: 10n ** 18n,
+    base: 5n * 10n ** 18n,
+    quote: 20_000n * 10n ** 6n,
+    lpShares: 100n * 10n ** 18n,
+    ...overrides.balances,
+  };
+  const lockedShares = overrides.lpLock?.lockedShares ?? 0n;
+  const unlockedShares =
+    overrides.lpLock?.unlockedShares ??
+    (balances.lpShares > lockedShares ? balances.lpShares - lockedShares : 0n);
   const settlement = computeBatchSettlement(BATCH_ID, 100, 300_000, ORDERS);
   const state: StateResponse = {
     batch_id: BATCH_ID,
@@ -138,18 +153,12 @@ function makeSnapshot(
       totalShares: 5_477_225_575_051_661_134_569n,
       spotPriceWad: 3_000n * 10n ** 18n,
     },
-    balances: {
-      eth: 10n ** 18n,
-      base: 5n * 10n ** 18n,
-      quote: 20_000n * 10n ** 6n,
-      lpShares: 100n * 10n ** 18n,
-    },
+    balances,
     allowances: { base: 10n ** 24n, quote: 10n ** 24n },
     lpLock: {
-      lockedShares: 0n,
-      unlockTime: 0n,
-      unlockedShares: 100n * 10n ** 18n,
-      ...overrides.lpLock,
+      lockedShares,
+      unlockTime: overrides.lpLock?.unlockTime ?? 0n,
+      unlockedShares,
     },
     faucet: {
       address: DEFAULT_RUNTIME_CONFIG.faucet,
@@ -547,5 +556,88 @@ describe('FairBatch on-chain terminal', () => {
     // "New here? Switch to Simple" link switches back to Simple mode
     fireEvent.click(screen.getByTestId('pro-switch-to-simple-link'));
     expect(screen.getByTestId('mode-simple-button')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('validates balances across Pro order slip, commit bond, LP add/remove, ETH gas, and removes duplicated Settlement Account balances', () => {
+    controller = makeController({
+      account: ALICE,
+      snapshot: makeSnapshot('Open', ALICE, {
+        balances: {
+          eth: 50_000_000_000_000_000n, // 0.05 ETH
+          base: 754_800_000_000_000_000n, // 0.7548 fWETH
+          quote: 100_000_000n, // 100 fUSDC
+          lpShares: 50n * 10n ** 18n,
+        },
+      }),
+    });
+    const { rerender } = renderPro();
+
+    // Top balance row is the single balance source; Settlement Account no longer duplicates balance cells
+    expect(screen.getByTestId('pro-balance-base')).toHaveTextContent('0.7548 fWETH');
+    expect(screen.queryByTestId('account-balance-base')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('account-balance-quote')).not.toBeInTheDocument();
+    expect(screen.getByTestId('account-approvals-summary')).toBeInTheDocument();
+
+    // Default Pro order input (2.0 fWETH) exceeds 0.7548 balance -> inline message & disabled submit
+    expect(screen.getByTestId('order-ticket-insufficient-balance')).toHaveTextContent(
+      'Insufficient fWETH balance (0.7548)',
+    );
+    expect(screen.getByTestId('order-ticket-direct-submit')).toBeDisabled();
+
+    // Clicking Max fixes the amount and re-enables submission
+    fireEvent.click(screen.getByTestId('order-ticket-max'));
+    expect(screen.queryByTestId('order-ticket-insufficient-balance')).not.toBeInTheDocument();
+    expect(screen.getByTestId('order-ticket-direct-submit')).toBeEnabled();
+
+    // Commit-Reveal bond exceeding ETH balance shows inline error & disables seal
+    fireEvent.click(screen.getByRole('tab', { name: /Commit-Reveal/i }));
+    fireEvent.change(screen.getByLabelText(/Reveal bond/i, { selector: 'input' }), {
+      target: { value: '0.1' },
+    });
+    expect(screen.getByTestId('order-ticket-insufficient-bond')).toHaveTextContent(
+      'Insufficient ETH balance (0.05)',
+    );
+    expect(screen.getByTestId('order-ticket-commit-submit')).toBeDisabled();
+
+    // LP Add default inputs (1 fWETH, 3000 fUSDC) exceed balances -> inline errors & disabled button
+    expect(screen.getByTestId('lp-add-insufficient-base')).toHaveTextContent(
+      'Insufficient fWETH balance (0.7548)',
+    );
+    expect(screen.getByTestId('lp-add-insufficient-quote')).toHaveTextContent(
+      'Insufficient fUSDC balance (100.00)',
+    );
+    expect(screen.getByTestId('lp-add-submit')).toBeDisabled();
+
+    // Max on both LP Add inputs restores valid state
+    fireEvent.click(screen.getByTestId('lp-add-base-max'));
+    fireEvent.click(screen.getByTestId('lp-add-quote-max'));
+    expect(screen.queryByTestId('lp-add-insufficient-base')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('lp-add-insufficient-quote')).not.toBeInTheDocument();
+    expect(screen.getByTestId('lp-add-submit')).toBeEnabled();
+
+    // LP Remove exceeding shares shows inline error & disables remove
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.change(screen.getByLabelText(/LP shares to burn/i), { target: { value: '80' } });
+    expect(screen.getByTestId('lp-remove-insufficient-shares')).toHaveTextContent(
+      'Insufficient LP shares balance (50.00)',
+    );
+    expect(screen.getByTestId('lp-remove-submit')).toBeDisabled();
+
+    // Zero Sepolia ETH disables on-chain submission with explicit gas notice
+    controller = makeController({
+      account: ALICE,
+      snapshot: makeSnapshot('Open', ALICE, {
+        balances: {
+          eth: 0n,
+          base: 5n * 10n ** 18n,
+          quote: 20_000n * 10n ** 6n,
+          lpShares: 50n * 10n ** 18n,
+        },
+      }),
+    });
+    rerender(<App />);
+    expect(screen.getByTestId('order-ticket-insufficient-gas')).toHaveTextContent(
+      /Insufficient Sepolia ETH for gas/i,
+    );
   });
 });

@@ -18,7 +18,7 @@ import type {
   RawReserves,
   WalletBalances,
 } from '../../onchain/state';
-import { formatDuration, formatPrice, formatToken } from '../../lib/format';
+import { formatDuration, formatPrice, formatToken, formatTokenAmount } from '../../lib/format';
 import { SIMPLE_COPY } from '../../lib/glossary';
 
 type LockPresetId = 'none' | '1h' | '12h' | '1d' | '7d' | 'custom';
@@ -106,6 +106,7 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
   const userShares = human(balances?.lpShares, 18);
   const baseBal = human(balances?.base, config.baseDecimals);
   const quoteBal = human(balances?.quote, config.quoteDecimals);
+  const ethBal = human(balances?.eth, 18);
   const spot = rx > 0 ? ry / rx : 3000;
   const poolSharePct = totalShares > 0 ? (userShares / totalShares) * 100 : 0;
 
@@ -138,6 +139,11 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
   const quoteNum = Number(quoteInput) || 0;
   const withdrawNum = Number(withdrawInput) || 0;
   const busy = busyAction !== null;
+
+  const insufficientBase = Boolean(account && balances && baseNum > baseBal + 1e-9);
+  const insufficientQuote = Boolean(account && balances && quoteNum > quoteBal + 1e-9);
+  const insufficientWithdraw = Boolean(account && balances && withdrawNum > unlockedShares + 1e-9);
+  const insufficientGasEth = Boolean(account && !wrongNetwork && balances && balances.eth === 0n);
 
   const estimatedShares = useMemo(() => {
     if (totalShares <= 0 || rx <= 0 || ry <= 0 || baseNum <= 0 || quoteNum <= 0) return 0;
@@ -291,7 +297,7 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
                   }}
                   className="font-mono text-xs text-ink-muted underline decoration-dotted hover:text-ink"
                 >
-                  Bal: {formatToken(baseBal, 3)}
+                  Bal: {formatTokenAmount(baseBal, 'base')}
                 </button>
               </div>
               <input
@@ -308,6 +314,15 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
                 }}
                 className="mt-2 w-full bg-transparent font-mono text-xl font-bold text-ink tabular-nums focus:outline-none"
               />
+              {insufficientBase && (
+                <p
+                  role="alert"
+                  data-testid="simple-earn-insufficient-base"
+                  className="mt-1.5 font-mono text-xs font-bold text-vermilion-700"
+                >
+                  Insufficient {config.baseSymbol} balance ({formatTokenAmount(baseBal, 'base')})
+                </p>
+              )}
             </div>
 
             <div className="border border-rule-strong bg-paper-soft p-3.5">
@@ -331,7 +346,7 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
                   }}
                   className="font-mono text-xs text-ink-muted underline decoration-dotted hover:text-ink"
                 >
-                  Bal: {formatPrice(quoteBal, 2)}
+                  Bal: {formatTokenAmount(quoteBal, 'quote')}
                 </button>
               </div>
               <input
@@ -348,6 +363,15 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
                 }}
                 className="mt-2 w-full bg-transparent font-mono text-xl font-bold text-ink tabular-nums focus:outline-none"
               />
+              {insufficientQuote && (
+                <p
+                  role="alert"
+                  data-testid="simple-earn-insufficient-quote"
+                  className="mt-1.5 font-mono text-xs font-bold text-vermilion-700"
+                >
+                  Insufficient {config.quoteSymbol} balance ({formatTokenAmount(quoteBal, 'quote')})
+                </p>
+              )}
             </div>
           </div>
 
@@ -518,10 +542,29 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
             </div>
           )}
 
+          {insufficientGasEth && (
+            <p
+              role="alert"
+              data-testid="simple-earn-insufficient-gas"
+              className="font-mono text-xs font-bold text-vermilion-700"
+            >
+              Insufficient Sepolia ETH for gas ({formatTokenAmount(ethBal, 'eth')} ETH)
+            </p>
+          )}
+
           <button
             type="submit"
             data-testid="simple-earn-add-button"
-            disabled={busy}
+            disabled={
+              busy ||
+              (Boolean(account) &&
+                !wrongNetwork &&
+                (baseNum <= 0 ||
+                  quoteNum <= 0 ||
+                  insufficientBase ||
+                  insufficientQuote ||
+                  insufficientGasEth))
+            }
             className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busyAction === 'add-liquidity' ? (
@@ -647,12 +690,24 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
                   className="tap-target w-full border border-rule-strong bg-paper-soft px-3.5 font-mono text-lg font-bold text-ink tabular-nums focus:outline-none"
                 />
 
+                {insufficientWithdraw && (
+                  <p
+                    role="alert"
+                    data-testid="simple-earn-insufficient-withdraw"
+                    className="font-mono text-xs font-bold text-vermilion-700"
+                  >
+                    {lockActive
+                      ? `Insufficient unlocked LP shares (${formatTokenAmount(unlockedShares, 'shares')})`
+                      : `Insufficient LP shares balance (${formatTokenAmount(userShares, 'shares')})`}
+                  </p>
+                )}
+
                 {withdrawPreview && (
                   <div className="text-xs text-ink-muted tabular-nums">
                     You&apos;ll receive approx.{' '}
                     <strong className="font-mono text-ink">
-                      {formatToken(withdrawPreview.base, 4)} {config.baseSymbol} +{' '}
-                      {formatPrice(withdrawPreview.quote, 2)} {config.quoteSymbol}
+                      {formatTokenAmount(withdrawPreview.base, 'base')} {config.baseSymbol} +{' '}
+                      {formatTokenAmount(withdrawPreview.quote, 'quote')} {config.quoteSymbol}
                     </strong>
                   </div>
                 )}
@@ -660,7 +715,13 @@ export const SimpleEarn: React.FC<SimpleEarnProps> = ({
                 <button
                   type="submit"
                   data-testid="simple-earn-withdraw-button"
-                  disabled={busy || (lockActive && unlockedShares <= 0) || withdrawNum <= 0}
+                  disabled={
+                    busy ||
+                    (lockActive && unlockedShares <= 0) ||
+                    withdrawNum <= 0 ||
+                    insufficientWithdraw ||
+                    insufficientGasEth
+                  }
                   className="tap-target inline-flex w-full items-center justify-center gap-2 bg-ink px-5 py-3.5 font-display text-base font-bold text-paper transition hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {busyAction === 'remove-liquidity' ? (

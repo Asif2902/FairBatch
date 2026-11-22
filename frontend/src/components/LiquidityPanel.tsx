@@ -11,7 +11,7 @@ import {
 import { formatUnits, parseUnits } from 'viem';
 import type { RuntimeConfig } from '../onchain/config';
 import type { LiquidityLockState, RawReserves, WalletBalances } from '../onchain/state';
-import { formatDuration, formatPrice, formatToken } from '../lib/format';
+import { formatDuration, formatPrice, formatToken, formatTokenAmount } from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
 import { useNow } from '../lib/useNow';
 import { InfoTooltip } from './InfoTooltip';
@@ -89,6 +89,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   const userShares = human(balances?.lpShares ?? 0n, 18);
   const baseBal = balances ? human(balances.base, config.baseDecimals) : 0;
   const quoteBal = balances ? human(balances.quote, config.quoteDecimals) : 0;
+  const ethBal = balances ? human(balances.eth, 18) : 0;
   const spot = rx > 0 ? ry / rx : 0;
   const poolSharePct = totalShares > 0 ? (userShares / totalShares) * 100 : 0;
 
@@ -103,6 +104,11 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
   const baseNum = Number(baseInput) || 0;
   const quoteNum = Number(quoteInput) || 0;
   const sharesNum = Number(sharesInput) || 0;
+
+  const insufficientBase = Boolean(account && balances && baseNum > baseBal + 1e-9);
+  const insufficientQuote = Boolean(account && balances && quoteNum > quoteBal + 1e-9);
+  const insufficientShares = Boolean(account && balances && sharesNum > unlockedShares + 1e-9);
+  const insufficientGasEth = Boolean(account && balances && balances.eth === 0n);
 
   const estimatedShares = useMemo(() => {
     if (totalShares <= 0 || rx <= 0 || ry <= 0) return null;
@@ -298,7 +304,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                   </label>
                   <div className="flex items-center gap-1.5 font-mono text-[10px] text-ink-muted tabular-nums">
                     <span data-testid="lp-add-base-balance">
-                      Balance: <strong className="text-ink">{formatToken(baseBal, 4)}</strong>
+                      Balance: <strong className="text-ink">{formatTokenAmount(baseBal, 'base')}</strong>
                     </span>
                     <span>·</span>
                     <button
@@ -326,6 +332,15 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                     {config.baseSymbol}
                   </span>
                 </div>
+                {insufficientBase && (
+                  <p
+                    role="alert"
+                    data-testid="lp-add-insufficient-base"
+                    className="mt-1 font-mono text-[11px] font-bold text-vermilion-700"
+                  >
+                    Insufficient {config.baseSymbol} balance ({formatTokenAmount(baseBal, 'base')})
+                  </p>
+                )}
               </div>
               <div className="ledger-inset px-3 py-2">
                 <div className="flex flex-wrap items-center justify-between gap-1.5">
@@ -334,7 +349,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                   </label>
                   <div className="flex items-center gap-1.5 font-mono text-[10px] text-ink-muted tabular-nums">
                     <span data-testid="lp-add-quote-balance">
-                      Balance: <strong className="text-ink">{formatPrice(quoteBal, 2)}</strong>
+                      Balance: <strong className="text-ink">{formatTokenAmount(quoteBal, 'quote')}</strong>
                     </span>
                     <span>·</span>
                     <button
@@ -362,6 +377,15 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                     {config.quoteSymbol}
                   </span>
                 </div>
+                {insufficientQuote && (
+                  <p
+                    role="alert"
+                    data-testid="lp-add-insufficient-quote"
+                    className="mt-1 font-mono text-[11px] font-bold text-vermilion-700"
+                  >
+                    Insufficient {config.quoteSymbol} balance ({formatTokenAmount(quoteBal, 'quote')})
+                  </p>
+                )}
               </div>
             </div>
 
@@ -460,10 +484,28 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
               </span>
             </div>
 
+            {insufficientGasEth && (
+              <p
+                role="alert"
+                data-testid="lp-insufficient-gas"
+                className="font-mono text-xs font-bold text-vermilion-700"
+              >
+                Insufficient Sepolia ETH for gas ({formatTokenAmount(ethBal, 'eth')} ETH)
+              </p>
+            )}
+
             <button
               type="submit"
               data-testid="lp-add-submit"
-              disabled={!account || busy}
+              disabled={
+                !account ||
+                busy ||
+                baseNum <= 0 ||
+                quoteNum <= 0 ||
+                insufficientBase ||
+                insufficientQuote ||
+                insufficientGasEth
+              }
               className="tap-target inline-flex w-full items-center justify-center gap-2 bg-plum-600 px-3 py-2.5 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {effectiveLockSecs > 0 ? (
@@ -498,11 +540,11 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                   className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-ink-muted tabular-nums"
                 >
                   <span>
-                    Balance: <strong className="text-ink">{formatToken(userShares, 2)}</strong>
+                    Balance: <strong className="text-ink">{formatTokenAmount(userShares, 'shares')}</strong>
                   </span>
                   <span>·</span>
                   <span>
-                    Unlocked: <strong className="text-ink">{formatToken(unlockedShares, 2)}</strong>
+                    Unlocked: <strong className="text-ink">{formatTokenAmount(unlockedShares, 'shares')}</strong>
                   </span>
                   <span>·</span>
                   <button
@@ -511,7 +553,7 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                     onClick={() => setSharesInput(trimAmount(unlockedShares, 18))}
                     className="font-bold uppercase tracking-[0.06em] text-plum-700 underline decoration-dotted underline-offset-2"
                   >
-                    Max unlocked ({formatToken(unlockedShares, 2)})
+                    Max unlocked ({formatTokenAmount(unlockedShares, 'shares')})
                   </button>
                 </div>
               </div>
@@ -530,7 +572,28 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
                   Shares
                 </span>
               </div>
+              {insufficientShares && (
+                <p
+                  role="alert"
+                  data-testid="lp-remove-insufficient-shares"
+                  className="mt-1 font-mono text-[11px] font-bold text-vermilion-700"
+                >
+                  {lockActive
+                    ? `Insufficient unlocked LP shares (${formatTokenAmount(unlockedShares, 'shares')})`
+                    : `Insufficient LP shares balance (${formatTokenAmount(userShares, 'shares')})`}
+                </p>
+              )}
             </div>
+
+            {insufficientGasEth && (
+              <p
+                role="alert"
+                data-testid="lp-remove-insufficient-gas"
+                className="font-mono text-xs font-bold text-vermilion-700"
+              >
+                Insufficient Sepolia ETH for gas ({formatTokenAmount(ethBal, 'eth')} ETH)
+              </p>
+            )}
 
             <div className="flex items-center justify-between gap-2 border border-rule bg-paper-soft px-3 py-2 text-[10.5px]">
               <span className="flex items-center gap-1.5 font-mono text-[8.5px] uppercase tracking-label text-ink-faint">
@@ -539,9 +602,9 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
               </span>
               <span className="text-right font-mono font-bold text-ink tabular-nums">
                 {removePreview
-                  ? `${formatToken(removePreview.base, 3)} ${config.baseSymbol} + ${formatPrice(
+                  ? `${formatTokenAmount(removePreview.base, 'base')} ${config.baseSymbol} + ${formatTokenAmount(
                     removePreview.quote,
-                    2,
+                    'quote',
                   )} ${config.quoteSymbol}`
                   : '—'}
               </span>
@@ -549,7 +612,15 @@ export const LiquidityPanel: React.FC<LiquidityPanelProps> = ({
 
             <button
               type="submit"
-              disabled={!account || busy || (lockActive && unlockedShares <= 0)}
+              data-testid="lp-remove-submit"
+              disabled={
+                !account ||
+                busy ||
+                sharesNum <= 0 ||
+                insufficientShares ||
+                insufficientGasEth ||
+                (lockActive && unlockedShares <= 0)
+              }
               className="inline-flex w-full items-center justify-center gap-2 bg-ink px-3 py-2.5 font-display text-sm font-bold text-paper transition hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ArrowUpFromLine className="h-4 w-4" aria-hidden="true" />

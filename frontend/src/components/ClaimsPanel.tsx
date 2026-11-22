@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import type { ClaimableDto } from '../types';
 import type { RuntimeConfig } from '../onchain/config';
-import { formatPrice, formatToken, shortenAddress } from '../lib/format';
+import { formatTokenAmount, shortenAddress } from '../lib/format';
 import { PRO_TOOLTIPS } from '../lib/glossary';
 import { InfoTooltip } from './InfoTooltip';
 
@@ -241,9 +241,10 @@ export const ClaimsPanel: React.FC<ClaimsPanelProps> = ({
                     <div className="mt-0.5 font-mono text-[10px] text-ink-muted tabular-nums">
                       Payout:{' '}
                       <span className="font-bold text-pine-700">
-                        {outUnit === config.quoteSymbol
-                          ? formatPrice(item.payout_out, 2)
-                          : formatToken(item.payout_out, 4)}{' '}
+                        {formatTokenAmount(
+                          item.payout_out,
+                          outUnit === config.quoteSymbol ? 'quote' : 'base',
+                        )}{' '}
                         {outUnit}
                       </span>
                       {item.refund_in > 0 && (
@@ -251,7 +252,11 @@ export const ClaimsPanel: React.FC<ClaimsPanelProps> = ({
                           {' '}
                           · Refund:{' '}
                           <span className="font-bold text-brass-700">
-                            {formatToken(item.refund_in, 3)} {inUnit}
+                            {formatTokenAmount(
+                              item.refund_in,
+                              inUnit === config.quoteSymbol ? 'quote' : 'base',
+                            )}{' '}
+                            {inUnit}
                           </span>
                         </>
                       )}
