@@ -173,6 +173,19 @@ EOF
   assert_ok "systemd unit enables NoNewPrivileges + ProtectSystem=strict" grep -q 'ProtectSystem=strict' "$rendered_unit"
   assert_ok "systemd unit quotes absolute node path in ExecStart" grep -qE '^ExecStart="/.+node" "/opt/fairbatch/current/keeper/dist/index\.js"$' "$rendered_unit"
 
+  # load_deploy_conf succeeds cleanly under set -e when CONF_FILE is readable
+  local test_conf="${tmp_dir}/deploy.conf"
+  cat > "$test_conf" <<'EOF'
+DEPLOY_MODE=domain
+DEPLOY_DOMAIN=swap.example.com
+DEPLOY_KEEPER_PORT=3002
+EOF
+  CONF_FILE="$test_conf"
+  DEPLOY_DOMAIN=""
+  assert_ok "load_deploy_conf exits 0 when CONF_FILE is readable" load_deploy_conf
+  load_deploy_conf
+  assert_eq "swap.example.com" "$DEPLOY_DOMAIN" "load_deploy_conf parses DEPLOY_DOMAIN"
+
   # Prune releases keeps last 3 plus active
   local rel_dir="${tmp_dir}/releases"
   mkdir -p "${rel_dir}/20261101-000001" "${rel_dir}/20261102-000001" "${rel_dir}/20261103-000001" "${rel_dir}/20261104-000001" "${rel_dir}/20261105-000001"

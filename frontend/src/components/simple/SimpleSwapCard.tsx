@@ -448,6 +448,17 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                 : SIMPLE_COPY.readyBanner}
             </p>
           </div>
+          {account && !wrongNetwork && keeperHealthy && (
+            <button
+              type="button"
+              data-testid="simple-start-next-round-manual"
+              disabled={busy}
+              onClick={() => void onStartNextRound()}
+              className="shrink-0 self-start whitespace-nowrap text-xs font-bold text-cobalt-800 underline decoration-dotted underline-offset-2 transition hover:text-ink disabled:opacity-50 sm:self-center"
+            >
+              {busyAction === 'settle' ? 'Starting…' : `Don't wait — ${UI_LABELS.startNextRound}`}
+            </button>
+          )}
           {account && !wrongNetwork && !keeperHealthy && (
             <button
               type="button"
@@ -701,9 +712,9 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
               {limitEdited
                 ? `Custom $${formatPrice(limitPriceNum, 2)}`
                 : `Spot ${side === 'SellBase' ? '−' : '+'}${slippagePct}% · $${formatPrice(
-                    limitPriceNum,
-                    2,
-                  )}`}
+                  limitPriceNum,
+                  2,
+                )}`}
               )
             </span>
             {advancedOpen ? (
@@ -724,11 +735,10 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
                       setSlippagePct(pct);
                       setLimitEdited(false);
                     }}
-                    className={`tap-target flex-1 border px-3 font-mono text-xs font-bold transition ${
-                      !limitEdited && slippagePct === pct
-                        ? 'border-ink bg-ink text-paper'
-                        : 'border-rule-strong bg-paper-soft text-ink-soft hover:border-ink'
-                    }`}
+                    className={`tap-target flex-1 border px-3 font-mono text-xs font-bold transition ${!limitEdited && slippagePct === pct
+                      ? 'border-ink bg-ink text-paper'
+                      : 'border-rule-strong bg-paper-soft text-ink-soft hover:border-ink'
+                      }`}
                   >
                     {pct}%
                   </button>

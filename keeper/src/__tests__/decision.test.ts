@@ -96,6 +96,25 @@ describe('FairBatch Keeper settlement decision logic', () => {
     expect(isAlreadySettledError(new Error('network timeout'))).toBe(false);
   });
 
+  it('settles consecutive empty Ready batches after the 5s grace when KEEPER_EMPTY_ROUND_MINUTES=0', () => {
+    const emptyBatch = makeBatch({ orderCount: 0n, commitCount: 0n, revealDeadline: 1_120n });
+    const nowMs = 2_000_000;
+    // Just settled an empty round 1 second ago; with 0-minute throttle the next one is still allowed
+    expect(
+      decideSettlementAction({
+        batch: emptyBatch,
+        blockTimestamp: 1_126n,
+        balanceWei: HEALTHY_BAL,
+        minBalanceWei: MIN_BAL,
+        graceSeconds: 5,
+        emptyRoundMinutes: 0,
+        lastEmptySettleAtMs: nowMs - 1_000,
+        nowMs,
+        txInFlight: false,
+      }),
+    ).toEqual({ action: 'settle', batchId: 12n, empty: true });
+  });
+
   it('throttles empty Ready batches to once per KEEPER_EMPTY_ROUND_MINUTES (10m)', () => {
     const emptyBatch = makeBatch({ orderCount: 0n, commitCount: 0n, revealDeadline: 1_120n });
     const nowMs = 2_000_000;

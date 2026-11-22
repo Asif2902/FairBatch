@@ -2027,7 +2027,10 @@ load_deploy_conf() {
       DEPLOY_LAST_RELEASE) ACTIVE_RELEASE_ID="$val" ;;
     esac
   done < "$conf_src"
-  [[ -n "$tmp_conf" ]] && rm -f "$tmp_conf"
+  if [[ -n "$tmp_conf" ]]; then
+    rm -f "$tmp_conf"
+  fi
+  return 0
 }
 
 print_final_summary() {
