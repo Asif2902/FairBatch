@@ -1,6 +1,6 @@
-import type { PublicClient } from 'viem';
+import { createPublicClient, http, type PublicClient } from 'viem';
 import { fairBatchEvents } from './abi';
-import type { RuntimeConfig } from './config';
+import { getChain, type RuntimeConfig } from './config';
 
 export type FairBatchEventName =
   | 'LiquidityAdded'
@@ -32,6 +32,42 @@ let inflight: { key: string; promise: Promise<FairBatchEvent[]> } | null = null;
 
 const MAX_CHUNK = 50_000n;
 const MIN_CHUNK = 1_000n;
+
+function isPrunedHistoryError(error: unknown): boolean {
+  const msg = String(
+    (error as { shortMessage?: string; details?: string; message?: string })?.shortMessage ??
+      (error as { details?: string })?.details ??
+      (error as { message?: string })?.message ??
+      error ??
+      '',
+  ).toLowerCase();
+  const code = (error as { code?: number; cause?: { code?: number } })?.code ??
+    (error as { cause?: { code?: number } })?.cause?.code;
+  return (
+    code === 4444 ||
+    msg.includes('4444') ||
+    msg.includes('pruned') ||
+    msg.includes('history unavailable') ||
+    msg.includes('before earliest')
+  );
+}
+
+function isBlockRangeLimitError(error: unknown): boolean {
+  const msg = String(
+    (error as { shortMessage?: string; details?: string; message?: string })?.shortMessage ??
+      (error as { details?: string })?.details ??
+      (error as { message?: string })?.message ??
+      error ??
+      '',
+  ).toLowerCase();
+  return (
+    msg.includes('block range') ||
+    msg.includes('blocks range') ||
+    msg.includes('invalid parameters') ||
+    msg.includes('query returned more than') ||
+    msg.includes('too large')
+  );
+}
 
 export function resetEventCache(): void {
   cache = null;
@@ -78,6 +114,37 @@ function normalizeLog(log: {
   };
 }
 
+async function tryFallbackRpcLogs(
+  config: RuntimeConfig,
+  fromBlock: bigint,
+  toBlock: bigint,
+): Promise<FairBatchEvent[] | null> {
+  const candidates = config.fallbackRpcUrls ?? [];
+  for (const url of candidates) {
+    try {
+      const fbClient = createPublicClient({
+        chain: getChain(config),
+        transport: http(url, { timeout: 15_000, retryCount: 1 }),
+      });
+      const logs = await fbClient.getLogs({
+        address: config.fairBatch,
+        events: fairBatchEvents,
+        fromBlock,
+        toBlock,
+      });
+      const out: FairBatchEvent[] = [];
+      for (const log of logs) {
+        const normalized = normalizeLog(log as Parameters<typeof normalizeLog>[0]);
+        if (normalized) out.push(normalized);
+      }
+      return out;
+    } catch {
+      // Try next fallback URL
+    }
+  }
+  return null;
+}
+
 async function fetchRange(
   client: PublicClient,
   config: RuntimeConfig,
@@ -87,6 +154,8 @@ async function fetchRange(
   const collected: FairBatchEvent[] = [];
   let cursor = fromBlock;
   let span = MAX_CHUNK;
+  let prunedBisects = 0;
+  let triedFallback = false;
 
   while (cursor <= toBlock) {
     const end = cursor + span - 1n > toBlock ? toBlock : cursor + span - 1n;
@@ -103,8 +172,38 @@ async function fetchRange(
       }
       cursor = end + 1n;
     } catch (error) {
-      if (span <= MIN_CHUNK) throw error;
-      span = span / 2n;
+      if ((isPrunedHistoryError(error) || isBlockRangeLimitError(error)) && !triedFallback) {
+        triedFallback = true;
+        const fallbackLogs = await tryFallbackRpcLogs(config, cursor, toBlock);
+        if (fallbackLogs !== null) {
+          collected.push(...fallbackLogs);
+          break;
+        }
+      }
+      if (isPrunedHistoryError(error)) {
+        // EIP-4444 pruned node: advance cursor past pruned prefix so recent logs still load
+        if (end < toBlock) {
+          cursor = end + 1n;
+          continue;
+        }
+        if (cursor < toBlock && prunedBisects < 16) {
+          prunedBisects += 1;
+          const step = (toBlock - cursor + 1n) / 2n;
+          cursor = cursor + (step > 0n ? step : 1n);
+          continue;
+        }
+        // Entire window is pruned; return whatever logs were collected instead of crashing
+        break;
+      }
+      if (span > MIN_CHUNK) {
+        span = span / 2n;
+        continue;
+      }
+      if (isBlockRangeLimitError(error) && span > 50n) {
+        span = 50n;
+        continue;
+      }
+      throw error;
     }
   }
 

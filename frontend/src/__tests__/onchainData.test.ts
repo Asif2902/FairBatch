@@ -98,6 +98,48 @@ describe('onchain/events deduplication & concurrency guard (Bugs 1a & 1b)', () =
     expect(b).toHaveLength(1);
     expect(c).toHaveLength(1);
   });
+
+  it('recovers gracefully from EIP-4444 pruned history errors instead of failing the exchange load', async () => {
+    resetEventCache();
+    const earliestAvailable = DEFAULT_RUNTIME_CONFIG.deploymentBlock + 6_000n;
+    const latestBlock = DEFAULT_RUNTIME_CONFIG.deploymentBlock + 10_000n;
+    const mockClient = {
+      getBlockNumber: vi.fn(async () => latestBlock),
+      getLogs: vi.fn(async ({ fromBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+        if (fromBlock < earliestAvailable) {
+          const err = new Error('pruned history unavailable') as Error & { code?: number };
+          err.code = 4444;
+          throw err;
+        }
+        return [
+          {
+            eventName: 'BatchSettled',
+            args: {
+              batchId: 15n,
+              clearingPrice: 2950n * 10n ** 18n,
+              totalSellBase: 1n * 10n ** 18n,
+              totalBuyQuote: 0n,
+              cowMatchedBase: 0n,
+              cowMatchedQuote: 0n,
+              reserveBaseAfter: 101n * 10n ** 18n,
+              reserveQuoteAfter: 297_000n * 10n ** 6n,
+            },
+            blockNumber: latestBlock - 5n,
+            logIndex: 0,
+            transactionHash: TX_B,
+          },
+        ];
+      }),
+    } as unknown as PublicClient;
+
+    const logs = await loadFairBatchEvents(
+      mockClient,
+      { ...DEFAULT_RUNTIME_CONFIG, fallbackRpcUrls: [] },
+      true,
+    );
+    expect(logs).toHaveLength(1);
+    expect(logs[0].args.batchId).toBe(15n);
+  });
 });
 
 describe('onchain/state indexing, reserve history, and phase derivation (Bugs 1a-1c)', () => {

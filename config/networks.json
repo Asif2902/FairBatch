@@ -15,7 +15,7 @@
       "supports_eip1153": true,
       "default_rpc_url": "https://ethereum-sepolia-rpc.publicnode.com",
       "fallback_rpc_urls": [
-        "https://rpc.sepolia.org",
+        "https://sepolia.gateway.tenderly.co",
         "https://1rpc.io/sepolia"
       ],
       "explorer_url": "https://sepolia.etherscan.io",
