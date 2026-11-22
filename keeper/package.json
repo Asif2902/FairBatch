@@ -1,0 +1,23 @@
+{
+  "name": "fairbatch-keeper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional permissionless settlement keeper, slasher, and EIP-712 intent relayer for FairBatch on Ethereum Sepolia",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/index.ts",
+    "start:prod": "node dist/index.js",
+    "dry-run": "tsx src/index.ts --dry-run",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "viem": "^2.21.58"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
+  }
+}

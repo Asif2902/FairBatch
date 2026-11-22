@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -51,6 +52,18 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Verify live Sepolia deployed bytecode matches compiled Fe artifacts
+        run: node scripts/verify_deployed_bytecode.mjs
+
       - name: Install, test & build React + TypeScript frontend
         working-directory: frontend
         run: (if [ -f package-lock.json ]; then npm ci; else npm install; fi) && npm test && npm run build
+
+      - name: Install, test & build optional keeper + intent relayer
+        working-directory: keeper
+        run: (if [ -f package-lock.json ]; then npm ci; else npm install; fi) && npm test && npm run build
+
+      - name: ShellCheck & full deploy.sh test suite
+        run: |
+          shellcheck -s bash deploy.sh deploy/tests/test_deploy.sh
+          bash deploy/tests/test_deploy.sh

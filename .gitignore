@@ -17,10 +17,20 @@ frontend/.env.*.local
 .env
 .env.local
 .env.*.local
+keeper/.env
+keeper/.env.local
+keeper/node_modules/
+keeper/dist/
 
 # Temporary transaction / deployment scratch files (deployments/*.json manifests stay tracked)
 *.txpayload.tmp
 deployments/*.tmp.json
+
+# Agent working memory (never commit)
+**/CONTEXT.md
+
+# Playwright MCP screenshots / snapshots
+.playwright-mcp/
 
 # OS & editor metadata
 .DS_Store

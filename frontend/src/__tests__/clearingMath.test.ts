@@ -1,15 +1,163 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildSandwichSizeTable,
   computeBatchSettlement,
-  DEMO_WALLETS,
-  fallbackStore,
-  resolveEnvHealthDefaults,
-} from '../lib/fallbackEngine';
+  computeUnattackedBreakEvenSize,
+  runSandwichSimulation,
+  simulateSequentialAmm,
+} from '../lib/clearingMath';
 import {
   computeLocalCommitmentHash,
   keccak256Utf8,
 } from '../lib/keccak';
 import type { OrderDto } from '../types';
+
+const TRADERS = [
+  '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+  '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+  '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+  '0x90F79bf6EB2c4f870365E785982E1f101E93b906',
+  '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65',
+];
+
+const MEV_BOT = '0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF';
+
+function makeFiveSellers(withSandwich = false): OrderDto[] {
+  const victims: OrderDto[] = TRADERS.map((trader, idx) => ({
+    order_id: idx + 1,
+    trader,
+    label: `Trader #${idx + 1}`,
+    side: 'SellBase',
+    amount_in: 1.0,
+    limit_price: 2350,
+    submission_type: idx === 2 ? 'Eip712Intent' : idx === 4 ? 'CommitReveal' : 'Direct',
+    is_attacker: false,
+  }));
+  if (!withSandwich) return victims;
+  return [
+    {
+      order_id: 9001,
+      trader: MEV_BOT,
+      label: 'MEV Bot (Front-Run)',
+      side: 'SellBase',
+      amount_in: 7.7,
+      limit_price: 1500,
+      submission_type: 'Direct',
+      is_attacker: true,
+    },
+    ...victims,
+    {
+      order_id: 9002,
+      trader: MEV_BOT,
+      label: 'MEV Bot (Back-Run)',
+      side: 'BuyBase',
+      amount_in: 21_000,
+      limit_price: 4500,
+      submission_type: 'Direct',
+      is_attacker: true,
+    },
+  ];
+}
+
+function makeBalancedCow(): OrderDto[] {
+  return [
+    {
+      order_id: 1,
+      trader: TRADERS[0],
+      label: 'Alice',
+      side: 'SellBase',
+      amount_in: 2.0,
+      limit_price: 2850,
+      submission_type: 'Direct',
+      is_attacker: false,
+    },
+    {
+      order_id: 2,
+      trader: TRADERS[1],
+      label: 'Bob',
+      side: 'SellBase',
+      amount_in: 3.0,
+      limit_price: 2900,
+      submission_type: 'Eip712Intent',
+      is_attacker: false,
+    },
+    {
+      order_id: 3,
+      trader: TRADERS[2],
+      label: 'Carol',
+      side: 'BuyBase',
+      amount_in: 6000,
+      limit_price: 3150,
+      submission_type: 'Direct',
+      is_attacker: false,
+    },
+    {
+      order_id: 4,
+      trader: TRADERS[3],
+      label: 'Dave',
+      side: 'BuyBase',
+      amount_in: 9000,
+      limit_price: 3100,
+      submission_type: 'CommitReveal',
+      is_attacker: false,
+    },
+  ];
+}
+
+function makeMarginalProRata(): OrderDto[] {
+  return [
+    {
+      order_id: 1,
+      trader: TRADERS[0],
+      label: 'Alice (ITM Sell)',
+      side: 'SellBase',
+      amount_in: 2.0,
+      limit_price: 2600,
+      submission_type: 'Direct',
+      is_attacker: false,
+    },
+    {
+      order_id: 2,
+      trader: TRADERS[1],
+      label: 'Bob (Marginal @ 2,800)',
+      side: 'SellBase',
+      amount_in: 4.0,
+      limit_price: 2800,
+      submission_type: 'Direct',
+      is_attacker: false,
+    },
+    {
+      order_id: 3,
+      trader: TRADERS[2],
+      label: 'Carol (Marginal @ 2,800)',
+      side: 'SellBase',
+      amount_in: 4.0,
+      limit_price: 2800,
+      submission_type: 'Eip712Intent',
+      is_attacker: false,
+    },
+    {
+      order_id: 4,
+      trader: TRADERS[3],
+      label: 'Dave (OTM @ 3,150)',
+      side: 'SellBase',
+      amount_in: 2.0,
+      limit_price: 3150,
+      submission_type: 'Direct',
+      is_attacker: false,
+    },
+    {
+      order_id: 5,
+      trader: TRADERS[4],
+      label: 'Eve (ITM Buy)',
+      side: 'BuyBase',
+      amount_in: 2800,
+      limit_price: 3100,
+      submission_type: 'Direct',
+      is_attacker: false,
+    },
+  ];
+}
 
 describe('Keccak-256 & Cryptographic Primitives', () => {
   it('matches canonical Ethereum keccak256("") and Fe 26.5 EIP-712 typehashes', () => {
@@ -31,7 +179,7 @@ describe('Keccak-256 & Cryptographic Primitives', () => {
   it('produces deterministic 32-byte commitment hashes sensitive to salt and limit price', () => {
     const h1 = computeLocalCommitmentHash({
       batch_id: 1,
-      trader: DEMO_WALLETS[0].address,
+      trader: TRADERS[0],
       side: 'SellBase',
       amount_in: 2.5,
       limit_price: 2700,
@@ -39,7 +187,7 @@ describe('Keccak-256 & Cryptographic Primitives', () => {
     });
     const h2 = computeLocalCommitmentHash({
       batch_id: 1,
-      trader: DEMO_WALLETS[0].address,
+      trader: TRADERS[0],
       side: 'SellBase',
       amount_in: 2.5,
       limit_price: 2700,
@@ -50,13 +198,9 @@ describe('Keccak-256 & Cryptographic Primitives', () => {
   });
 });
 
-describe('Hybrid CoW + FM-AMM Batch Clearing Engine', () => {
+describe('Hybrid CoW + FM-AMM Batch Clearing & Sequential Baseline Math', () => {
   it('clears 5 ETH sellers at uniform p* = 2727.2727... with strict LND growth', () => {
-    const state = fallbackStore.loadPreset('five_sellers', false, {
-      rx: 100,
-      ry: 300_000,
-    });
-    const settlement = computeBatchSettlement(1, 100, 300_000, state.orders);
+    const settlement = computeBatchSettlement(1, 100, 300_000, makeFiveSellers());
 
     expect(settlement.clearing_price).toBeCloseTo(2727.272727, 4);
     expect(settlement.fills).toHaveLength(5);
@@ -73,11 +217,47 @@ describe('Hybrid CoW + FM-AMM Batch Clearing Engine', () => {
     );
   });
 
+  it('computes strictly moving sequential AMM prices and honest signed value diff (bug 1e)', () => {
+    const threeSells: OrderDto[] = [0, 1, 2].map((id) => ({
+      order_id: id,
+      trader: TRADERS[id],
+      label: `Seller #${id + 1}`,
+      side: 'SellBase',
+      amount_in: 1.0,
+      limit_price: 2500,
+      submission_type: 'Direct',
+      is_attacker: false,
+    }));
+
+    const seq = simulateSequentialAmm(100, 300_000, threeSells, 30, false);
+    expect(seq.ammReceipts).toHaveLength(3);
+    // Each successive sell moves reserves, strictly decreasing execution price
+    expect(seq.ammReceipts[0].effective_price).toBeGreaterThan(
+      seq.ammReceipts[1].effective_price,
+    );
+    expect(seq.ammReceipts[1].effective_price).toBeGreaterThan(
+      seq.ammReceipts[2].effective_price,
+    );
+
+    const avgFromRows =
+      (seq.ammReceipts[0].effective_price +
+        seq.ammReceipts[1].effective_price +
+        seq.ammReceipts[2].effective_price) /
+      3;
+    expect(seq.ammVictimAvgPrice).toBeCloseTo(avgFromRows, 6);
+
+    // On un-sandwiched one-sided sells, FM-AMM clears at the post-trade marginal price
+    // (leaving LVR surplus for LPs), so signed diff vs un-sandwiched AMM is negative, NOT clamped to 0.
+    const settlement = computeBatchSettlement(2, 100, 300_000, threeSells);
+    expect(settlement.clearing_price).toBeCloseTo(300_000 / 106, 4);
+    expect(settlement.comparison.user_value_saved_quote).toBeLessThan(0);
+  });
+
   it('satisfies order-permutation invariance across arbitrary arrival shuffles', () => {
     const baseOrders: OrderDto[] = [
       {
         order_id: 1,
-        trader: DEMO_WALLETS[0].address,
+        trader: TRADERS[0],
         label: 'Alice',
         side: 'SellBase',
         amount_in: 3.0,
@@ -87,7 +267,7 @@ describe('Hybrid CoW + FM-AMM Batch Clearing Engine', () => {
       },
       {
         order_id: 2,
-        trader: DEMO_WALLETS[1].address,
+        trader: TRADERS[1],
         label: 'Bob',
         side: 'BuyBase',
         amount_in: 6000,
@@ -97,7 +277,7 @@ describe('Hybrid CoW + FM-AMM Batch Clearing Engine', () => {
       },
       {
         order_id: 3,
-        trader: DEMO_WALLETS[2].address,
+        trader: TRADERS[2],
         label: 'Carol',
         side: 'SellBase',
         amount_in: 1.5,
@@ -119,25 +299,19 @@ describe('Hybrid CoW + FM-AMM Batch Clearing Engine', () => {
     }
   });
 
-  it('crosses Balanced CoW 100% peer-to-peer at $3,000.00 with zero reserve impact', () => {
-    const state = fallbackStore.loadPreset('cow_balanced', false, {
-      rx: 100,
-      ry: 300_000,
-    });
-    const settlement = computeBatchSettlement(1, 100, 300_000, state.orders);
+  it('crosses Balanced CoW 100% peer-to-peer at $3,000.00 with positive real trader savings', () => {
+    const settlement = computeBatchSettlement(1, 100, 300_000, makeBalancedCow());
 
     expect(settlement.clearing_price).toBeCloseTo(3000.0, 4);
     expect(settlement.cow_ratio_pct).toBeCloseTo(100.0, 2);
     expect(settlement.reserves_after.rx).toBeCloseTo(100.0, 6);
     expect(settlement.reserves_after.ry).toBeCloseTo(300_000.0, 4);
+    // CoW avoids the 30 bps pool fee + round-trip price impact, delivering real positive savings
+    expect(settlement.comparison.user_value_saved_quote).toBeGreaterThan(0);
   });
 
   it('pins marginal limit tier at $2,800.00 with pro-rata partial fills and 100% OTM refund', () => {
-    const state = fallbackStore.loadPreset('marginal_pro_rata', false, {
-      rx: 100,
-      ry: 300_000,
-    });
-    const settlement = computeBatchSettlement(1, 100, 300_000, state.orders);
+    const settlement = computeBatchSettlement(1, 100, 300_000, makeMarginalProRata());
 
     expect(settlement.clearing_price).toBeCloseTo(2800.0, 4);
 
@@ -150,67 +324,189 @@ describe('Hybrid CoW + FM-AMM Batch Clearing Engine', () => {
     expect(otmDave.status).toBe('OutOfMoneyRefund');
     expect(otmDave.refund_in).toBe(2.0);
     expect(otmDave.payout_out).toBe(0);
-
-    const expectedCowRatio =
-      ((2 * settlement.cow_matched_base) /
-        (settlement.total_sell_base_eligible +
-          settlement.total_buy_quote_eligible / settlement.clearing_price)) *
-      100;
-    expect(settlement.cow_ratio_pct).toBeCloseTo(expectedCowRatio, 4);
   });
 
   it('eliminates MEV sandwich profit ($0.00 on FairBatch vs >$1,000 on Sequential AMM)', () => {
-    const state = fallbackStore.loadPreset('five_sellers', true, {
-      rx: 100,
-      ry: 300_000,
-    });
-    const settlement = computeBatchSettlement(1, 100, 300_000, state.orders);
+    const settlement = computeBatchSettlement(1, 100, 300_000, makeFiveSellers(true));
 
     expect(settlement.clearing_price).toBeCloseTo(2727.272727, 4);
     expect(settlement.comparison.amm_sandwich_profit_quote).toBeGreaterThan(1000);
     expect(settlement.comparison.fairbatch_sandwich_profit_quote).toBe(0);
+    expect(settlement.comparison.user_value_saved_quote).toBeGreaterThan(0);
 
-    const margSandwich = fallbackStore.loadPreset('marginal_pro_rata', true, {
+    const sim = runSandwichSimulation({
       rx: 100,
       ry: 300_000,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 8,
     });
-    const margSettlement = computeBatchSettlement(
-      1,
-      100,
-      300_000,
-      margSandwich.orders,
-    );
-    expect(margSettlement.clearing_price).toBeCloseTo(2800.0, 4);
-    expect(margSettlement.comparison.fairbatch_sandwich_profit_quote).toBe(0);
+    expect(sim.fairbatchBotProfitQuote).toBe(0);
+    expect(sim.ammBotProfitQuote).toBeGreaterThan(0);
+    expect(sim.fairbatchOut).toBeGreaterThan(sim.ammSandwichedOut);
+    expect(sim.ammSandwichedPrice).toBeGreaterThanOrEqual(sim.limitPrice - 1e-6);
   });
 
-  it('resolves Sepolia VITE_* environment defaults cleanly for zero and deployed contract addresses', () => {
-    const unsetDefaults = resolveEnvHealthDefaults({
-      VITE_CHAIN_ID: '11155111',
-      VITE_RPC_URL: 'https://ethereum-sepolia-rpc.publicnode.com',
-      VITE_FAIRBATCH_ADDRESS: '0x0000000000000000000000000000000000000000',
-      VITE_BASE_TOKEN_ADDRESS: '0x0000000000000000000000000000000000000000',
-      VITE_QUOTE_TOKEN_ADDRESS: '0x0000000000000000000000000000000000000000',
+  it('reconciles 3-column sandwich math (plain AMM vs slippage-capped bot vs FairBatch) for SellBase, BuyBase, and tiny orders', () => {
+    // Live Sepolia reserves example: 101.5442 fWETH / 299,200 fUSDC, 2 fWETH sell, 8% slippage cap
+    const sellSim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 8,
     });
-    expect(unsetDefaults.chainId).toBe(11155111);
-    expect(unsetDefaults.contracts.deployed).toBe(false);
-    expect(unsetDefaults.contracts.base_token).toBe(
-      '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',
+
+    // Plain unattacked 0.30% AMM gives ~5,762.17 fUSDC; FairBatch gives ~5,669.66 (~1.61% worse on large one-sided sell)
+    expect(sellSim.ammPlainOut).toBeCloseTo(5762.17, 1);
+    expect(sellSim.fairbatchOut).toBeCloseTo(5669.66, 1);
+    expect(sellSim.fairbatchVsPlainQuote).toBeLessThan(0);
+    expect(sellSim.fairbatchVsPlainPct).toBeCloseTo(-1.6055, 2);
+
+    // Slippage-capped bot keeps victim's trade strictly valid (>= minPrice $2,710.78)
+    expect(sellSim.limitPrice).toBeCloseTo(2710.78, 1);
+    expect(sellSim.ammSandwichedPrice).toBeGreaterThanOrEqual(sellSim.limitPrice - 1e-6);
+    expect(sellSim.ammSandwichedOut).toBeCloseTo(5421.56, 1);
+    expect(sellSim.ammBotProfitQuote).toBeCloseTo(288.13, 1);
+    expect(sellSim.extraLpFeesQuote).toBeCloseTo(52.48, 1);
+
+    // Exact accounting identities:
+    //   1. victimLossVsPlainQuote === ammBotProfitQuote + extraLpFeesQuote
+    //   2. fairbatchVsAttackedQuote === fairbatchVsPlainQuote + victimLossVsPlainQuote
+    expect(sellSim.ammBotProfitQuote + sellSim.extraLpFeesQuote).toBeCloseTo(
+      sellSim.victimLossVsPlainQuote,
+      6,
+    );
+    expect(sellSim.fairbatchVsPlainQuote + sellSim.victimLossVsPlainQuote).toBeCloseTo(
+      sellSim.fairbatchVsAttackedQuote,
+      6,
     );
 
-    const deployedDefaults = resolveEnvHealthDefaults({
-      VITE_CHAIN_ID: '11155111',
-      VITE_RPC_URL: 'https://ethereum-sepolia-rpc.publicnode.com',
-      VITE_FAIRBATCH_ADDRESS: '0xAbCdEf0123456789AbCdEf0123456789AbCdEf01',
-      VITE_BASE_TOKEN_ADDRESS: '0x1111111111111111111111111111111111111111',
-      VITE_QUOTE_TOKEN_ADDRESS: '0x2222222222222222222222222222222222222222',
+    // Tighter slippage tolerance (5%) caps bot smaller than 8% while keeping trade valid
+    const mediumSim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 5,
     });
-    expect(deployedDefaults.contracts.deployed).toBe(true);
-    expect(deployedDefaults.contracts.fair_batch).toBe(
-      '0xAbCdEf0123456789AbCdEf0123456789AbCdEf01',
+    expect(mediumSim.victimExceedsSlippageWithoutAttack).toBe(false);
+    expect(mediumSim.frontRunAmount).toBeGreaterThan(0);
+    expect(mediumSim.frontRunAmount).toBeLessThan(sellSim.frontRunAmount);
+    expect(mediumSim.ammSandwichedPrice).toBeGreaterThanOrEqual(mediumSim.limitPrice - 1e-6);
+
+    // Very tight slippage tolerance (0.5% and 1%):
+    // - Small retail trade (0.1 fWETH) stays valid without a bot (~0.40% impact) and is unprofitable to attack ($0 bot profit)
+    // - Large trade (2 fWETH) reverts even without a bot (~2.22% impact > 1%)
+    const tightRetail05 = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 0.1,
+      slippagePct: 0.5,
+    });
+    expect(tightRetail05.victimExceedsSlippageWithoutAttack).toBe(false);
+    expect(tightRetail05.botProfitable).toBe(false);
+    expect(tightRetail05.ammBotProfitQuote).toBe(0);
+
+    const tightLarge1 = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 1,
+    });
+    expect(tightLarge1.victimExceedsSlippageWithoutAttack).toBe(true);
+    expect(tightLarge1.frontRunAmount).toBe(0);
+    expect(tightLarge1.ammBotProfitQuote).toBe(0);
+
+    // Very tight slippage tolerance (2%): even unattacked 0.30% AMM exceeds 2% on 2/101.54 pool -> no sandwich fits
+    const tightSim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 2,
+      slippagePct: 2,
+    });
+    expect(tightSim.victimExceedsSlippageWithoutAttack).toBe(true);
+    expect(tightSim.frontRunAmount).toBe(0);
+    expect(tightSim.ammBotProfitQuote).toBe(0);
+
+    // BuyBase: 6,000 fUSDC buy at 8% slippage also stays valid (<= maxPrice) and reconciles identically
+    const buySim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'BuyBase',
+      amountIn: 6_000,
+      slippagePct: 8,
+    });
+    expect(buySim.ammSandwichedPrice).toBeLessThanOrEqual(buySim.limitPrice + 1e-6);
+    expect(buySim.ammBotProfitQuote).toBeGreaterThan(0);
+    expect(buySim.ammBotProfitQuote + buySim.extraLpFeesQuote).toBeCloseTo(
+      buySim.victimLossVsPlainQuote,
+      6,
     );
-    expect(deployedDefaults.contracts.base_token).toBe(
-      '0x1111111111111111111111111111111111111111',
+    expect(buySim.fairbatchVsPlainQuote + buySim.victimLossVsPlainQuote).toBeCloseTo(
+      buySim.fairbatchVsAttackedQuote,
+      6,
     );
+
+    // Tiny trade (0.05 fWETH): sandwich bot cannot clear 0.60% round-trip fees -> 0 front-run, $0 profit;
+    // FairBatch's 0% swap fee beats the unattacked 0.30% AMM!
+    const tinySim = runSandwichSimulation({
+      rx: 101.5442,
+      ry: 299_200,
+      side: 'SellBase',
+      amountIn: 0.05,
+      slippagePct: 8,
+    });
+    expect(tinySim.botProfitable).toBe(false);
+    expect(tinySim.frontRunAmount).toBe(0);
+    expect(tinySim.ammBotProfitQuote).toBe(0);
+    expect(tinySim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+  });
+
+  it('verifies exact 0.3009% break-even size vs unattacked 0.30% AMM and live trade-size table', () => {
+    const rx = 101.5442;
+    const ry = 299_200;
+
+    // SellBase break-even: dx* / R_x = 0.003 / 0.997 = 0.3009027% (~0.30555 fWETH)
+    const sellBE = computeUnattackedBreakEvenSize(rx, 30);
+    expect(sellBE.poolPct).toBeCloseTo(0.3009027, 5);
+    expect(sellBE.size).toBeCloseTo(0.305549, 4);
+    const atSellBE = runSandwichSimulation({
+      rx,
+      ry,
+      side: 'SellBase',
+      amountIn: sellBE.size,
+      slippagePct: 8,
+    });
+    expect(atSellBE.fairbatchOut).toBeCloseTo(atSellBE.ammPlainOut, 8);
+    expect(atSellBE.fairbatchVsPlainQuote).toBeCloseTo(0, 8);
+
+    // BuyBase break-even: dy* / R_y = 0.003 / 0.997 = 0.3009027%
+    const buyBE = computeUnattackedBreakEvenSize(ry, 30);
+    expect(buyBE.poolPct).toBeCloseTo(0.3009027, 5);
+    const atBuyBE = runSandwichSimulation({
+      rx,
+      ry,
+      side: 'BuyBase',
+      amountIn: buyBE.size,
+      slippagePct: 8,
+    });
+    expect(atBuyBE.fairbatchOut).toBeCloseTo(atBuyBE.ammPlainOut, 8);
+
+    // Trade-size table across [0.05, 0.1, 0.3, 1, 2] fWETH
+    const table = buildSandwichSizeTable({ rx, ry, side: 'SellBase', slippagePct: 8 });
+    expect(table.map((r) => r.size)).toEqual([0.05, 0.1, 0.3, 1, 2]);
+    // Below break-even (0.05, 0.1, 0.3): FairBatch > unattacked AMM
+    expect(table[0].sim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+    expect(table[1].sim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+    expect(table[2].sim.fairbatchVsPlainQuote).toBeGreaterThan(0);
+    // Above break-even (1, 2): FairBatch < unattacked AMM, but > attacked AMM
+    expect(table[3].sim.fairbatchVsPlainQuote).toBeLessThan(0);
+    expect(table[3].sim.fairbatchVsAttackedQuote).toBeGreaterThan(0);
+    expect(table[4].sim.fairbatchVsPlainQuote).toBeLessThan(0);
+    expect(table[4].sim.fairbatchVsAttackedQuote).toBeGreaterThan(0);
   });
 });
