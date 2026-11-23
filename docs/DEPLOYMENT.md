@@ -1,4 +1,53 @@
-# FairBatch Server Deployment Guide (`deploy.sh`)
+# FairBatch Hosting Guide
+
+The exchange UI is a static Vite SPA. It talks to **Ethereum Sepolia** from the browser (`config/deployment.json`). Host it on **Render** or **Railway**. You do not need a VPS for the app to work.
+
+The optional keeper/relayer is a separate always-on process. Skip it unless you want automatic `settleBatch()`. Users can still click **Start next round**.
+
+---
+
+## Render (static site)
+
+1. Push this repo to GitHub.
+2. In the Render dashboard: **New → Blueprint** and select the repo, or **New → Static Site**.
+3. Blueprint file: [`render.yaml`](../render.yaml).
+
+| Setting | Value |
+| :--- | :--- |
+| Runtime | Static site |
+| Build command | `cd frontend && npm ci && npm run build` |
+| Publish directory | `frontend/dist` |
+| Node version | `22` (`NODE_VERSION` or [`.node-version`](../.node-version)) |
+| SPA rewrite | `/*` → `/index.html` |
+
+One-click: [Deploy to Render](https://render.com/deploy?repo=https://github.com/Asif2902/FairBatch).
+
+Build must run from the **repo root** (not `frontend/` as Root Directory). `frontend/src/onchain/config.ts` imports `config/deployment.json` from the parent tree.
+
+---
+
+## Railway
+
+1. Push this repo to GitHub.
+2. New Empty Project → **Deploy from GitHub repo**.
+3. Config file: [`railway.json`](../railway.json). Root [`package.json`](../package.json) builds the Vite app and serves `frontend/dist`.
+
+| Setting | Value |
+| :--- | :--- |
+| Builder | Railpack |
+| Build command | `npm run build` |
+| Start command | `npm start` (`serve frontend/dist -s`, binds `$PORT`) |
+| Node version | `22` ([`.node-version`](../.node-version)) |
+
+Do not set the service root directory to `frontend/` — the build needs `config/` at the repo root.
+
+Generate a public URL: **Settings → Networking → Generate Domain**.
+
+---
+
+## Optional VPS (`deploy.sh`)
+
+Use this path only if you want Caddy + the keeper on a Linux VM.
 
 Deploy the FairBatch web app (Simple + Pro + `/docs`) and the optional permissionless settlement keeper & EIP-712 intent relayer onto a fresh **Ubuntu 22.04**, **Ubuntu 24.04**, or **Debian 12** server using a single idempotent script: [`deploy.sh`](../deploy.sh).
 
