@@ -5,9 +5,10 @@
 services:
   - type: web
     name: fairbatch-keeper
-    runtime: docker
-    dockerfilePath: ./keeper/Dockerfile
-    dockerContext: .
+    runtime: node
+    rootDir: keeper
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     healthCheckPath: /health
     envVars:
       - key: KEEPER_PRIVATE_KEY
@@ -53,13 +54,10 @@ services:
       - key: KEEPER_DRY_RUN
         value: "false"
       - key: KEEPER_CORS_ORIGIN
-        fromService:
-          name: fairbatch
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
+        value: "https://app.fairbatch.xyz,https://fairbatch-ui.onrender.com,http://localhost:5173"
 
   - type: web
-    name: fairbatch
+    name: fairbatch-ui
     runtime: static
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
@@ -69,7 +67,7 @@ services:
         value: "22"
       - key: VITE_KEEPER_URL
         fromService:
-          name: fairbatch-keeper
+          name: FairBatch
           type: web
           envVarKey: RENDER_EXTERNAL_URL
     routes:

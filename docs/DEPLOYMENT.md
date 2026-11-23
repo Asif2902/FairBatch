@@ -2,6 +2,11 @@
 
 The exchange UI is a static Vite SPA. It talks to **Ethereum Sepolia** from the browser (`config/deployment.json`). Host it on **Render** or **Railway**. You do not need a VPS for the app to work.
 
+**Live (Render, Ethereum Sepolia):**
+
+- UI: https://app.fairbatch.xyz
+- Keeper / relayer: https://fairbatch.onrender.com/health
+
 The optional keeper/relayer is a separate always-on process. Skip it unless you want automatic `settleBatch()`. Users can still click **Start next round**.
 
 ---
