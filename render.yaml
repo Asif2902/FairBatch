@@ -1,7 +1,63 @@
-# FairBatch web UI — static SPA on Render.
-# Dashboard: New Blueprint → this repo, or New Static Site with the fields below.
-# Contracts stay on Ethereum Sepolia. This service only serves frontend/dist.
+# FairBatch on Render: static SPA + optional Sepolia keeper/relayer.
+# Contracts stay on Ethereum Sepolia. Secrets are NOT in this file.
+# KEEPER_PRIVATE_KEY is prompted on first Blueprint approve and filled
+# from local keeper/.env (gitignored).
 services:
+  - type: web
+    name: fairbatch-keeper
+    runtime: docker
+    dockerfilePath: ./keeper/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: KEEPER_PRIVATE_KEY
+        sync: false
+      - key: KEEPER_HOST
+        value: "0.0.0.0"
+      - key: KEEPER_RPC_URL
+        value: https://ethereum-sepolia-rpc.publicnode.com
+      - key: KEEPER_POLL_MS
+        value: "2000"
+      - key: KEEPER_GRACE_SECONDS
+        value: "5"
+      - key: KEEPER_EMPTY_ROUND_MINUTES
+        value: "0"
+      - key: KEEPER_SLASH
+        value: "true"
+      - key: KEEPER_SLASH_GRACE_SECONDS
+        value: "60"
+      - key: KEEPER_MIN_BALANCE_ETH
+        value: "0.005"
+      - key: KEEPER_MAX_GAS_PRICE_GWEI
+        value: "50"
+      - key: KEEPER_SETTLE_GAS_LIMIT
+        value: "12000000"
+      - key: KEEPER_SLASH_GAS_LIMIT
+        value: "600000"
+      - key: KEEPER_RELAY_ENABLED
+        value: "true"
+      - key: KEEPER_RELAY_GRACE_SECONDS
+        value: "5"
+      - key: KEEPER_RELAY_DEADLINE_BUFFER_SECONDS
+        value: "30"
+      - key: KEEPER_RELAY_MAX_QUEUE
+        value: "16"
+      - key: KEEPER_RELAY_RATE_LIMIT_PER_IP
+        value: "12"
+      - key: KEEPER_RELAY_RATE_LIMIT_PER_TRADER
+        value: "6"
+      - key: KEEPER_RELAY_RATE_WINDOW_MS
+        value: "60000"
+      - key: KEEPER_RELAY_GAS_LIMIT
+        value: "1500000"
+      - key: KEEPER_DRY_RUN
+        value: "false"
+      - key: KEEPER_CORS_ORIGIN
+        fromService:
+          name: fairbatch
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+
   - type: web
     name: fairbatch
     runtime: static
@@ -11,6 +67,11 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: VITE_KEEPER_URL
+        fromService:
+          name: fairbatch-keeper
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
     routes:
       - type: rewrite
         source: /*

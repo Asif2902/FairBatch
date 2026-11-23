@@ -80,10 +80,14 @@ function locateRepoRoot(): string {
 }
 
 function loadDotEnvIfPresent(repoRoot: string): void {
+  const extra = process.env.KEEPER_ENV_FILE?.trim();
   const envCandidates = [
+    extra,
+    '/etc/secrets/.env',
+    '/etc/secrets/keeper.env',
     path.join(repoRoot, 'keeper', '.env'),
     path.join(process.cwd(), '.env'),
-  ];
+  ].filter((p): p is string => Boolean(p));
   for (const filePath of envCandidates) {
     if (!fs.existsSync(filePath)) continue;
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -104,7 +108,6 @@ function loadDotEnvIfPresent(repoRoot: string): void {
         process.env[key] = val;
       }
     }
-    break;
   }
 }
 
@@ -186,7 +189,7 @@ export function loadKeeperConfig(argv: string[] = process.argv.slice(2)): Keeper
     settleGasLimit: BigInt(Math.floor(parseNumber(process.env.KEEPER_SETTLE_GAS_LIMIT, 12_000_000, 500_000))),
     slashGasLimit: BigInt(Math.floor(parseNumber(process.env.KEEPER_SLASH_GAS_LIMIT, 600_000, 100_000))),
     host: process.env.KEEPER_HOST ?? '0.0.0.0',
-    port: Math.floor(parseNumber(process.env.KEEPER_PORT, 3002, 1)),
+    port: Math.floor(parseNumber(process.env.PORT ?? process.env.KEEPER_PORT, 3002, 1)),
     corsOrigins,
     relayerEnabled: parseBool(process.env.KEEPER_RELAY_ENABLED, true),
     relayGraceSeconds: Math.floor(parseNumber(process.env.KEEPER_RELAY_GRACE_SECONDS, 5, 0)),
