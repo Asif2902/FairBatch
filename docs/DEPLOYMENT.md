@@ -25,7 +25,7 @@ The optional keeper/relayer is a separate always-on process. Skip it unless you 
 | Node version | `22` (`NODE_VERSION` or [`.node-version`](../.node-version)) |
 | SPA rewrite | `/*` → `/index.html` |
 
-One-click: [Deploy to Render](https://render.com/deploy?repo=https://github.com/Asif2902/FairBatch).
+One-click: [Deploy to Render](https://render.com/deploy?repo=https://github.com/jubayir-hub-69/FairBatch).
 
 Build must run from the **repo root** (not `frontend/` as Root Directory). `frontend/src/onchain/config.ts` imports `config/deployment.json` from the parent tree.
 
@@ -99,7 +99,7 @@ Fund that public address with **`~0.10–0.20` Sepolia ETH** from a free public 
 ### A. Interactive First-Time Deploy (Recommended)
 
 ```sh
-git clone https://github.com/Asif2902/FairBatch.git
+git clone https://github.com/jubayir-hub-69/FairBatch.git
 cd FairBatch
 chmod +x deploy.sh
 ./deploy.sh

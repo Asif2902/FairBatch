@@ -2,7 +2,7 @@
 
 ## Judge quick start
 
-FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** and deployed live on **Ethereum Sepolia**. Instead of executing swaps sequentially in block arrival order, FairBatch groups Direct, Sealed Commit-Reveal, and EIP-712/ERC-1271 signed orders into discrete rounds and clears every filled order at one uniform price $p^*$ via a compiler-enforced zero-effect (`uses ()`) pricing engine ([`src/clearing.fe`](./src/clearing.fe)), yielding `$0.00` intra-round sandwich profit. Visitors connect directly to Sepolia through a zero-backend React/`viem` web app with beginner-friendly **Simple** mode, a **Pro** clearing terminal, an interactive MEV simulator, in-app `/docs`, an optional trustless keeper/relayer ([`keeper/`](./keeper)), and static hosting on Render or Railway ([`render.yaml`](./render.yaml), [`railway.json`](./railway.json)).
+FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** and deployed live on **Ethereum Sepolia**. Instead of executing swaps sequentially in block arrival order, FairBatch groups Direct, Sealed Commit-Reveal, and EIP-712/ERC-1271 signed orders into discrete rounds and clears every filled order at one uniform price $p^*$ via a compiler-enforced zero-effect (`uses ()`) pricing engine ([`src/clearing.fe`](./src/clearing.fe)), yielding `$0.00` intra-round sandwich profit. Visitors connect directly to Sepolia through a zero-backend React/`viem` web app with beginner-friendly **Simple** mode, a **Pro** clearing terminal, an interactive MEV simulator, in-app `/docs`, an optional permissionless and non-custodial keeper/relayer ([`keeper/`](./keeper)), and static hosting on Render or Railway ([`render.yaml`](./render.yaml), [`railway.json`](./railway.json)).
 
 - **Live demo (Ethereum Sepolia):** https://app.fairbatch.xyz
 - **Keeper / relayer:** https://fairbatch.onrender.com/health
@@ -11,7 +11,7 @@ FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincid
 **Run & verify locally in 3 commands:**
 
 ```sh
-git clone https://github.com/Asif2902/FairBatch.git && cd FairBatch
+git clone https://github.com/jubayir-hub-69/FairBatch.git && cd FairBatch
 fe fmt --check && fe check && fe test && fe build && node scripts/verify_deployed_bytecode.mjs
 cd frontend && npm ci && npm test && npm run dev
 ```
@@ -23,7 +23,7 @@ The UI is a static Vite SPA. It talks to Sepolia from the browser. Host it on **
 - **Render UI (static):** https://app.fairbatch.xyz (`fairbatch-ui.onrender.com`) — Blueprint [`render.yaml`](./render.yaml). Build `cd frontend && npm ci && npm run build`, publish `frontend/dist`, `VITE_KEEPER_URL=https://fairbatch.onrender.com`.
 - **Render keeper (Node, free):** https://fairbatch.onrender.com — root dir `keeper/`, `npm run start`, env from `keeper/.env`.
 - **Railway:** New Empty Project → deploy this repo. Config: [`railway.json`](./railway.json). Build `npm run build`, start `npm start`.
-- **One-click Render:** [Deploy to Render](https://render.com/deploy?repo=https://github.com/Asif2902/FairBatch)
+- **One-click Render:** [Deploy to Render](https://render.com/deploy?repo=https://github.com/jubayir-hub-69/FairBatch)
 
 Keeper/relayer is optional. Without it, users click **Start next round**. Full steps: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
 
@@ -34,7 +34,7 @@ Keeper/relayer is optional. Without it, users click **Start next round**. Full s
 | **Technical quality** | [`src/lib.fe`](./src/lib.fe), [`src/clearing.fe`](./src/clearing.fe), [`src/math.fe`](./src/math.fe), [`src/intent.fe`](./src/intent.fe), [`src/tests.fe`](./src/tests.fe) (**69 Fe tests**), [`scripts/verify_deployed_bytecode.mjs`](./scripts/verify_deployed_bytecode.mjs), [`frontend/src/__tests__/`](./frontend/src/__tests__) (**54 Vitest tests**), [`keeper/src/__tests__/`](./keeper/src/__tests__) (**10 Vitest tests**), [`backend/`](./backend) (**30 Cargo tests**), [`deploy/tests/test_deploy.sh`](./deploy/tests/test_deploy.sh) | 512-bit LND invariant & directional solvency checks, 64-order batch settlement (`evm_settle_full_64_order_batch`), EIP-1153 reentrancy guard, blacklist-safe pull claims, LP slippage + `MINIMUM_LIQUIDITY` burn, commit-slot reservation, and byte-for-byte Sepolia bytecode verification. |
 | **Fe-specific value** | [`src/clearing.fe`](./src/clearing.fe) (`uses ()`), `BatchClock` / `MockClock` in [`src/lib.fe`](./src/lib.fe) & [`src/faucet.fe`](./src/faucet.fe) (9 `effect_*` tests), `std::evm::mutex::Mutex`, `std::evm::eip712` & `is_valid_signature_now` in [`src/intent.fe`](./src/intent.fe), `core::fixed::Wad`, `std::evm::multicall::MulticallMsg`, and [Fe `26.5.0` Tooling Feedback](#fe-2650-tooling-feedback) | Compiler-enforced effect purity in the pricing kernel, deterministic effect-injected clock tests without cheatcodes, Cancun `TLOAD`/`TSTORE` mutex, stdlib EOA + ERC-1271 verification, granular `uses (...)` projections, and measured Cancun vs. Sepolia EIP-8037 gas analysis. |
 | **Originality** | [`src/clearing.fe`](./src/clearing.fe), [`src/lib.fe`](./src/lib.fe), [`src/tests.fe`](./src/tests.fe) (`proof_mev_sandwich_zero_profit`, `property_order_permutation_invariance`, `evm_commit_reveal_bond_refund_to_stateful_receiver`) | On-chain Fe `26.5.0` Hybrid CoW + FM-AMM uniform-clearing batch auction ($p^* = (R_y + 2 D_y)/(R_x + 2 S_x)$) uniting Direct, Sealed Commit-Reveal (with 200k-gas smart-wallet bond refund + permissionless slasher bounty), and EIP-712/ERC-1271 intents in one contract. |
-| **Usefulness** | [`config/deployment.json`](./config/deployment.json), [`frontend/src/components/SimpleExperience.tsx`](./frontend/src/components/SimpleExperience.tsx), [`frontend/src/components/OrderTicket.tsx`](./frontend/src/components/OrderTicket.tsx), [`frontend/src/components/SandwichSimulationModal.tsx`](./frontend/src/components/SandwichSimulationModal.tsx), [`keeper/`](./keeper), [`deploy.sh`](./deploy.sh) | Zero-backend Sepolia web app with guided **Simple** mode (Swap, Earn, Faucet, gas onboarding, aggregated Collect), full **Pro** terminal (top balance/approval strip, 3 order modes, depth chart, honest 3-column MEV simulator + live trade-size table), optional trustless keeper/relayer, and static hosting on Render or Railway. |
+| **Usefulness** | [`config/deployment.json`](./config/deployment.json), [`frontend/src/components/SimpleExperience.tsx`](./frontend/src/components/SimpleExperience.tsx), [`frontend/src/components/OrderTicket.tsx`](./frontend/src/components/OrderTicket.tsx), [`frontend/src/components/SandwichSimulationModal.tsx`](./frontend/src/components/SandwichSimulationModal.tsx), [`keeper/`](./keeper), [`deploy.sh`](./deploy.sh) | Zero-backend Sepolia web app with guided **Simple** mode (Swap, Earn, Faucet, gas onboarding, aggregated Collect), full **Pro** terminal (top balance/approval strip, 3 order modes, depth chart, honest 3-column MEV simulator + live trade-size table), optional permissionless and non-custodial keeper/relayer, and static hosting on Render or Railway. |
 | **Documentation / demo** | [`frontend/src/components/docs/DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx), [`frontend/src/components/docs/DocsAnimations.tsx`](./frontend/src/components/docs/DocsAnimations.tsx), [`frontend/src/__tests__/labelParity.test.tsx`](./frontend/src/__tests__/labelParity.test.tsx), [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md), [`docs/VERIFICATION.md`](./docs/VERIFICATION.md), [`docs/RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`docs/screenshots/`](./docs/screenshots) | In-app `/docs` (`#/docs`) with plain-English User Guide, Developer Reference, 5 interactive CSS/SVG visuals, Threat Matrix, and Glossary; automated UI button label parity test across `/docs` and `README.md`; verified fresh-clone test transcript; and real Sepolia screenshots. |
 
 ---
@@ -44,7 +44,7 @@ Keeper/relayer is optional. Without it, users click **Start next round**. Full s
 On sequential constant-product AMMs ($x \cdot y = k$), swaps execute one-by-one in block-builder order, causing three structural problems:
 
 1. **Arrival-Order Unfairness:** Five identical `1 WETH -> USDC` swaps in one block receive five progressively worse prices solely due to transaction ordering.
-2. **Intra-Block MEV Sandwich Extraction:** Searchers front-run pending swaps and back-run immediately after. Against five `1 WETH` sells into a `100 WETH / 300,000 USDC` sequential AMM (`30 bps` fee), an optimal sandwich bot extracts `$1,802.26 USDC` from user execution quality (verified in `backend/src/simulator.rs`).
+2. **Intra-Block MEV Sandwich Extraction:** Searchers front-run pending swaps and back-run immediately after. Against five `1 WETH` sells into a `100 WETH / 300,000 USDC` sequential AMM (`30 bps` fee), an optimal sandwich bot **with no victim slippage cap** extracts `$1,802.26 USDC` from user execution quality (verified in `backend/src/simulator.rs`). The in-app simulator instead caps the bot at the victim's slippage tolerance: e.g. a `2 fWETH` sell at an `8%` cap loses about `$288` to the bot (plus extra LP fees), not the uncapped `$1,802` figure.
 3. **Loss-Versus-Rebalancing (LVR):** Sequential arbitrageurs capture inframarginal surplus while leaving $k = x \cdot y$ unchanged net of fees.
 
 ---
@@ -109,7 +109,7 @@ FairBatch's core contract suite (`src/*.fe`) is built around **Fe `26.5.0`** fea
 
 ## Architecture
 
-The live exchange frontend connects **directly to Ethereum Sepolia via `viem`** using [`config/deployment.json`](./config/deployment.json) as the single source of truth — **no REST backend is required**. First-time visitors land in **Simple** mode (plain-language protected swap + Earn tab with guided steps), power users and judges can switch to **Pro** mode for the full clearing ledger terminal (always-visible balances & approvals, all 3 order modes, depth/price chart, MEV sandwich simulator, batch console, and claims ledger), and an in-app **`/docs`** (`#/docs`) route provides a plain-English User Guide, Developer Guide, 5 interactive CSS/SVG walkthroughs, security threat matrix, and glossary. An optional TypeScript keeper & intent relayer lives in [`keeper/`](./keeper) (adds liveness, not trust — the protocol works completely without it). The Rust crate in [`backend/`](./backend) is kept strictly as an optional off-chain reference/parity verifier and sequential-AMM MEV sandwich simulator (not the core contribution).
+The live exchange frontend connects **directly to Ethereum Sepolia via `viem`** using [`config/deployment.json`](./config/deployment.json) as the single source of truth — **no REST backend is required**. First-time visitors land in **Simple** mode (plain-language protected swap + Earn tab with guided steps), power users and judges can switch to **Pro** mode for the full clearing ledger terminal (always-visible balances & approvals, all 3 order modes, depth/price chart, MEV sandwich simulator, batch console, and claims ledger), and an in-app **`/docs`** (`#/docs`) route provides a plain-English User Guide, Developer Guide, 5 interactive CSS/SVG walkthroughs, security threat matrix, and glossary. An optional TypeScript keeper & intent relayer lives in [`keeper/`](./keeper) (permissionless and non-custodial; the protocol works completely without it). The Rust crate in [`backend/`](./backend) is kept strictly as an optional off-chain reference/parity verifier and sequential-AMM MEV sandwich simulator (not the core contribution).
 
 ```mermaid
 flowchart TB
@@ -129,7 +129,7 @@ flowchart TB
         Tokens["mock_erc20.fe: Owner/Minter-Guarded fWETH (18d) & fUSDC (6d)"]
     end
 
-    subgraph OptionalInfra["Optional Infrastructure (Adds Liveness, Not Trust)"]
+    subgraph OptionalInfra["Optional Infrastructure (Permissionless and Non-Custodial)"]
         Keeper["keeper/ (TypeScript + viem: Auto-Settle after 5s Grace, Slasher, POST /relay/intent)"]
         Parity["backend/ (Rust: Offline 256-bit Parity Tests + MEV Sandwich Model)"]
     end
@@ -189,7 +189,7 @@ Additional workflow captures in [`docs/screenshots/`](./docs/screenshots): [`sim
 ### 1. Clone
 
 ```sh
-git clone https://github.com/Asif2902/FairBatch.git
+git clone https://github.com/jubayir-hub-69/FairBatch.git
 cd FairBatch
 ```
 
@@ -395,6 +395,7 @@ The gap is **not** warm-vs-cold storage (both columns use separate cold transact
 5. **Contract Size Headroom:** `FairBatch` deploys at **`23,038` of `24,576` bytes** (`93.74%` of EIP-170), leaving **`1,538` bytes** of headroom. Major protocol additions would require splitting components or optimizing code size.
 6. **Testnet-Only Mock Token Design ([`src/mock_erc20.fe`](./src/mock_erc20.fe)):** `fWETH` and `fUSDC` are minimal access-controlled mock ERC-20 tokens (`owner`/`minter`-restricted `mint`, owner-only `setBlacklisted` retained to verify pull-over-push settlement liveness) and omit `name()`, `symbol()`, and ERC-20 `Transfer`/`Approval` events. Fee-on-transfer and rebasing tokens are unsupported.
 7. **Cancun+ Opcodes, Keeper Liveness & Pure-P2P Dust:** `std::evm::mutex::Mutex` emits EIP-1153 `TLOAD`/`TSTORE` and Sonatina emits `PUSH0`/`MCOPY` (requiring Cancun+ networks). After `reveal_deadline`, new orders revert until permissionless `settleBatch()` is called (no protocol ETH subsidy for empty batches). In pure-P2P mode (`R_x == R_y == 0`), non-terminating clearing ratios can retain 1–2 wei of floor-rounding dust in contract custody.
+8. **Large One-Sided Orders vs. an Unattacked Swap:** On large one-sided orders FairBatch can pay about 1–2% less than an unattacked 0.30% $x \cdot y = k$ AMM, because uniform clearing prices near the post-trade marginal $p^*$ so LPs keep the surplus. Tiny orders (`<0.30%` impact) are about equal or slightly better; opposite-side flow matches peer-to-peer at zero impact. See in-app `/docs`.
 
 ---
 
@@ -405,7 +406,7 @@ The gap is **not** warm-vs-cold storage (both columns use separate cold transact
   - **Jubayir (`jubayir-hub-69`):** Initial FairBatch Fe `26.5.0` contract implementation (`clearing.fe`, `math.fe`, `intent.fe`, `lib.fe`, `mock_erc20.fe`, initial 37-test suite), off-chain Rust parity solver and MEV simulator (`backend/`), mathematical research (`docs/RESEARCH_AND_FEASIBILITY.md`), initial UI, and first Sepolia deployment.
   - **Asif Iqbal (`Asif2902`):** Clearing Ledger frontend redesign (Simple + Pro UX, in-app `/docs` + 5 interactive visuals, honest 3-column MEV simulator), live Sepolia `viem` integration (`frontend/src/onchain/*`), EIP-7702/smart-wallet 200k-gas bond refund fix, optional LP time-locking, Sepolia `Faucet` contract, contract security hardening (slasher payouts, token access control, LP slippage & `MINIMUM_LIQUIDITY`, `BatchClock` injection, commit-slot reservation), expanded 69-test Fe suite, optional TypeScript keeper & EIP-712 intent relayer (`keeper/`), one-script VPS deployment (`deploy.sh`), deployed bytecode verifier (`scripts/verify_deployed_bytecode.mjs`), Cancun vs. Sepolia gas investigation, final Sepolia redeployment + live E2E verification, and documentation.
 - **Third-party code:** Zero third-party smart contract code was copied into `src/`; contracts use only Fe `26.5.0`'s built-in `core` and `std` libraries. Off-chain tooling uses standard open-source npm (`react`, `viem`, `vite`, `typescript`, `tailwindcss`, `vitest`, `@testing-library/react`) and Cargo (`axum`, `tokio`, `serde`, `sha3`, `k256`, `reqwest`) dependencies. The FM-AMM pricing equation follows Canidio & Fritsch (2023, arXiv:2307.02074).
-- **AI assistance:** AI coding assistants were used during development for drafting, refactoring, differential testing, and documentation. All contract logic, tests, gas measurements, and live Sepolia deployments were executed, reviewed, and verified by the team against the `fe 26.5.0 (3dab95f)`, Foundry, Rust, and Node.js toolchains.
+- **AI assistance:** AI coding assistants were used extensively across this project: drafting and iterating Fe contracts (`src/*.fe`), the React/`viem` frontend, the TypeScript keeper, tests, Render/Railway hosting config, and documentation (including this README). Humans specified the mechanism, reviewed every diff, ran `fe test`, Vitest, Cargo tests, and live Sepolia deployments, and take responsibility for the submitted code. The contest permits AI assistance; it is not scored negatively.
 
 ---
 
@@ -414,7 +415,7 @@ The gap is **not** warm-vs-cold storage (both columns use separate cold transact
 - **Asif Iqbal** — [@Asif2902](https://github.com/Asif2902) *(Primary Contact)*
 - **Jubayir** — [@jubayir-hub-69](https://github.com/jubayir-hub-69)
 
-Repository: [`https://github.com/Asif2902/FairBatch`](https://github.com/Asif2902/FairBatch)
+Repository: [`https://github.com/jubayir-hub-69/FairBatch`](https://github.com/jubayir-hub-69/FairBatch)
 
 ---
 

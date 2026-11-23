@@ -1,6 +1,6 @@
 # FairBatch Verification Record
 
-This document records the exact commands, tool versions, pass counts, and verbatim terminal output collected from a **fresh clone** of the pushed GitHub remote (`https://github.com/Asif2902/FairBatch.git`).
+This document records the exact commands, tool versions, pass counts, and verbatim terminal output collected from a **fresh clone** of the pushed GitHub remote (`https://github.com/jubayir-hub-69/FairBatch.git`).
 
 > **GitHub Actions CI note:** Continuous integration is configured in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (`ubuntu-latest`, Fe `v26.5.0`, Node 22, Rust stable, `shellcheck`, live bytecode verification, and full `deploy.sh` tests); GitHub Actions jobs could not start on this account because the account is locked due to a billing issue (observed on run `44916951422`), so no CI badge is shown and the complete fresh-clone verification run is captured verbatim below.
 
@@ -11,7 +11,7 @@ This document records the exact commands, tool versions, pass counts, and verbat
 | Field | Value |
 | :--- | :--- |
 | **Verification Date (UTC)** | `2026-11-22T18:19:06Z` (completed `2026-11-22T18:39Z`) |
-| **Remote URL** | `https://github.com/Asif2902/FairBatch.git` |
+| **Remote URL** | `https://github.com/jubayir-hub-69/FairBatch.git` |
 | **Verified Fresh-Clone Commit SHA** | `43c40e45fd3e1ad1763b787c23c6f9554a032c1e` *(this `docs/VERIFICATION.md` file is committed immediately on top with zero code, contract, or script changes)* |
 | **Sepolia Redeploy Freeze Audit (`ff98649..HEAD`)** | `git diff ff98649..HEAD -- src/ ':(exclude)src/tests.fe'` is **empty** (0 production contract changes); `src/tests.fe` had only `fe fmt` whitespace formatting in `d5239106`. |
 
@@ -43,7 +43,7 @@ This document records the exact commands, tool versions, pass counts, and verbat
 ## Exact Commands Executed
 
 ```sh
-git clone https://github.com/Asif2902/FairBatch.git /tmp/fairbatch-stage-h-verify
+git clone https://github.com/jubayir-hub-69/FairBatch.git /tmp/fairbatch-stage-h-verify
 cd /tmp/fairbatch-stage-h-verify
 git rev-parse HEAD
 git diff --stat ff98649..HEAD -- src/
@@ -72,7 +72,7 @@ cargo:      cargo 1.94.0 (85eff7c80 2026-01-15)
 rustc:      rustc 1.94.0 (4a4ef493e 2026-03-02)
 shellcheck: version: 0.10.0
 
->>> git clone https://github.com/Asif2902/FairBatch.git
+>>> git clone https://github.com/jubayir-hub-69/FairBatch.git
 Cloning into 'C:\Users\Asif\AppData\Local\Temp\fairbatch-stage-h-verify'...
 Fresh-clone HEAD: 43c40e45fd3e1ad1763b787c23c6f9554a032c1e
 

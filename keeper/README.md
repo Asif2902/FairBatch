@@ -1,6 +1,6 @@
 # FairBatch Optional Keeper & Relayer (`keeper/`)
 
-> **Optional infrastructure — adds liveness, not trust.**  
+> **Optional infrastructure — permissionless and non-custodial.**  
 > FairBatch works completely without this service. Anyone can still click **Start next round** (`settleBatch()`), slash expired commitments (`slashUnrevealed()`), or submit their own EIP-712 signed intent (`submitSignedIntent()`). The keeper has **zero admin privileges**: it cannot change clearing prices, reorder batches, or touch user funds.
 
 ---
