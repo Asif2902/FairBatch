@@ -7,6 +7,7 @@ backend/target/
 backend/.cargo/config.toml
 
 # Frontend dependencies, local env & production bundle
+node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
@@ -28,6 +29,10 @@ deployments/*.tmp.json
 
 # Agent working memory (never commit)
 **/CONTEXT.md
+
+# Hosting CLI local state
+.vercel
+.railway
 
 # Playwright MCP screenshots / snapshots
 .playwright-mcp/

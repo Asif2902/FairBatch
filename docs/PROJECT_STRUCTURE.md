@@ -10,6 +10,10 @@ This document maps every directory and tracked file in the FairBatch repository 
 FairBatch/
 ├── .gitattributes                       # Enforces LF line endings on *.fe (keeps `fe fmt --check` clean on Windows/CI)
 ├── .github/workflows/ci.yml             # CI: Fe 26.5 fmt/check/test/build, Rust reference tests, frontend tests/build
+├── .node-version                        # Node 22 for Render / Railway
+├── render.yaml                          # Render static-site Blueprint (frontend/dist)
+├── railway.json                         # Railway Railpack build/start for the SPA
+├── package.json                         # Root host scripts: build frontend, `serve` dist
 ├── fe.toml                              # Fe 26.5.0 ingot manifest (`fair_batch` v0.1.0)
 ├── LICENSE                              # Apache License 2.0
 ├── README.md                            # Project overview, Why Fe, live Sepolia E2E txs, gas table & limitations
@@ -74,7 +78,7 @@ FairBatch/
 │   └── deploy_sepolia.ps1               # Sepolia deployer (`-DryRun` & live broadcast) with pure-C# EIP-1559 + Keccak-256
 │
 └── docs/                                # Engineering & Visual Design Documentation
-    ├── DEPLOYMENT.md                    # Server deployment guide (deploy.sh, DNS/Cloudflare, rollback, security)
+    ├── DEPLOYMENT.md                    # Render / Railway static hosting + optional deploy.sh VPS guide
     ├── PROJECT_STRUCTURE.md             # This file
     ├── RESEARCH_AND_FEASIBILITY.md      # Mathematical proofs (T1–T5) & Cancun EVM opcode analysis
     ├── design/                          # Clearing Ledger design philosophy & visual specimens

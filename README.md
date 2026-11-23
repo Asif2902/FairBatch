@@ -2,10 +2,10 @@
 
 ## Judge quick start
 
-FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** and deployed live on **Ethereum Sepolia**. Instead of executing swaps sequentially in block arrival order, FairBatch groups Direct, Sealed Commit-Reveal, and EIP-712/ERC-1271 signed orders into discrete rounds and clears every filled order at one uniform price $p^*$ via a compiler-enforced zero-effect (`uses ()`) pricing engine ([`src/clearing.fe`](./src/clearing.fe)), yielding `$0.00` intra-round sandwich profit. Visitors connect directly to Sepolia through a zero-backend React/`viem` web app with beginner-friendly **Simple** mode, a **Pro** clearing terminal, an interactive MEV simulator, in-app `/docs`, an optional trustless keeper/relayer ([`keeper/`](./keeper)), and one-script VPS deployment ([`deploy.sh`](./deploy.sh)).
+FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** and deployed live on **Ethereum Sepolia**. Instead of executing swaps sequentially in block arrival order, FairBatch groups Direct, Sealed Commit-Reveal, and EIP-712/ERC-1271 signed orders into discrete rounds and clears every filled order at one uniform price $p^*$ via a compiler-enforced zero-effect (`uses ()`) pricing engine ([`src/clearing.fe`](./src/clearing.fe)), yielding `$0.00` intra-round sandwich profit. Visitors connect directly to Sepolia through a zero-backend React/`viem` web app with beginner-friendly **Simple** mode, a **Pro** clearing terminal, an interactive MEV simulator, in-app `/docs`, an optional trustless keeper/relayer ([`keeper/`](./keeper)), and static hosting on Render or Railway ([`render.yaml`](./render.yaml), [`railway.json`](./railway.json)).
 
-- **Live demo (Ethereum Sepolia):** `https://<LIVE_URL_PLACEHOLDER>` *(hosted URL to be filled in before submission)*
-- **Key links:** In-app `/docs` (`#/docs`, source [`DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx)) · [Server Deployment Guide (`docs/DEPLOYMENT.md`)](./docs/DEPLOYMENT.md) · [Live Sepolia Verification](#live-sepolia-verification) · [Fresh-Clone Verification Log (`docs/VERIFICATION.md`)](./docs/VERIFICATION.md)
+- **Live demo (Ethereum Sepolia):** https://fairbatch.onrender.com
+- **Key links:** In-app `/docs` (`#/docs`, source [`DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx)) · [Hosting (`docs/DEPLOYMENT.md`)](./docs/DEPLOYMENT.md) · [Live Sepolia Verification](#live-sepolia-verification) · [Fresh-Clone Verification Log (`docs/VERIFICATION.md`)](./docs/VERIFICATION.md)
 
 **Run & verify locally in 3 commands:**
 
@@ -15,6 +15,16 @@ fe fmt --check && fe check && fe test && fe build && node scripts/verify_deploye
 cd frontend && npm ci && npm test && npm run dev
 ```
 
+## Host the web app
+
+The UI is a static Vite SPA. It talks to Sepolia from the browser. Host it on **Render** or **Railway** — no VPS.
+
+- **Render (static site):** connect this GitHub repo. Blueprint: [`render.yaml`](./render.yaml). Build `cd frontend && npm ci && npm run build`, publish `frontend/dist`.
+- **Railway:** New Empty Project → deploy this repo. Config: [`railway.json`](./railway.json). Build `npm run build`, start `npm start`.
+- **One-click Render:** [Deploy to Render](https://render.com/deploy?repo=https://github.com/Asif2902/FairBatch)
+
+Keeper/relayer is optional. Without it, users click **Start next round**. Full steps: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+
 ## Where to look
 
 | Contest Criterion | Concrete Files & Tests | What to Inspect |
@@ -22,7 +32,7 @@ cd frontend && npm ci && npm test && npm run dev
 | **Technical quality** | [`src/lib.fe`](./src/lib.fe), [`src/clearing.fe`](./src/clearing.fe), [`src/math.fe`](./src/math.fe), [`src/intent.fe`](./src/intent.fe), [`src/tests.fe`](./src/tests.fe) (**69 Fe tests**), [`scripts/verify_deployed_bytecode.mjs`](./scripts/verify_deployed_bytecode.mjs), [`frontend/src/__tests__/`](./frontend/src/__tests__) (**54 Vitest tests**), [`keeper/src/__tests__/`](./keeper/src/__tests__) (**10 Vitest tests**), [`backend/`](./backend) (**30 Cargo tests**), [`deploy/tests/test_deploy.sh`](./deploy/tests/test_deploy.sh) | 512-bit LND invariant & directional solvency checks, 64-order batch settlement (`evm_settle_full_64_order_batch`), EIP-1153 reentrancy guard, blacklist-safe pull claims, LP slippage + `MINIMUM_LIQUIDITY` burn, commit-slot reservation, and byte-for-byte Sepolia bytecode verification. |
 | **Fe-specific value** | [`src/clearing.fe`](./src/clearing.fe) (`uses ()`), `BatchClock` / `MockClock` in [`src/lib.fe`](./src/lib.fe) & [`src/faucet.fe`](./src/faucet.fe) (9 `effect_*` tests), `std::evm::mutex::Mutex`, `std::evm::eip712` & `is_valid_signature_now` in [`src/intent.fe`](./src/intent.fe), `core::fixed::Wad`, `std::evm::multicall::MulticallMsg`, and [Fe `26.5.0` Tooling Feedback](#fe-2650-tooling-feedback) | Compiler-enforced effect purity in the pricing kernel, deterministic effect-injected clock tests without cheatcodes, Cancun `TLOAD`/`TSTORE` mutex, stdlib EOA + ERC-1271 verification, granular `uses (...)` projections, and measured Cancun vs. Sepolia EIP-8037 gas analysis. |
 | **Originality** | [`src/clearing.fe`](./src/clearing.fe), [`src/lib.fe`](./src/lib.fe), [`src/tests.fe`](./src/tests.fe) (`proof_mev_sandwich_zero_profit`, `property_order_permutation_invariance`, `evm_commit_reveal_bond_refund_to_stateful_receiver`) | On-chain Fe `26.5.0` Hybrid CoW + FM-AMM uniform-clearing batch auction ($p^* = (R_y + 2 D_y)/(R_x + 2 S_x)$) uniting Direct, Sealed Commit-Reveal (with 200k-gas smart-wallet bond refund + permissionless slasher bounty), and EIP-712/ERC-1271 intents in one contract. |
-| **Usefulness** | [`config/deployment.json`](./config/deployment.json), [`frontend/src/components/SimpleExperience.tsx`](./frontend/src/components/SimpleExperience.tsx), [`frontend/src/components/OrderTicket.tsx`](./frontend/src/components/OrderTicket.tsx), [`frontend/src/components/SandwichSimulationModal.tsx`](./frontend/src/components/SandwichSimulationModal.tsx), [`keeper/`](./keeper), [`deploy.sh`](./deploy.sh) | Zero-backend Sepolia web app with guided **Simple** mode (Swap, Earn, Faucet, gas onboarding, aggregated Collect), full **Pro** terminal (top balance/approval strip, 3 order modes, depth chart, honest 3-column MEV simulator + live trade-size table), optional trustless keeper/relayer, and one-script HTTPS deployment. |
+| **Usefulness** | [`config/deployment.json`](./config/deployment.json), [`frontend/src/components/SimpleExperience.tsx`](./frontend/src/components/SimpleExperience.tsx), [`frontend/src/components/OrderTicket.tsx`](./frontend/src/components/OrderTicket.tsx), [`frontend/src/components/SandwichSimulationModal.tsx`](./frontend/src/components/SandwichSimulationModal.tsx), [`keeper/`](./keeper), [`deploy.sh`](./deploy.sh) | Zero-backend Sepolia web app with guided **Simple** mode (Swap, Earn, Faucet, gas onboarding, aggregated Collect), full **Pro** terminal (top balance/approval strip, 3 order modes, depth chart, honest 3-column MEV simulator + live trade-size table), optional trustless keeper/relayer, and static hosting on Render or Railway. |
 | **Documentation / demo** | [`frontend/src/components/docs/DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx), [`frontend/src/components/docs/DocsAnimations.tsx`](./frontend/src/components/docs/DocsAnimations.tsx), [`frontend/src/__tests__/labelParity.test.tsx`](./frontend/src/__tests__/labelParity.test.tsx), [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md), [`docs/VERIFICATION.md`](./docs/VERIFICATION.md), [`docs/RESEARCH_AND_FEASIBILITY.md`](./docs/RESEARCH_AND_FEASIBILITY.md), [`docs/screenshots/`](./docs/screenshots) | In-app `/docs` (`#/docs`) with plain-English User Guide, Developer Reference, 5 interactive CSS/SVG visuals, Threat Matrix, and Glossary; automated UI button label parity test across `/docs` and `README.md`; verified fresh-clone test transcript; and real Sepolia screenshots. |
 
 ---
@@ -230,7 +240,7 @@ npm run dry-run   # Safe read-only mode against Sepolia (no private key required
 
 To connect the frontend to a local or hosted keeper, start the frontend with `VITE_KEEPER_URL=http://localhost:3002 npm run dev`.
 
-For one-script production VPS deployment (Ubuntu 22.04/24.04 or Debian 12 with Caddy HTTPS, same-origin `/keeper/*` proxy, hardened systemd unit, and atomic `--update` / `--rollback`), run `./deploy.sh` and see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+To publish the UI, use Render or Railway ([`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)). `./deploy.sh` remains available only if you want a VPS for the optional keeper.
 
 ### 5. Optional Off-Chain Rust Reference Verifier (`backend/`)
 
