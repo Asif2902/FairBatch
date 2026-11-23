@@ -4,7 +4,7 @@
 
 FairBatch is an MEV-resistant uniform-clearing batch exchange and Hybrid Coincidence-of-Wants (CoW) + Function-Maximizing AMM (FM-AMM) written in **Fe `26.5.0`** and deployed live on **Ethereum Sepolia**. Instead of executing swaps sequentially in block arrival order, FairBatch groups Direct, Sealed Commit-Reveal, and EIP-712/ERC-1271 signed orders into discrete rounds and clears every filled order at one uniform price $p^*$ via a compiler-enforced zero-effect (`uses ()`) pricing engine ([`src/clearing.fe`](./src/clearing.fe)), yielding `$0.00` intra-round sandwich profit. Visitors connect directly to Sepolia through a zero-backend React/`viem` web app with beginner-friendly **Simple** mode, a **Pro** clearing terminal, an interactive MEV simulator, in-app `/docs`, an optional trustless keeper/relayer ([`keeper/`](./keeper)), and static hosting on Render or Railway ([`render.yaml`](./render.yaml), [`railway.json`](./railway.json)).
 
-- **Live demo (Ethereum Sepolia):** `https://<LIVE_URL_PLACEHOLDER>` *(Render or Railway URL — see [Host the web app](#host-the-web-app))*
+- **Live demo (Ethereum Sepolia):** https://fairbatch.onrender.com
 - **Key links:** In-app `/docs` (`#/docs`, source [`DocsPage.tsx`](./frontend/src/components/docs/DocsPage.tsx)) · [Hosting (`docs/DEPLOYMENT.md`)](./docs/DEPLOYMENT.md) · [Live Sepolia Verification](#live-sepolia-verification) · [Fresh-Clone Verification Log (`docs/VERIFICATION.md`)](./docs/VERIFICATION.md)
 
 **Run & verify locally in 3 commands:**
