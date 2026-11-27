@@ -11,7 +11,12 @@ import {
 import { erc20Abi, fairBatchAbi, fairBatchEvents } from './abi.js';
 import type { KeeperConfig } from './config.js';
 import type { BatchSnapshot } from './decision.js';
-import type { FairBatchKeeper, LogFn } from './service.js';
+import {
+  PendingTxBlockedError,
+  PendingTxTimeoutError,
+  type FairBatchKeeper,
+  type LogFn,
+} from './service.js';
 
 export interface SignedOrderStruct {
   trader: Address;
@@ -53,6 +58,7 @@ export interface RelayChainAdapter {
   getTokenAllowance(token: Address, owner: Address, spender: Address): Promise<bigint>;
   getCode(address: Address): Promise<Hex | undefined>;
   isLowBalance(): boolean;
+  hasPendingTx?(): boolean;
   simulateSubmitIntent(order: SignedOrderStruct, signature: Hex): Promise<void>;
   estimateSubmitIntentGas(order: SignedOrderStruct, signature: Hex): Promise<bigint>;
   checkGasPrice(): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } | null>;
@@ -220,6 +226,9 @@ export function createKeeperRelayAdapter(keeper: FairBatchKeeper): RelayChainAda
     isLowBalance() {
       return keeper.isLowBalance();
     },
+    hasPendingTx() {
+      return keeper.hasPendingTx();
+    },
     async simulateSubmitIntent(order, signature) {
       const account = keeper.getKeeperAddress() ?? order.trader;
       await publicClient.simulateContract({
@@ -244,30 +253,7 @@ export function createKeeperRelayAdapter(keeper: FairBatchKeeper): RelayChainAda
       return keeper.checkGasPrice();
     },
     async submitIntentTx(order, signature, gas, fees) {
-      const walletClient = keeper.getWalletClient();
-      const keeperAddress = keeper.getKeeperAddress();
-      if (!walletClient || !keeperAddress) {
-        throw new Error('Relayer wallet is not configured.');
-      }
-      const nonce = await publicClient.getTransactionCount({
-        address: keeperAddress,
-        blockTag: 'pending',
-      });
-      const txHash = await walletClient.writeContract({
-        address: config.fairBatch,
-        abi: fairBatchAbi,
-        functionName: 'submitSignedIntent',
-        args: [order, signature],
-        nonce,
-        gas,
-        maxFeePerGas: fees.maxFeePerGas,
-        maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
-      });
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: txHash,
-        confirmations: 1,
-        timeout: 120_000,
-      });
+      const { txHash, receipt } = await keeper.broadcastSignedIntentTx(order, signature, gas, fees);
       if (receipt.status !== 'success') {
         throw new Error(`Relayed transaction reverted on-chain (${txHash}).`);
       }
@@ -343,6 +329,14 @@ export class IntentRelayer {
         status: 503,
         code: 'low_balance',
         error: 'Relayer wallet ETH balance is below the safety minimum. Click "Submit it myself" instead.',
+      };
+    }
+
+    if (this.adapter.hasPendingTx?.()) {
+      return {
+        status: 503,
+        code: 'tx_pending',
+        error: 'Relayer has a transaction pending confirmation. Retry shortly or click "Submit it myself".',
       };
     }
 
@@ -582,12 +576,20 @@ export class IntentRelayer {
       }
 
       return await this.adapter.withTxLock('submitSignedIntent', async () => {
-        // Re-check nonce & low-balance right before broadcast
+        // Re-check nonce, pending tx, & low-balance right before broadcast
         if (this.adapter.isLowBalance()) {
           const err: RelayValidationError = {
             status: 503,
             code: 'low_balance',
             error: 'Relayer ETH balance dropped below safety minimum. Click "Submit it myself".',
+          };
+          return { status: 503, body: err };
+        }
+        if (this.adapter.hasPendingTx?.()) {
+          const err: RelayValidationError = {
+            status: 503,
+            code: 'tx_pending',
+            error: 'Relayer has a transaction pending confirmation. Retry shortly or click "Submit it myself".',
           };
           return { status: 503, body: err };
         }
@@ -638,12 +640,34 @@ export class IntentRelayer {
         const paddedGas = (estimatedGas * 120n) / 100n + 60_000n;
         const gas = paddedGas > this.config.relayGasLimit ? this.config.relayGasLimit : paddedGas;
 
-        const submitted = await this.adapter.submitIntentTx(
-          payload.order,
-          payload.signature,
-          gas,
-          fees,
-        );
+        let submitted: { txHash: Hash; orderId: number; blockNumber: number; gasUsed: string };
+        try {
+          submitted = await this.adapter.submitIntentTx(
+            payload.order,
+            payload.signature,
+            gas,
+            fees,
+          );
+        } catch (sendErr) {
+          if (sendErr instanceof PendingTxBlockedError) {
+            const err: RelayValidationError = {
+              status: 503,
+              code: 'tx_pending',
+              error:
+                'Relayer has a transaction pending confirmation. Retry shortly or click "Submit it myself".',
+            };
+            return { status: 503, body: err };
+          }
+          if (sendErr instanceof PendingTxTimeoutError) {
+            const err: RelayValidationError = {
+              status: 504,
+              code: 'tx_pending_confirmation',
+              error: `Relayed transaction ${sendErr.txHash} was broadcast and is still awaiting confirmation.`,
+            };
+            return { status: 504, body: err };
+          }
+          throw sendErr;
+        }
         this.log('info', 'relay_submitted', {
           trader: payload.order.trader,
           batchId: Number(payload.order.batchId),

@@ -325,7 +325,21 @@ $EnvMap = Read-DotEnvFile $EnvFile
 $NetworkName       = "sepolia"
 $TargetChainId     = [uint64]11155111
 $ExplorerBase      = "https://sepolia.etherscan.io"
-$RpcUrl            = if (-not [string]::IsNullOrWhiteSpace($RpcUrlOverride)) { $RpcUrlOverride } else { Get-Cfg $EnvMap "RPC_URL" "https://ethereum-sepolia-rpc.publicnode.com" }
+$AlchemyApiKey     = Get-Cfg $EnvMap "ALCHEMY_API_KEY" ""
+$EnvRpcUrl         = Get-Cfg $EnvMap "RPC_URL" ""
+$ResolvedAlchemy   = if (-not [string]::IsNullOrWhiteSpace($AlchemyApiKey)) {
+    if ($AlchemyApiKey -match "^https?://") { $AlchemyApiKey } else { "https://eth-sepolia.g.alchemy.com/v2/$($AlchemyApiKey.TrimStart('/'))" }
+} else { "" }
+$RpcCandidate      = if (-not [string]::IsNullOrWhiteSpace($RpcUrlOverride)) {
+    $RpcUrlOverride
+} elseif (-not [string]::IsNullOrWhiteSpace($ResolvedAlchemy)) {
+    $ResolvedAlchemy
+} elseif (-not [string]::IsNullOrWhiteSpace($EnvRpcUrl)) {
+    $EnvRpcUrl
+} else {
+    "https://ethereum-sepolia-rpc.publicnode.com"
+}
+$RpcUrl            = if ($RpcCandidate -match "^https?://[^/]*alchemy\.com/v2/?$") { "https://ethereum-sepolia-rpc.publicnode.com" } else { $RpcCandidate }
 $BaseDecimals      = [int](Get-Cfg $EnvMap "BASE_DECIMALS" "18")
 $QuoteDecimals     = [int](Get-Cfg $EnvMap "QUOTE_DECIMALS" "6")
 $CommitWindowSecs  = [uint64](Get-Cfg $EnvMap "COMMIT_WINDOW_SECS" "60")

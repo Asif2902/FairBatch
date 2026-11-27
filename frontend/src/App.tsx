@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -28,6 +28,14 @@ import { ContractConfigModal } from './components/ContractConfigModal';
 import { FeArchitectureModal } from './components/FeArchitectureModal';
 import { HowItWorksModal } from './components/HowItWorksModal';
 import { SandwichSimulationModal } from './components/SandwichSimulationModal';
+import {
+  WalletConnectModal,
+  type WalletModalView,
+} from './components/WalletConnectModal';
+import type { DetectedWallet } from './onchain/client';
+
+const EMPTY_DETECTED_WALLETS: DetectedWallet[] = [];
+const NOOP_RESCAN_WALLETS = (): DetectedWallet[] => EMPTY_DETECTED_WALLETS;
 import { formatTokenAmount } from './lib/format';
 import {
   LOW_GAS_THRESHOLD_WEI,
@@ -83,9 +91,21 @@ export const App: React.FC = () => {
   const [isFeModalOpen, setIsFeModalOpen] = useState<boolean>(false);
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState<boolean>(false);
   const [isSimulationModalOpen, setIsSimulationModalOpen] = useState<boolean>(false);
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState<boolean>(false);
+  const [walletModalView, setWalletModalView] = useState<WalletModalView>('connect');
   const [docsRoute, setDocsRoute] = useState<{ inDocs: boolean; anchor: string | null }>(() =>
     parseDocsLocation(),
   );
+
+  const openConnectWalletModal = useCallback(async () => {
+    setWalletModalView('connect');
+    setIsWalletModalOpen(true);
+  }, []);
+
+  const openAccountWalletModal = useCallback(() => {
+    setWalletModalView(fb.account ? 'account' : 'connect');
+    setIsWalletModalOpen(true);
+  }, [fb.account]);
 
   useEffect(() => {
     const onLocationChange = () => {
@@ -218,13 +238,18 @@ export const App: React.FC = () => {
         livePhase={fb.livePhase}
         chainNow={fb.chainNow}
         account={fb.account}
+        activeWallet={fb.activeWallet ?? null}
         balances={snapshot?.balances ?? null}
         walletChainId={fb.walletChainId}
         wrongNetwork={fb.wrongNetwork}
         loading={fb.loading}
         refreshing={fb.refreshing}
         busyAction={fb.busyAction}
-        onConnect={fb.connect}
+        onConnect={openConnectWalletModal}
+        onOpenAccountModal={openAccountWalletModal}
+        onSwitchWallet={() => {
+          void openConnectWalletModal();
+        }}
         onSwitchNetwork={fb.switchNetwork}
         onDisconnect={fb.disconnect}
         onRefresh={fb.refresh}
@@ -354,6 +379,7 @@ export const App: React.FC = () => {
                 relayerHealthy={keeperStatus.relayerHealthy}
                 relayGraceSeconds={keeperStatus.relayGraceSeconds}
                 keeperUrl={keeperStatus.keeperUrl}
+                onOpenConnectModal={openConnectWalletModal}
                 onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
               />
             )}
@@ -578,7 +604,7 @@ export const App: React.FC = () => {
                         localSecrets={fb.secretVault}
                         busyAction={fb.busyAction}
                         minBondWei={snapshot.minBondWei}
-                        onConnect={fb.connect}
+                        onConnect={openConnectWalletModal}
                         onSubmitDirect={async (params) => {
                           await fb.submitDirect(params);
                         }}
@@ -636,7 +662,7 @@ export const App: React.FC = () => {
                         faucet={snapshot.faucet}
                         busyAction={fb.busyAction}
                         faucetEnabled={fb.config.tokenFaucetEnabled}
-                        onConnect={fb.connect}
+                        onConnect={openConnectWalletModal}
                         onDisconnect={fb.disconnect}
                         onClaimFaucet={async () => {
                           await fb.claimFaucet();
@@ -739,7 +765,7 @@ export const App: React.FC = () => {
                           busyAction={fb.busyAction}
                           onClaimSingle={handleClaimSingle}
                           onClaimMany={handleSettleMany}
-                          onConnect={fb.connect}
+                          onConnect={openConnectWalletModal}
                         />
                       </div>
                     )}
@@ -792,7 +818,28 @@ export const App: React.FC = () => {
         wrongNetwork={fb.wrongNetwork}
         busyAction={fb.busyAction}
         onClose={() => setIsContractModalOpen(false)}
-        onConnect={fb.connect}
+        onConnect={async () => {
+          setIsContractModalOpen(false);
+          await openConnectWalletModal();
+        }}
+        onDisconnect={fb.disconnect}
+      />
+
+      <WalletConnectModal
+        isOpen={isWalletModalOpen}
+        initialView={walletModalView}
+        config={fb.config}
+        detectedWallets={fb.detectedWallets ?? EMPTY_DETECTED_WALLETS}
+        activeWallet={fb.activeWallet ?? null}
+        account={fb.account}
+        balances={snapshot?.balances ?? null}
+        walletChainId={fb.walletChainId}
+        wrongNetwork={fb.wrongNetwork}
+        busyAction={fb.busyAction}
+        onClose={() => setIsWalletModalOpen(false)}
+        onConnectWallet={fb.connect}
+        onRescanWallets={fb.rescanWallets ?? NOOP_RESCAN_WALLETS}
+        onSwitchNetwork={fb.switchNetwork}
         onDisconnect={fb.disconnect}
       />
 

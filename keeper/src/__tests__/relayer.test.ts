@@ -9,7 +9,11 @@ import {
   type RelayChainAdapter,
   type SignedOrderStruct,
 } from '../relayer.js';
-import { FairBatchKeeper } from '../service.js';
+import {
+  FairBatchKeeper,
+  PendingTxBlockedError,
+  PendingTxTimeoutError,
+} from '../service.js';
 
 const TRADER_ACCOUNT = privateKeyToAccount(
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
@@ -325,6 +329,46 @@ describe('FairBatch Intent Relayer (Stage D)', () => {
       expect(bigResp.status).toBe(413);
     } finally {
       await keeper.stop();
+    }
+  });
+
+  it('blocks relay submission when keeper already has a pending transaction or receipt times out', async () => {
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const body = await signOrder(makeOrder());
+
+    // 1. Pre-check rejects with 503 tx_pending if keeper already has a pending tx
+    {
+      const adapter = makeAdapter({ hasPendingTx: vi.fn().mockReturnValue(true) });
+      const relayer = new IntentRelayer(makeConfig(), adapter, vi.fn(), sleepFn);
+      const res = await relayer.relay(body, '10.2.0.1');
+      expect(res.status).toBe(503);
+      expect((res.body as { code: string }).code).toBe('tx_pending');
+      expect(adapter.submitIntentTx).not.toHaveBeenCalled();
+    }
+
+    // 2. Broadcast-time PendingTxBlockedError (e.g. external mempool pending nonce) -> 503 tx_pending
+    {
+      const adapter = makeAdapter({
+        submitIntentTx: vi
+          .fn()
+          .mockRejectedValue(new PendingTxBlockedError('wallet already has pending tx')),
+      });
+      const relayer = new IntentRelayer(makeConfig(), adapter, vi.fn(), sleepFn);
+      const res = await relayer.relay(body, '10.2.0.2');
+      expect(res.status).toBe(503);
+      expect((res.body as { code: string }).code).toBe('tx_pending');
+    }
+
+    // 3. Receipt timeout -> 504 tx_pending_confirmation (tx stays tracked on keeper)
+    {
+      const pendingHash = `0x${'cd'.repeat(32)}` as Hash;
+      const adapter = makeAdapter({
+        submitIntentTx: vi.fn().mockRejectedValue(new PendingTxTimeoutError(pendingHash, 474)),
+      });
+      const relayer = new IntentRelayer(makeConfig(), adapter, vi.fn(), sleepFn);
+      const res = await relayer.relay(body, '10.2.0.3');
+      expect(res.status).toBe(504);
+      expect((res.body as { code: string }).code).toBe('tx_pending_confirmation');
     }
   });
 });

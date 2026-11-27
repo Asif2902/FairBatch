@@ -132,6 +132,15 @@ export const AccountPanel: React.FC<AccountPanelProps> = ({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void onConnect()}
+                  aria-label="Switch wallet"
+                  title="Switch wallet"
+                  className="inline-flex h-9 items-center justify-center border border-rule px-2.5 font-mono text-xs font-bold text-ink-muted transition hover:border-ink hover:text-ink"
+                >
+                  Switch
+                </button>
                 <a
                   href={`${config.explorerUrl}/address/${account}`}
                   target="_blank"

@@ -1,13 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_MIN_MAX_FEE_WEI,
+  DEFAULT_MIN_PRIORITY_FEE_WEI,
+  computeReplacementFees,
+  computeSafeFees,
   decideSettlementAction,
   decideSlashAction,
   isAlreadySettledError,
   isAlreadySlashedError,
+  isNonceTooLowError,
+  isReceiptTimeoutError,
+  isReplacementUnderpricedError,
   type BatchSnapshot,
   type PendingCommitment,
 } from '../decision.js';
 import { FairBatchKeeper } from '../service.js';
+import {
+  ALCHEMY_SEPOLIA_BASE_URL,
+  isIncompleteAlchemyUrl,
+  maskRpcUrl,
+  resolveAlchemySepoliaUrl,
+} from '../config.js';
 
 const MIN_BAL = 5_000_000_000_000_000n; // 0.005 ETH
 const HEALTHY_BAL = 50_000_000_000_000_000n; // 0.05 ETH
@@ -320,5 +333,406 @@ describe('FairBatch Keeper settlement decision logic', () => {
       await keeper.stop();
     }
     expect(logs.some((l) => l.event === 'http_server_started')).toBe(true);
+  });
+
+  it('computes EIP-1559 fee headroom and >=25% same-nonce replacement bumps within cap', () => {
+    const cap = 50_000_000_000n; // 50 gwei
+
+    // Low Sepolia baseFee (18 wei) + tiny 2 wei RPC tip -> lifts to safe 0.25 gwei maxFee / 0.001 gwei tip
+    const low = computeSafeFees({
+      baseFeePerGas: 18n,
+      estimatedMaxFeePerGas: 23n,
+      estimatedPriorityFeePerGas: 2n,
+      maxGasPriceWei: cap,
+    });
+    expect(low).toEqual({
+      maxFeePerGas: DEFAULT_MIN_MAX_FEE_WEI,
+      maxPriorityFeePerGas: DEFAULT_MIN_PRIORITY_FEE_WEI,
+    });
+
+    // High baseFee (2 gwei) -> 3x baseFee + priority
+    const busy = computeSafeFees({
+      baseFeePerGas: 2_000_000_000n,
+      estimatedMaxFeePerGas: 3_000_000_000n,
+      estimatedPriorityFeePerGas: 500_000_000n,
+      maxGasPriceWei: cap,
+    });
+    expect(busy).toEqual({
+      maxFeePerGas: 6_500_000_000n,
+      maxPriorityFeePerGas: 500_000_000n,
+    });
+
+    // Exceeds cap -> null
+    expect(
+      computeSafeFees({
+        baseFeePerGas: 60_000_000_000n,
+        estimatedMaxFeePerGas: 65_000_000_000n,
+        estimatedPriorityFeePerGas: 1_000_000_000n,
+        maxGasPriceWei: cap,
+      }),
+    ).toBeNull();
+
+    // Same-nonce replacement bumps both maxFee and priority by at least +25%
+    const bumped = computeReplacementFees(
+      { maxFeePerGas: 250_000_000n, maxPriorityFeePerGas: 1_000_000n },
+      { maxFeePerGas: 250_000_000n, maxPriorityFeePerGas: 1_000_000n },
+      cap,
+    );
+    expect(bumped).not.toBeNull();
+    expect(bumped!.maxFeePerGas).toBeGreaterThanOrEqual(312_500_001n);
+    expect(bumped!.maxPriorityFeePerGas).toBeGreaterThanOrEqual(1_250_001n);
+
+    expect(isReceiptTimeoutError(new Error('Timed out while waiting for transaction with hash "0x1"'))).toBe(true);
+    expect(isReplacementUnderpricedError(new Error('replacement transaction underpriced'))).toBe(true);
+    expect(isNonceTooLowError(new Error('nonce too low'))).toBe(true);
+  });
+
+  it('never submits a second tx while a prior tx is pending confirmation and replaces on the SAME nonce', async () => {
+    const keeperAddr = '0x7d9Cb2994D86B6a4e65761B5d81DADa69ce54a7f' as const;
+    const txHash1 = `0x${'11'.repeat(32)}` as const;
+    const txHashCancel = `0x${'22'.repeat(32)}` as const;
+
+    let latestNonce = 474;
+    let pendingNonce = 474;
+    let activeBatch = makeBatch({ batchId: 165n, revealDeadline: 1_120n, orderCount: 1n, phase: 2 });
+
+    const timeoutErr = new Error('Timed out while waiting for transaction with hash "0x11..." to be confirmed.');
+    timeoutErr.name = 'WaitForTransactionReceiptTimeoutError';
+
+    const publicClient = {
+      getBlock: vi.fn().mockImplementation(async () => ({
+        number: 12_196_683n,
+        timestamp: 1_200n,
+        baseFeePerGas: 5_851n,
+      })),
+      readContract: vi.fn().mockImplementation(async () => activeBatch),
+      getBalance: vi.fn().mockResolvedValue(HEALTHY_BAL),
+      getTransactionCount: vi.fn().mockImplementation(async ({ blockTag }: { blockTag: string }) =>
+        blockTag === 'latest' ? latestNonce : pendingNonce,
+      ),
+      simulateContract: vi.fn().mockResolvedValue({}),
+      estimateContractGas: vi.fn().mockResolvedValue(1_500_000n),
+      estimateFeesPerGas: vi.fn().mockResolvedValue({
+        maxFeePerGas: 44n,
+        maxPriorityFeePerGas: 2n,
+      }),
+      waitForTransactionReceipt: vi
+        .fn()
+        .mockRejectedValueOnce(timeoutErr) // first settle tx times out
+        .mockResolvedValueOnce({ blockNumber: 12_196_690n, gasUsed: 21_000n, status: 'success' }),
+      getTransactionReceipt: vi.fn().mockRejectedValue(new Error('Transaction receipt could not be found')),
+      getLogs: vi.fn().mockResolvedValue([]),
+    };
+
+    const walletClient = {
+      writeContract: vi.fn().mockImplementation(async () => {
+        pendingNonce = 475;
+        return txHash1;
+      }),
+      sendTransaction: vi.fn().mockImplementation(async () => {
+        latestNonce = 475;
+        pendingNonce = 475;
+        return txHashCancel;
+      }),
+    };
+
+    const logs: Array<{ level: string; event: string; fields?: Record<string, unknown> }> = [];
+    const keeper = new FairBatchKeeper(
+      {
+        chainId: 11155111,
+        rpcUrls: ['http://127.0.0.1:8545'],
+        explorerUrl: 'https://sepolia.etherscan.io',
+        fairBatch: '0x6fA21b7aDa82E8B04fcA51fdc60793c3Fd80265F',
+        baseToken: '0xE9903189Bf3E418759feb26f11A7d1C99BE0e556',
+        quoteToken: '0xBD2c54aF6DD7e5e14D5B97d393EB2C8e2e8eBcca',
+        deploymentBlock: 12176751n,
+        privateKey: null,
+        dryRun: false,
+        pollMs: 2_000,
+        graceSeconds: 5,
+        emptyRoundMinutes: 0,
+        slashEnabled: true,
+        slashGraceSeconds: 60,
+        minBalanceWei: MIN_BAL,
+        maxGasPriceWei: 50_000_000_000n,
+        settleGasLimit: 12_000_000n,
+        slashGasLimit: 600_000n,
+        host: '127.0.0.1',
+        port: 0,
+        corsOrigins: ['http://localhost:5173'],
+        relayerEnabled: true,
+        relayGraceSeconds: 5,
+        relayDeadlineBufferSeconds: 30,
+        relayMaxQueue: 16,
+        relayRateLimitPerIp: 12,
+        relayRateLimitPerTrader: 6,
+        relayRateWindowMs: 60_000,
+        relayGasLimit: 1_500_000n,
+        relayMaxBodyBytes: 16_384,
+        txConfirmTimeoutMs: 50,
+        txReplaceAfterMs: 40,
+        externalPendingGraceMs: 0,
+      },
+      (level, event, fields) => logs.push({ level, event, fields }),
+      { publicClient, walletClient, accountAddress: keeperAddr },
+    );
+
+    // Tick 1: broadcasts settleBatch at nonce 474 with >= 0.25 gwei maxFee, then times out
+    await keeper.tick();
+    expect(walletClient.writeContract).toHaveBeenCalledTimes(1);
+    expect(walletClient.writeContract.mock.calls[0][0].nonce).toBe(474);
+    expect(walletClient.writeContract.mock.calls[0][0].maxFeePerGas).toBe(DEFAULT_MIN_MAX_FEE_WEI);
+    expect(keeper.hasPendingTx()).toBe(true);
+    // Timeout is logged as warning and must NOT degrade health as an RPC error
+    expect(logs.some((l) => l.event === 'tx_confirmation_timeout')).toBe(true);
+    expect(keeper.getHealth().status).toBe('ok');
+    expect(keeper.getHealth().pendingTx?.nonce).toBe(474);
+
+    // Tick 2 (immediately): MUST NOT submit a second tx at nonce 475!
+    await keeper.tick();
+    expect(walletClient.writeContract).toHaveBeenCalledTimes(1);
+    expect(walletClient.sendTransaction).not.toHaveBeenCalled();
+
+    // Public settles batch 165 while nonce 474 is still pending; after txReplaceAfterMs,
+    // keeper replaces the EXACT SAME nonce 474 with a cheap 21,000-gas cancel (never nonce 475!)
+    activeBatch = makeBatch({ batchId: 166n, revealDeadline: 1_500n, orderCount: 0n, phase: 0 });
+    await new Promise((r) => setTimeout(r, 55));
+    await keeper.tick();
+
+    expect(walletClient.writeContract).toHaveBeenCalledTimes(1);
+    expect(walletClient.sendTransaction).toHaveBeenCalledTimes(1);
+    const cancelCall = walletClient.sendTransaction.mock.calls[0][0];
+    expect(cancelCall.nonce).toBe(474);
+    expect(cancelCall.to).toBe(keeperAddr);
+    expect(cancelCall.value).toBe(0n);
+    expect(cancelCall.gas).toBe(21_000n);
+    expect(cancelCall.maxFeePerGas).toBeGreaterThan(DEFAULT_MIN_MAX_FEE_WEI);
+    expect(keeper.hasPendingTx()).toBe(false);
+  });
+
+  it('blocks new settlements when pre-existing mempool nonces are stuck (pending > latest) and cancels latestNonce', async () => {
+    const keeperAddr = '0x7d9Cb2994D86B6a4e65761B5d81DADa69ce54a7f' as const;
+    const cancelHash = `0x${'33'.repeat(32)}` as const;
+
+    let latestNonce = 474;
+    const pendingNonce = 479; // 5 stuck txs (474..478)
+    const readyBatch = makeBatch({ batchId: 166n, revealDeadline: 1_120n, orderCount: 1n, phase: 2 });
+
+    const publicClient = {
+      getBlock: vi.fn().mockResolvedValue({
+        number: 12_196_770n,
+        timestamp: 1_200n,
+        baseFeePerGas: 5_851n,
+      }),
+      readContract: vi.fn().mockResolvedValue(readyBatch),
+      getBalance: vi.fn().mockResolvedValue(HEALTHY_BAL),
+      getTransactionCount: vi.fn().mockImplementation(async ({ blockTag }: { blockTag: string }) =>
+        blockTag === 'latest' ? latestNonce : pendingNonce,
+      ),
+      simulateContract: vi.fn().mockResolvedValue({}),
+      estimateContractGas: vi.fn().mockResolvedValue(2_000_000n),
+      estimateFeesPerGas: vi.fn().mockResolvedValue({
+        maxFeePerGas: 10_000n,
+        maxPriorityFeePerGas: 2n,
+      }),
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({
+        blockNumber: 12_196_771n,
+        gasUsed: 21_000n,
+        status: 'success',
+      }),
+      getLogs: vi.fn().mockResolvedValue([]),
+    };
+
+    const walletClient = {
+      writeContract: vi.fn(),
+      sendTransaction: vi.fn().mockImplementation(async () => {
+        latestNonce = 475;
+        return cancelHash;
+      }),
+    };
+
+    const keeper = new FairBatchKeeper(
+      {
+        chainId: 11155111,
+        rpcUrls: ['http://127.0.0.1:8545'],
+        explorerUrl: 'https://sepolia.etherscan.io',
+        fairBatch: '0x6fA21b7aDa82E8B04fcA51fdc60793c3Fd80265F',
+        baseToken: '0xE9903189Bf3E418759feb26f11A7d1C99BE0e556',
+        quoteToken: '0xBD2c54aF6DD7e5e14D5B97d393EB2C8e2e8eBcca',
+        deploymentBlock: 12176751n,
+        privateKey: null,
+        dryRun: false,
+        pollMs: 2_000,
+        graceSeconds: 5,
+        emptyRoundMinutes: 0,
+        slashEnabled: false,
+        slashGraceSeconds: 60,
+        minBalanceWei: MIN_BAL,
+        maxGasPriceWei: 50_000_000_000n,
+        settleGasLimit: 12_000_000n,
+        slashGasLimit: 600_000n,
+        host: '127.0.0.1',
+        port: 0,
+        corsOrigins: ['http://localhost:5173'],
+        relayerEnabled: true,
+        relayGraceSeconds: 5,
+        relayDeadlineBufferSeconds: 30,
+        relayMaxQueue: 16,
+        relayRateLimitPerIp: 12,
+        relayRateLimitPerTrader: 6,
+        relayRateWindowMs: 60_000,
+        relayGasLimit: 1_500_000n,
+        relayMaxBodyBytes: 16_384,
+        txConfirmTimeoutMs: 50,
+        txReplaceAfterMs: 50,
+        externalPendingGraceMs: 0,
+      },
+      vi.fn(),
+      { publicClient, walletClient, accountAddress: keeperAddr },
+    );
+
+    await keeper.tick();
+    // MUST NOT submit settleBatch on nonce 479 while nonces 474..478 are pending!
+    expect(walletClient.writeContract).not.toHaveBeenCalled();
+    // Instead cancels oldest stuck nonce (474) with 21k-gas self-transfer
+    expect(walletClient.sendTransaction).toHaveBeenCalledTimes(1);
+    expect(walletClient.sendTransaction.mock.calls[0][0].nonce).toBe(474);
+    expect(walletClient.sendTransaction.mock.calls[0][0].gas).toBe(21_000n);
+  });
+
+  it('lags commit log scans by 1 block to avoid cross-RPC head skew errors', async () => {
+    const getLogs = vi.fn().mockResolvedValue([]);
+    const publicClient = {
+      getBlock: vi.fn().mockResolvedValue({
+        number: 12_196_683n,
+        timestamp: 1_050n,
+        baseFeePerGas: 100n,
+      }),
+      readContract: vi.fn().mockResolvedValue(
+        makeBatch({ batchId: 164n, revealDeadline: 1_120n, orderCount: 0n, phase: 0 }),
+      ),
+      getBalance: vi.fn().mockResolvedValue(HEALTHY_BAL),
+      getLogs,
+    };
+
+    const keeper = new FairBatchKeeper(
+      {
+        chainId: 11155111,
+        rpcUrls: ['http://127.0.0.1:8545'],
+        explorerUrl: 'https://sepolia.etherscan.io',
+        fairBatch: '0x6fA21b7aDa82E8B04fcA51fdc60793c3Fd80265F',
+        baseToken: '0xE9903189Bf3E418759feb26f11A7d1C99BE0e556',
+        quoteToken: '0xBD2c54aF6DD7e5e14D5B97d393EB2C8e2e8eBcca',
+        deploymentBlock: 12_196_600n,
+        privateKey: null,
+        dryRun: true,
+        pollMs: 2_000,
+        graceSeconds: 5,
+        emptyRoundMinutes: 0,
+        slashEnabled: true,
+        slashGraceSeconds: 60,
+        minBalanceWei: MIN_BAL,
+        maxGasPriceWei: 50_000_000_000n,
+        settleGasLimit: 12_000_000n,
+        slashGasLimit: 600_000n,
+        host: '127.0.0.1',
+        port: 0,
+        corsOrigins: ['http://localhost:5173'],
+        relayerEnabled: true,
+        relayGraceSeconds: 5,
+        relayDeadlineBufferSeconds: 30,
+        relayMaxQueue: 16,
+        relayRateLimitPerIp: 12,
+        relayRateLimitPerTrader: 6,
+        relayRateWindowMs: 60_000,
+        relayGasLimit: 1_500_000n,
+        relayMaxBodyBytes: 16_384,
+      },
+      vi.fn(),
+      { publicClient, walletClient: null, accountAddress: null },
+    );
+
+    await keeper.tick();
+    expect(getLogs).toHaveBeenCalledTimes(1);
+    // Latest block is 12196683 -> toBlock must be 12196682 (1 block behind tip)
+    expect(getLogs.mock.calls[0][0].toBlock).toBe(12_196_682n);
+  });
+
+  it('resolves Alchemy Sepolia URLs safely, masks API keys, and adapts to Alchemy 10-block getLogs limit', async () => {
+    expect(isIncompleteAlchemyUrl(ALCHEMY_SEPOLIA_BASE_URL)).toBe(true);
+    expect(resolveAlchemySepoliaUrl(ALCHEMY_SEPOLIA_BASE_URL)).toBeNull();
+    expect(resolveAlchemySepoliaUrl('alc_key_456')).toBe(
+      'https://eth-sepolia.g.alchemy.com/v2/alc_key_456',
+    );
+    expect(maskRpcUrl('Error at https://eth-sepolia.g.alchemy.com/v2/secret_abc failed')).toBe(
+      'Error at https://eth-sepolia.g.alchemy.com/v2/•••• failed',
+    );
+
+    const getLogs = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error('Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range'),
+      )
+      .mockResolvedValueOnce([]);
+    const publicClient = {
+      getBlock: vi.fn().mockResolvedValue({
+        number: 12_196_700n,
+        timestamp: 1_050n,
+        baseFeePerGas: 100n,
+      }),
+      readContract: vi.fn().mockResolvedValue(
+        makeBatch({ batchId: 164n, revealDeadline: 1_120n, orderCount: 0n, phase: 0 }),
+      ),
+      getBalance: vi.fn().mockResolvedValue(HEALTHY_BAL),
+      getLogs,
+    };
+
+    const logs: Array<{ level: string; event: string; fields?: Record<string, unknown> }> = [];
+    const keeper = new FairBatchKeeper(
+      {
+        chainId: 11155111,
+        rpcUrls: ['https://eth-sepolia.g.alchemy.com/v2/test_key'],
+        explorerUrl: 'https://sepolia.etherscan.io',
+        fairBatch: '0x6fA21b7aDa82E8B04fcA51fdc60793c3Fd80265F',
+        baseToken: '0xE9903189Bf3E418759feb26f11A7d1C99BE0e556',
+        quoteToken: '0xBD2c54aF6DD7e5e14D5B97d393EB2C8e2e8eBcca',
+        deploymentBlock: 12_196_000n,
+        privateKey: null,
+        dryRun: true,
+        pollMs: 2_000,
+        graceSeconds: 5,
+        emptyRoundMinutes: 0,
+        slashEnabled: true,
+        slashGraceSeconds: 60,
+        minBalanceWei: MIN_BAL,
+        maxGasPriceWei: 50_000_000_000n,
+        settleGasLimit: 12_000_000n,
+        slashGasLimit: 600_000n,
+        host: '127.0.0.1',
+        port: 0,
+        corsOrigins: ['http://localhost:5173'],
+        relayerEnabled: true,
+        relayGraceSeconds: 5,
+        relayDeadlineBufferSeconds: 30,
+        relayMaxQueue: 16,
+        relayRateLimitPerIp: 12,
+        relayRateLimitPerTrader: 6,
+        relayRateWindowMs: 60_000,
+        relayGasLimit: 1_500_000n,
+        relayMaxBodyBytes: 16_384,
+      },
+      (level, event, fields) => logs.push({ level, event, fields }),
+      { publicClient, walletClient: null, accountAddress: null },
+    );
+
+    // First tick hits Alchemy Free Tier 10-block range error and shrinks chunk size to 10 blocks
+    await keeper.tick();
+    expect(logs.some((l) => l.event === 'commit_log_scan_failed' && l.fields?.nextChunkSize === 10)).toBe(true);
+
+    // Second tick scans a <= 10 block window cleanly
+    await keeper.tick();
+    expect(getLogs).toHaveBeenCalledTimes(2);
+    const secondCall = getLogs.mock.calls[1][0];
+    expect(secondCall.toBlock - secondCall.fromBlock).toBeLessThanOrEqual(9n);
   });
 });

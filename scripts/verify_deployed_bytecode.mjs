@@ -355,9 +355,22 @@ async function main() {
   }
   const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
+  const resolveAlchemy = (raw) => {
+    const trimmed = (raw ?? '').trim();
+    if (!trimmed) return null;
+    if (/^https?:\/\//i.test(trimmed)) {
+      return /^https?:\/\/[^/]*alchemy\.com\/v2\/?$/i.test(trimmed) ? null : trimmed;
+    }
+    return `https://eth-sepolia.g.alchemy.com/v2/${trimmed.replace(/^\/+/, '')}`;
+  };
+  const maskRpc = (url) => url.replace(/(alchemy\.com\/v2\/)([^/?#\s]+)/i, '$1••••');
+  const alchemyRpc = resolveAlchemy(process.env.ALCHEMY_API_KEY);
+  const envRpc = resolveAlchemy(process.env.SEPOLIA_RPC_URL) ?? resolveAlchemy(process.env.RPC_URL);
+
   const rpcUrls = [
-    ...(customRpc ? [customRpc] : []),
-    ...(process.env.SEPOLIA_RPC_URL ? [process.env.SEPOLIA_RPC_URL] : []),
+    ...(customRpc ? [resolveAlchemy(customRpc)] : []),
+    ...(alchemyRpc ? [alchemyRpc] : []),
+    ...(envRpc ? [envRpc] : []),
     cfg.rpcUrl,
     'https://sepolia.drpc.org',
     'https://rpc.sepolia.org',
@@ -443,7 +456,7 @@ async function main() {
           ok: failures === 0,
           network: cfg.name,
           chainId: actualChainId,
-          rpcUrl: activeRpc,
+          rpcUrl: maskRpc(activeRpc),
           strategy:
             'Exact byte-for-byte static prefix match (out/*.runtime.bin) + exact byte-for-byte Sonatina immutable trailer match reconstructed from config/deployment.json (0 masked bytes)',
           results,
@@ -454,7 +467,7 @@ async function main() {
     );
   } else {
     console.log(`FairBatch Deployed Bytecode Verification (${cfg.name}, chainId=${actualChainId})`);
-    console.log(`RPC: ${activeRpc}`);
+    console.log(`RPC: ${maskRpc(activeRpc)}`);
     console.log(
       'Method: Exact static prefix comparison (out/*.runtime.bin) + exact immutable trailer reconstruction from config/deployment.json (0 bytes masked).',
     );

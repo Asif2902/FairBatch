@@ -13,10 +13,12 @@ services:
     envVars:
       - key: KEEPER_PRIVATE_KEY
         sync: false
+      - key: ALCHEMY_API_KEY
+        sync: false
       - key: KEEPER_HOST
         value: "0.0.0.0"
       - key: KEEPER_RPC_URL
-        value: https://ethereum-sepolia-rpc.publicnode.com
+        value: ""
       - key: KEEPER_POLL_MS
         value: "2000"
       - key: KEEPER_GRACE_SECONDS
@@ -65,6 +67,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: VITE_ALCHEMY_API_KEY
+        sync: false
       - key: VITE_KEEPER_URL
         fromService:
           name: FairBatch

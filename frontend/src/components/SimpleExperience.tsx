@@ -41,6 +41,7 @@ interface SimpleExperienceProps {
   relayerHealthy?: boolean;
   relayGraceSeconds?: number;
   keeperUrl?: string | null;
+  onOpenConnectModal?: () => Promise<void>;
   onOpenHowItWorks: () => void;
 }
 
@@ -65,8 +66,10 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
   relayerHealthy = false,
   relayGraceSeconds = 5,
   keeperUrl = null,
+  onOpenConnectModal,
   onOpenHowItWorks,
 }) => {
+  const triggerConnect = onOpenConnectModal ?? fb.connect;
   const [activeTab, setActiveTab] = useState<SimpleTab>('swap');
   const [introDismissed, setIntroDismissed] = useState<boolean>(() => readIntroDismissed());
   const [mobileIntroExpanded, setMobileIntroExpanded] = useState<boolean>(false);
@@ -357,7 +360,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
           wrongNetwork={fb.wrongNetwork}
           busyAction={fb.busyAction}
           txStatus={fb.txStatus}
-          onConnect={fb.connect}
+          onConnect={triggerConnect}
           onSwitchNetwork={fb.switchNetwork}
           onAddLiquidity={async (base, quote, lockSecs, minShares) => {
             await fb.addLiquidity(base, quote, lockSecs, minShares);
@@ -463,7 +466,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                     type="button"
                     data-testid="simple-connect-button"
                     disabled={busy}
-                    onClick={() => void fb.connect()}
+                    onClick={() => void triggerConnect()}
                     className="tap-target inline-flex w-full items-center justify-center gap-2 bg-vermilion-500 px-5 py-3.5 font-display text-base font-bold text-[#FBF8F0] transition hover:bg-vermilion-600 disabled:opacity-50"
                   >
                     {busy ? (
@@ -611,7 +614,7 @@ export const SimpleExperience: React.FC<SimpleExperienceProps> = ({
                 keeperGraceSeconds={keeperGraceSeconds}
                 relayerHealthy={relayerHealthy}
                 relayGraceSeconds={relayGraceSeconds}
-                onConnect={fb.connect}
+                onConnect={triggerConnect}
                 onSwitchNetwork={fb.switchNetwork}
                 onClaimFaucet={async () => {
                   await fb.claimFaucet();

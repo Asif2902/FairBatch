@@ -36,12 +36,18 @@ import {
   type RevealResult,
 } from './actions';
 import {
+  clearActiveWallet,
   connectInjectedWallet,
+  discoverInjectedWallets,
+  getActiveWallet,
   getWalletChainId,
   hasInjectedWallet,
+  requestInjectedWallets,
   restoreInjectedAccount,
+  subscribeInjectedWallets,
   switchWalletToSepolia,
   watchInjectedWallet,
+  type DetectedWallet,
 } from './client';
 import {
   DEFAULT_RUNTIME_CONFIG,
@@ -98,6 +104,8 @@ export interface Notice {
 export interface FairBatchController {
   config: RuntimeConfig;
   hasWallet: boolean;
+  detectedWallets: DetectedWallet[];
+  activeWallet: DetectedWallet | null;
   account: Address | null;
   walletChainId: number | null;
   snapshot: OnchainSnapshot | null;
@@ -112,7 +120,8 @@ export interface FairBatchController {
   secretVault: LocalSecretVaultEntry[];
   configured: boolean;
   wrongNetwork: boolean;
-  connect: () => Promise<void>;
+  connect: (wallet?: DetectedWallet) => Promise<void>;
+  rescanWallets: () => DetectedWallet[];
   switchNetwork: () => Promise<void>;
   disconnect: () => void;
   refresh: () => void;
@@ -175,6 +184,12 @@ export function useFairBatch(): FairBatchController {
   const wallNow = useNow(1_000);
   const [account, setAccount] = useState<Address | null>(null);
   const [walletChainId, setWalletChainId] = useState<number | null>(null);
+  const [detectedWallets, setDetectedWallets] = useState<DetectedWallet[]>(() =>
+    discoverInjectedWallets(),
+  );
+  const [activeWallet, setActiveWalletState] = useState<DetectedWallet | null>(() =>
+    getActiveWallet(),
+  );
   const [snapshot, setSnapshot] = useState<OnchainSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -195,7 +210,27 @@ export function useFairBatch(): FairBatchController {
   const snapshotRef = useRef<OnchainSnapshot | null>(null);
   snapshotRef.current = snapshot;
 
-  const hasWallet = useMemo(() => hasInjectedWallet(), []);
+  const hasWallet = useMemo(
+    () => detectedWallets.length > 0 || hasInjectedWallet(),
+    [detectedWallets],
+  );
+
+  // Discover EIP-6963 multi-injected wallets + legacy window.ethereum.
+  useEffect(() => {
+    return subscribeInjectedWallets((wallets) => {
+      setDetectedWallets(wallets);
+      const current = getActiveWallet();
+      if (current) {
+        setActiveWalletState(current);
+      }
+    });
+  }, []);
+
+  const rescanWallets = useCallback((): DetectedWallet[] => {
+    const wallets = requestInjectedWallets();
+    setDetectedWallets(wallets);
+    return wallets;
+  }, []);
 
   const refresh = useCallback(() => {
     setRefreshNonce((value) => value + 1);
@@ -226,6 +261,7 @@ export function useFairBatch(): FairBatchController {
       const restored = await restoreInjectedAccount(config);
       if (cancelled || !restored) return;
       setAccount(restored);
+      setActiveWalletState(getActiveWallet());
       setWalletChainId(await getWalletChainId(config));
     })();
     return () => {
@@ -233,28 +269,32 @@ export function useFairBatch(): FairBatchController {
     };
   }, [config]);
 
-  // Wallet events.
+  // Wallet events bound to the active selected provider.
   useEffect(() => {
-    return watchInjectedWallet({
-      onAccountsChanged: (accounts) => {
-        setAccount(accounts[0] ?? null);
-        if (accounts.length === 0) {
+    return watchInjectedWallet(
+      {
+        onAccountsChanged: (accounts) => {
+          setAccount(accounts[0] ?? null);
+          if (accounts.length === 0) {
+            setWalletChainId(null);
+          } else {
+            void getWalletChainId(config).then((cid) => setWalletChainId(cid));
+          }
+          refresh();
+        },
+        onChainChanged: (chainId) => {
+          setWalletChainId(chainId);
+          refresh();
+        },
+        onDisconnect: () => {
+          setAccount(null);
           setWalletChainId(null);
-        } else {
-          void getWalletChainId(config).then((cid) => setWalletChainId(cid));
-        }
-        refresh();
+          setActiveWalletState(null);
+        },
       },
-      onChainChanged: (chainId) => {
-        setWalletChainId(chainId);
-        refresh();
-      },
-      onDisconnect: () => {
-        setAccount(null);
-        setWalletChainId(null);
-      },
-    });
-  }, [config, refresh]);
+      activeWallet?.provider,
+    );
+  }, [activeWallet, config, refresh]);
 
   // Snapshot fetch.
   useEffect(() => {
@@ -384,31 +424,41 @@ export function useFairBatch(): FairBatchController {
     [refresh, requireAccount],
   );
 
-  const connect = useCallback(async () => {
-    setBusyAction('connect');
-    setTxStatus('Connecting your wallet…');
-    setError(null);
-    try {
-      const connected = await connectInjectedWallet(config);
-      setAccount(connected);
-      setWalletChainId(await getWalletChainId(config));
+  const connect = useCallback(
+    async (wallet?: DetectedWallet) => {
+      setBusyAction('connect');
+      setTxStatus(wallet ? `Connecting ${wallet.name}…` : 'Connecting your wallet…');
+      setError(null);
       try {
-        localStorage.setItem(AUTOCONNECT_KEY, '1');
-      } catch {
-        // ignore storage errors
+        const connected = await connectInjectedWallet(config, wallet);
+        const resolvedWallet = getActiveWallet() ?? wallet ?? null;
+        setActiveWalletState(resolvedWallet);
+        setAccount(connected);
+        setWalletChainId(await getWalletChainId(config));
+        try {
+          localStorage.setItem(AUTOCONNECT_KEY, '1');
+        } catch {
+          // ignore storage errors
+        }
+        setNotice({
+          kind: 'success',
+          text: resolvedWallet
+            ? `Connected via ${resolvedWallet.name} on Ethereum Sepolia.`
+            : 'Wallet connected on Ethereum Sepolia.',
+        });
+        refresh();
+      } catch (err) {
+        const message = describeTxError(err);
+        setError(message);
+        setNotice({ kind: 'error', text: message });
+        throw new Error(message);
+      } finally {
+        setBusyAction(null);
+        setTxStatus(null);
       }
-      setNotice({ kind: 'success', text: 'Wallet connected on Ethereum Sepolia.' });
-      refresh();
-    } catch (err) {
-      const message = describeTxError(err);
-      setError(message);
-      setNotice({ kind: 'error', text: message });
-      throw new Error(message);
-    } finally {
-      setBusyAction(null);
-      setTxStatus(null);
-    }
-  }, [config, refresh]);
+    },
+    [config, refresh],
+  );
 
   const switchNetwork = useCallback(async () => {
     setBusyAction('switch-network');
@@ -431,6 +481,8 @@ export function useFairBatch(): FairBatchController {
   }, [config, refresh]);
 
   const disconnect = useCallback(() => {
+    clearActiveWallet();
+    setActiveWalletState(null);
     setAccount(null);
     setWalletChainId(null);
     try {
@@ -784,6 +836,8 @@ export function useFairBatch(): FairBatchController {
   return {
     config,
     hasWallet,
+    detectedWallets,
+    activeWallet,
     account,
     walletChainId,
     snapshot,
@@ -799,6 +853,7 @@ export function useFairBatch(): FairBatchController {
     configured: isContractConfigured(config),
     wrongNetwork,
     connect,
+    rescanWallets,
     switchNetwork,
     disconnect,
     refresh,

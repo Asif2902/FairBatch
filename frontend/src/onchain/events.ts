@@ -63,6 +63,8 @@ function isBlockRangeLimitError(error: unknown): boolean {
   return (
     msg.includes('block range') ||
     msg.includes('blocks range') ||
+    msg.includes('10 block') ||
+    msg.includes('free tier') ||
     msg.includes('invalid parameters') ||
     msg.includes('query returned more than') ||
     msg.includes('too large')
@@ -199,8 +201,8 @@ async function fetchRange(
         span = span / 2n;
         continue;
       }
-      if (isBlockRangeLimitError(error) && span > 50n) {
-        span = 50n;
+      if (isBlockRangeLimitError(error) && span > 10n) {
+        span = span > 50n ? 50n : 10n;
         continue;
       }
       throw error;

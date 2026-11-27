@@ -15,7 +15,14 @@ import {
 } from '../onchain/state';
 import { describeTxError } from '../onchain/actions';
 import { detectSimpleStep } from '../onchain/useFairBatch';
-import { DEFAULT_RUNTIME_CONFIG } from '../onchain/config';
+import {
+  ALCHEMY_SEPOLIA_BASE_URL,
+  DEFAULT_RUNTIME_CONFIG,
+  buildSepoliaConfig,
+  isIncompleteAlchemyUrl,
+  maskRpcUrl,
+  resolveAlchemySepoliaUrl,
+} from '../onchain/config';
 import {
   formatDuration,
   formatInvariant,
@@ -411,5 +418,30 @@ describe('Number, address, and duration formatting', () => {
     // Two 2.9465 payouts round to 2.95+2.95=5.90 at 2 decimals vs 5.89 total -> needs 4 decimals
     expect(pickReconciledDecimals([2.9465, 2.9465], 2, 4)).toBe(4);
     expect(pickReconciledDecimals([297.6, 148.8], 2, 4)).toBe(2);
+  });
+});
+
+describe('Alchemy Sepolia RPC resolution & key masking', () => {
+  it('prioritizes Alchemy URL when API key is provided, ignores bare /v2/, and masks keys in UI', () => {
+    expect(isIncompleteAlchemyUrl(ALCHEMY_SEPOLIA_BASE_URL)).toBe(true);
+    expect(resolveAlchemySepoliaUrl(ALCHEMY_SEPOLIA_BASE_URL)).toBeNull();
+    expect(resolveAlchemySepoliaUrl('my_test_key_123')).toBe(
+      'https://eth-sepolia.g.alchemy.com/v2/my_test_key_123',
+    );
+    expect(resolveAlchemySepoliaUrl('https://eth-sepolia.g.alchemy.com/v2/my_test_key_123')).toBe(
+      'https://eth-sepolia.g.alchemy.com/v2/my_test_key_123',
+    );
+    expect(maskRpcUrl('https://eth-sepolia.g.alchemy.com/v2/secret_key_xyz')).toBe(
+      'https://eth-sepolia.g.alchemy.com/v2/••••',
+    );
+
+    const withAlchemy = buildSepoliaConfig({ alchemyApiKey: 'test_key_999' });
+    expect(withAlchemy.rpcUrl).toBe('https://eth-sepolia.g.alchemy.com/v2/test_key_999');
+    expect(withAlchemy.rpcUrls[0]).toBe('https://eth-sepolia.g.alchemy.com/v2/test_key_999');
+    expect(withAlchemy.fallbackRpcUrls.length).toBeGreaterThan(0);
+
+    // Incomplete bare Alchemy URL must fall back safely rather than breaking reads with 401
+    const withBareUrl = buildSepoliaConfig({ rpcUrl: 'https://eth-sepolia.g.alchemy.com/v2/' });
+    expect(withBareUrl.rpcUrl).not.toContain('alchemy.com/v2/');
   });
 });

@@ -169,6 +169,88 @@ async function waitForSuccess(
   }
 }
 
+async function prepareAndSendContractWrite(
+  config: RuntimeConfig,
+  account: Address,
+  params: {
+    address: Address;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    abi: readonly any[];
+    functionName: string;
+    args?: readonly unknown[];
+    value?: bigint;
+  },
+): Promise<Hash> {
+  const client = getPublicClient(config);
+  const chain = getChain(config);
+
+  // 1. Pre-flight simulate via primary RPC (Alchemy when configured) before wallet signing
+  await client.simulateContract({
+    address: params.address,
+    abi: params.abi,
+    functionName: params.functionName,
+    args: params.args,
+    value: params.value,
+    account,
+  } as never);
+
+  // 2. Estimate gas & EIP-1559 fee headroom via primary RPC (Alchemy when configured)
+  let gas: bigint | undefined;
+  try {
+    const estimated = await client.estimateContractGas({
+      address: params.address,
+      abi: params.abi,
+      functionName: params.functionName,
+      args: params.args,
+      value: params.value,
+      account,
+    } as never);
+    gas = (estimated * 120n) / 100n + 25_000n;
+  } catch {
+    // Allow wallet to estimate gas if RPC estimation is unavailable
+  }
+
+  let maxFeePerGas: bigint | undefined;
+  let maxPriorityFeePerGas: bigint | undefined;
+  try {
+    const [fees, block] = await Promise.all([
+      client.estimateFeesPerGas(),
+      client.getBlock({ blockTag: 'latest' }).catch(() => null),
+    ]);
+    const minPriority = 1_000_000n; // 0.001 gwei
+    const minMaxFee = 250_000_000n; // 0.25 gwei headroom for Sepolia baseFee spikes
+    const priority =
+      (fees.maxPriorityFeePerGas ?? 0n) > minPriority
+        ? fees.maxPriorityFeePerGas!
+        : minPriority;
+    const baseFee = block?.baseFeePerGas ?? 0n;
+    const baseHeadroom = baseFee * 3n + priority;
+    const rpcMax = fees.maxFeePerGas ?? fees.gasPrice ?? 0n;
+    let maxFee = baseHeadroom > rpcMax ? baseHeadroom : rpcMax;
+    if (minMaxFee > maxFee) maxFee = minMaxFee;
+    if (priority > maxFee) maxFee = priority;
+    maxFeePerGas = maxFee;
+    maxPriorityFeePerGas = priority;
+  } catch {
+    // Let wallet choose fees if fee estimation is unavailable
+  }
+
+  // 3. Sign & submit via connected wallet with Alchemy-prepared gas & fee bounds
+  const wallet = await ensureWalletReady(config, account);
+  return wallet.writeContract({
+    address: params.address,
+    abi: params.abi,
+    functionName: params.functionName,
+    args: params.args,
+    value: params.value,
+    account,
+    chain,
+    ...(gas !== undefined ? { gas } : {}),
+    ...(maxFeePerGas !== undefined ? { maxFeePerGas } : {}),
+    ...(maxPriorityFeePerGas !== undefined ? { maxPriorityFeePerGas } : {}),
+  } as never);
+}
+
 async function approveToken(
   config: RuntimeConfig,
   account: Address,
@@ -188,14 +270,11 @@ async function approveToken(
   if (current >= amount) return null;
 
   onStatus?.(`Approving ${symbol ?? 'token'}…`);
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: token,
     abi: erc20Abi,
     functionName: 'approve',
     args: [spender, maxUint256],
-    account,
-    chain: getChain(config),
   });
   onStatus?.(`Waiting for ${symbol ?? 'token'} approval…`);
   await waitForSuccess(config, hash, onStatus);
@@ -257,14 +336,11 @@ export async function claimFaucet(
     throw new Error('Sepolia faucet contract is not configured.');
   }
   onStatus?.('Confirm faucet claim in your wallet…');
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.faucet,
     abi: faucetAbi,
     functionName: 'claim',
     args: [],
-    account,
-    chain: getChain(config),
   });
   onStatus?.('Claiming free test tokens on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -304,17 +380,14 @@ export async function submitDirectOrder(
       ? `Approved ${symbol} → Sending your order…`
       : 'Sending your order…',
   );
-  const wallet = await ensureWalletReady(config, account);
   const hash = await withPostApproveRetry(
     Boolean(approved),
     () =>
-      wallet.writeContract({
+      prepareAndSendContractWrite(config, account, {
         address: config.fairBatch,
         abi: fairBatchAbi,
         functionName: 'submitDirectOrder',
         args: [sideU8(params.side), amountRaw, limitRaw],
-        account,
-        chain: getChain(config),
       }),
     onStatus,
   );
@@ -381,17 +454,14 @@ export async function settleAndSubmitDirect(
       ? `Approved ${symbol} → Starting next round & sending your order…`
       : 'Starting next round & sending your order in one transaction…',
   );
-  const wallet = await ensureWalletReady(config, account);
   const hash = await withPostApproveRetry(
     Boolean(approved),
     () =>
-      wallet.writeContract({
+      prepareAndSendContractWrite(config, account, {
         address: config.fairBatch,
         abi: fairBatchAbi,
         functionName: 'multicall',
         args: [calls],
-        account,
-        chain: getChain(config),
       }),
     onStatus,
   );
@@ -455,15 +525,12 @@ export async function commitOrder(
   })) as bigint;
 
   onStatus?.('Confirm sealed order & refundable deposit in your wallet…');
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'commitOrder',
     args: [commitmentHash],
     value: bondWei,
-    account,
-    chain: getChain(config),
   });
   onStatus?.('Confirming sealed order on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -502,15 +569,17 @@ export async function revealOrder(
       ? `Approved ${symbol} → Revealing your sealed order…`
       : 'Revealing your sealed order & returning deposit…',
   );
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
-    address: config.fairBatch,
-    abi: fairBatchAbi,
-    functionName: 'revealOrder',
-    args: [BigInt(secret.commit_id), sideU8(secret.side), amountRaw, limitRaw, saltBig],
-    account,
-    chain: getChain(config),
-  });
+  const hash = await withPostApproveRetry(
+    Boolean(approved),
+    () =>
+      prepareAndSendContractWrite(config, account, {
+        address: config.fairBatch,
+        abi: fairBatchAbi,
+        functionName: 'revealOrder',
+        args: [BigInt(secret.commit_id), sideU8(secret.side), amountRaw, limitRaw, saltBig],
+      }),
+    onStatus,
+  );
   onStatus?.('Confirming reveal on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
   const events = decodeEvents(receipt, 'OrderRevealed');
@@ -619,11 +688,10 @@ export async function submitSignedIntent(
       ? `Approved ${symbol} → Submitting signed order…`
       : 'Submitting signed order to the current round…',
   );
-  const wallet = await ensureWalletReady(config, account);
   const hash = await withPostApproveRetry(
     Boolean(approved),
     () =>
-      wallet.writeContract({
+      prepareAndSendContractWrite(config, account, {
         address: config.fairBatch,
         abi: fairBatchAbi,
         functionName: 'submitSignedIntent',
@@ -639,8 +707,6 @@ export async function submitSignedIntent(
           },
           artifact.signature as `0x${string}`,
         ],
-        account,
-        chain: getChain(config),
       }),
     onStatus,
   );
@@ -744,14 +810,11 @@ export async function settleBatch(
   onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; batchId: number }> {
   onStatus?.('Starting next round & pricing finished orders…');
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'settleBatch',
     args: [],
-    account,
-    chain: getChain(config),
   });
   onStatus?.('Confirming round settlement on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -770,14 +833,11 @@ export async function slashUnrevealed(
   onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; forfeitedBond: bigint }> {
   onStatus?.('Slashing expired unrevealed commitment…');
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'slashUnrevealed',
     args: [BigInt(batchId), BigInt(commitId)],
-    account,
-    chain: getChain(config),
   });
   onStatus?.('Confirming slash bounty on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -796,14 +856,11 @@ export async function claimOrder(
   onStatus?: StatusReporter,
 ): Promise<{ hash: Hash; payoutBase: bigint; payoutQuote: bigint }> {
   onStatus?.('Confirm token collection in your wallet…');
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'claim',
     args: [BigInt(batchId), BigInt(orderId)],
-    account,
-    chain: getChain(config),
   });
   onStatus?.('Collecting your tokens on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -831,14 +888,11 @@ export async function claimMany(
       args: [BigInt(item.batchId), BigInt(item.orderId)],
     }),
   );
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'multicall',
     args: [calls],
-    account,
-    chain: getChain(config),
   });
   onStatus?.(`Collecting ${items.length} payouts in one transaction…`);
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -878,24 +932,19 @@ export async function addLiquidity(
   );
 
   onStatus?.(lockSecs > 0 ? 'Adding & locking liquidity…' : 'Adding liquidity to the pool…');
-  const wallet = await ensureWalletReady(config, account);
   const hash =
     lockSecs > 0
-      ? await wallet.writeContract({
+      ? await prepareAndSendContractWrite(config, account, {
           address: config.fairBatch,
           abi: fairBatchAbi,
           functionName: 'addLiquidityLocked',
           args: [baseRaw, quoteRaw, BigInt(lockSecs), minShares],
-          account,
-          chain: getChain(config),
         })
-      : await wallet.writeContract({
+      : await prepareAndSendContractWrite(config, account, {
           address: config.fairBatch,
           abi: fairBatchAbi,
           functionName: 'addLiquidity',
           args: [baseRaw, quoteRaw, minShares],
-          account,
-          chain: getChain(config),
         });
   onStatus?.('Confirming liquidity deposit on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);
@@ -921,14 +970,11 @@ export async function removeLiquidity(
 ): Promise<LiquidityResult> {
   const sharesRaw = toRawAmount(shares, 18);
   onStatus?.('Withdrawing liquidity from the pool…');
-  const wallet = await ensureWalletReady(config, account);
-  const hash = await wallet.writeContract({
+  const hash = await prepareAndSendContractWrite(config, account, {
     address: config.fairBatch,
     abi: fairBatchAbi,
     functionName: 'removeLiquidity',
     args: [sharesRaw, minBase, minQuote],
-    account,
-    chain: getChain(config),
   });
   onStatus?.('Confirming withdrawal on Sepolia…');
   const receipt = await waitForSuccess(config, hash, onStatus);

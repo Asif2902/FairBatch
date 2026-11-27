@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { formatUnits } from 'viem';
 import type { BatchPhase } from '../types';
+import type { DetectedWallet } from '../onchain/client';
 import type { RawBatchInfo, WalletBalances } from '../onchain/state';
 import { remainingSecondsForPhase } from '../onchain/state';
 import { explorerAddressUrl, type RuntimeConfig } from '../onchain/config';
@@ -38,6 +39,7 @@ interface TopCommandBarProps {
   livePhase: BatchPhase;
   chainNow: number;
   account: string | null;
+  activeWallet?: DetectedWallet | null;
   balances: WalletBalances | null;
   walletChainId: number | null;
   wrongNetwork: boolean;
@@ -45,6 +47,8 @@ interface TopCommandBarProps {
   refreshing: boolean;
   busyAction: string | null;
   onConnect: () => Promise<void>;
+  onOpenAccountModal?: () => void;
+  onSwitchWallet?: () => void;
   onSwitchNetwork: () => Promise<void>;
   onDisconnect: () => void;
   onRefresh: () => void;
@@ -76,6 +80,7 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
   livePhase,
   chainNow,
   account,
+  activeWallet = null,
   balances,
   walletChainId,
   wrongNetwork,
@@ -83,6 +88,8 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
   refreshing,
   busyAction,
   onConnect,
+  onOpenAccountModal,
+  onSwitchWallet,
   onSwitchNetwork,
   onDisconnect,
   onRefresh,
@@ -308,6 +315,11 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
               >
                 <div className="flex items-center justify-between gap-2 border-b border-rule pb-2.5">
                   <div className="min-w-0">
+                    {activeWallet && (
+                      <div className="mb-0.5 truncate font-mono text-[10px] font-bold uppercase tracking-label text-cobalt-700">
+                        {activeWallet.name}
+                      </div>
+                    )}
                     <div className="font-mono text-xs font-bold text-ink">
                       {shortenAddress(account)}
                     </div>
@@ -379,17 +391,52 @@ export const TopCommandBar: React.FC<TopCommandBarProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWalletMenuOpen(false);
-                    onDisconnect();
-                  }}
-                  className="mt-2.5 inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 border border-rule-strong px-3 font-sans text-xs font-bold text-ink-soft transition hover:border-ink hover:text-ink"
-                >
-                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Disconnect</span>
-                </button>
+                <div className="mt-2.5 space-y-1.5">
+                  {onOpenAccountModal && (
+                    <button
+                      type="button"
+                      data-testid="header-wallet-details-button"
+                      onClick={() => {
+                        setWalletMenuOpen(false);
+                        onOpenAccountModal();
+                      }}
+                      className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 border border-ink bg-ink px-3 font-sans text-xs font-bold text-paper transition hover:bg-ink-soft"
+                    >
+                      <Wallet className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Wallet details</span>
+                    </button>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {onSwitchWallet && (
+                      <button
+                        type="button"
+                        data-testid="header-switch-wallet-button"
+                        onClick={() => {
+                          setWalletMenuOpen(false);
+                          onSwitchWallet();
+                        }}
+                        className="inline-flex min-h-[38px] items-center justify-center gap-1.5 border border-rule-strong bg-paper-soft px-2.5 font-sans text-xs font-bold text-ink transition hover:border-ink hover:bg-paper-bright"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Switch wallet</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWalletMenuOpen(false);
+                        onDisconnect();
+                      }}
+                      className={`inline-flex min-h-[38px] items-center justify-center gap-1.5 border border-rule-strong px-2.5 font-sans text-xs font-bold text-ink-soft transition hover:border-ink hover:text-ink ${
+                        onSwitchWallet ? '' : 'col-span-2'
+                      }`}
+                    >
+                      <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Disconnect</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

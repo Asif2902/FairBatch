@@ -11,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import type { RuntimeConfig } from '../onchain/config';
-import { explorerAddressUrl } from '../onchain/config';
+import { explorerAddressUrl, maskRpcUrl } from '../onchain/config';
 import { getChainLabel, shortenAddress } from '../lib/format';
 
 interface ContractConfigModalProps {
@@ -141,11 +141,11 @@ export const ContractConfigModal: React.FC<ContractConfigModalProps> = ({
                 {getChainLabel(config.chainId)} · Chain ID {config.chainId}
               </p>
               <p className="mt-1 break-all font-mono text-xs text-ink-muted">
-                Primary RPC: {config.rpcUrl}
+                Primary RPC: {maskRpcUrl(config.rpcUrl)}
               </p>
               {config.fallbackRpcUrls.length > 0 && (
                 <p className="mt-1 break-all font-mono text-xs text-ink-faint">
-                  Fallbacks: {config.fallbackRpcUrls.join(', ')}
+                  Fallbacks: {config.fallbackRpcUrls.map(maskRpcUrl).join(', ')}
                 </p>
               )}
               <p className="mt-1 font-mono text-xs text-ink-faint">

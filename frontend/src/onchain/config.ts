@@ -3,6 +3,8 @@ import { sepolia } from 'viem/chains';
 import deployment from '../../../config/deployment.json';
 import networks from '../../../config/networks.json';
 
+export const ALCHEMY_SEPOLIA_BASE_URL = 'https://eth-sepolia.g.alchemy.com/v2/';
+
 export interface RuntimeConfig {
   network: 'sepolia';
   chainId: number;
@@ -36,23 +38,63 @@ function parseAddress(raw: string | undefined): Address {
   return getAddress(raw);
 }
 
-function collectRpcUrls(primary: string, fallbacks: string[]): string[] {
+/**
+ * Resolves an Alchemy Sepolia RPC URL from either a bare API key or a full URL.
+ * Returns null if empty or if an incomplete base URL (`.../v2/` with no key) is supplied.
+ */
+export function resolveAlchemySepoliaUrl(raw?: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) {
+    if (isIncompleteAlchemyUrl(trimmed)) return null;
+    return trimmed;
+  }
+  const cleanKey = trimmed.replace(/^\/+/, '');
+  if (!cleanKey) return null;
+  return `${ALCHEMY_SEPOLIA_BASE_URL}${cleanKey}`;
+}
+
+export function isIncompleteAlchemyUrl(url: string): boolean {
+  return /^https?:\/\/[^/]*alchemy\.com\/v2\/?$/i.test(url.trim());
+}
+
+/**
+ * Redacts API keys embedded in Alchemy/Infura RPC URLs before rendering in UI or logs.
+ */
+export function maskRpcUrl(url: string): string {
+  return url
+    .replace(/(alchemy\.com\/v2\/)([^/?#\s]+)/i, '$1••••')
+    .replace(/(infura\.io\/v3\/)([^/?#\s]+)/i, '$1••••');
+}
+
+function collectRpcUrls(candidates: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const candidate of [primary, ...fallbacks]) {
-    const trimmed = candidate.trim();
-    if (trimmed && !seen.has(trimmed)) {
-      seen.add(trimmed);
-      out.push(trimmed);
-    }
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim() ?? '';
+    if (!trimmed || isIncompleteAlchemyUrl(trimmed) || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
   }
   return out;
 }
 
-function buildSepoliaConfig(): RuntimeConfig {
+export interface RpcEnvOverrides {
+  alchemyApiKey?: string;
+  rpcUrl?: string;
+}
+
+export function buildSepoliaConfig(overrides?: RpcEnvOverrides): RuntimeConfig {
   const faucet = parseAddress(deployment.contracts.faucet);
+  const env = (import.meta.env ?? {}) as {
+    VITE_ALCHEMY_API_KEY?: string;
+    VITE_RPC_URL?: string;
+  };
+  const alchemyUrl = resolveAlchemySepoliaUrl(overrides?.alchemyApiKey ?? env.VITE_ALCHEMY_API_KEY);
+  const customRpc = resolveAlchemySepoliaUrl(overrides?.rpcUrl ?? env.VITE_RPC_URL);
   const rawFallbacks = networks.networks?.sepolia?.fallback_rpc_urls ?? [];
-  const rpcUrls = collectRpcUrls(deployment.rpcUrl, rawFallbacks);
+  const rpcUrls = collectRpcUrls([alchemyUrl, customRpc, deployment.rpcUrl, ...rawFallbacks]);
   const fallbackRpcUrls = rpcUrls.slice(1);
   return {
     network: 'sepolia',

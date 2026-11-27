@@ -62,6 +62,11 @@ export interface KeeperConfig {
   relayRateWindowMs: number;
   relayGasLimit: bigint;
   relayMaxBodyBytes: number;
+  txConfirmTimeoutMs?: number;
+  txReplaceAfterMs?: number;
+  externalPendingGraceMs?: number;
+  minPriorityFeeWei?: bigint;
+  minMaxFeeWei?: bigint;
 }
 
 function locateRepoRoot(): string {
@@ -87,6 +92,7 @@ function loadDotEnvIfPresent(repoRoot: string): void {
     '/etc/secrets/keeper.env',
     path.join(repoRoot, 'keeper', '.env'),
     path.join(process.cwd(), '.env'),
+    path.join(repoRoot, '.env'),
   ].filter((p): p is string => Boolean(p));
   for (const filePath of envCandidates) {
     if (!fs.existsSync(filePath)) continue;
@@ -109,6 +115,33 @@ function loadDotEnvIfPresent(repoRoot: string): void {
       }
     }
   }
+}
+
+export const ALCHEMY_SEPOLIA_BASE_URL = 'https://eth-sepolia.g.alchemy.com/v2/';
+
+export function isIncompleteAlchemyUrl(url: string): boolean {
+  return /^https?:\/\/[^/]*alchemy\.com\/v2\/?$/i.test(url.trim());
+}
+
+/**
+ * Resolves an Alchemy Sepolia RPC URL from either a bare API key or a full URL.
+ * Returns null if empty or if an incomplete base URL (`.../v2/` with no key) is supplied.
+ */
+export function resolveAlchemySepoliaUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) {
+    return isIncompleteAlchemyUrl(trimmed) ? null : trimmed;
+  }
+  const cleanKey = trimmed.replace(/^\/+/, '');
+  return cleanKey ? `${ALCHEMY_SEPOLIA_BASE_URL}${cleanKey}` : null;
+}
+
+export function maskRpcUrl(url: string): string {
+  return url
+    .replace(/(alchemy\.com\/v2\/)([^/?#\s"']+)/gi, '$1••••')
+    .replace(/(infura\.io\/v3\/)([^/?#\s"']+)/gi, '$1••••');
 }
 
 function parseBool(raw: string | undefined, fallback: boolean): boolean {
@@ -154,13 +187,25 @@ export function loadKeeperConfig(argv: string[] = process.argv.slice(2)): Keeper
     );
   }
 
+  const alchemyUrl =
+    resolveAlchemySepoliaUrl(process.env.KEEPER_ALCHEMY_API_KEY) ??
+    resolveAlchemySepoliaUrl(process.env.ALCHEMY_API_KEY) ??
+    resolveAlchemySepoliaUrl(process.env.ALCHEMY_SEPOLIA_RPC_URL);
+  const customRpcUrl =
+    resolveAlchemySepoliaUrl(process.env.KEEPER_RPC_URL) ??
+    resolveAlchemySepoliaUrl(process.env.RPC_URL);
+  const useFallbacks = parseBool(process.env.KEEPER_USE_FALLBACK_RPCS, true);
+  const hasPrimaryOverride = Boolean(alchemyUrl || customRpcUrl);
+
   const rpcCandidates = [
-    process.env.KEEPER_RPC_URL,
-    deployment.rpcUrl,
-    ...(networks.networks?.sepolia?.fallback_rpc_urls ?? []),
+    alchemyUrl,
+    customRpcUrl,
+    ...(!hasPrimaryOverride || useFallbacks
+      ? [deployment.rpcUrl, ...(networks.networks?.sepolia?.fallback_rpc_urls ?? [])]
+      : []),
   ]
     .map((u) => u?.trim() ?? '')
-    .filter((u) => u.length > 0);
+    .filter((u) => u.length > 0 && !isIncompleteAlchemyUrl(u));
   const rpcUrls = Array.from(new Set(rpcCandidates));
 
   const corsRaw = process.env.KEEPER_CORS_ORIGIN ?? 'http://localhost:5173';
@@ -210,5 +255,18 @@ export function loadKeeperConfig(argv: string[] = process.argv.slice(2)): Keeper
       Math.floor(parseNumber(process.env.KEEPER_RELAY_GAS_LIMIT, 1_500_000, 200_000)),
     ),
     relayMaxBodyBytes: 16_384,
+    txConfirmTimeoutMs: Math.floor(
+      parseNumber(process.env.KEEPER_TX_CONFIRM_TIMEOUT_MS, 60_000, 5_000),
+    ),
+    txReplaceAfterMs: Math.floor(
+      parseNumber(process.env.KEEPER_TX_REPLACE_AFTER_MS, 45_000, 5_000),
+    ),
+    externalPendingGraceMs: Math.floor(
+      parseNumber(process.env.KEEPER_EXTERNAL_PENDING_GRACE_MS, 15_000, 0),
+    ),
+    minPriorityFeeWei: parseGwei(
+      String(parseNumber(process.env.KEEPER_MIN_PRIORITY_FEE_GWEI, 0.001, 0)),
+    ),
+    minMaxFeeWei: parseGwei(String(parseNumber(process.env.KEEPER_MIN_MAX_FEE_GWEI, 0.25, 0))),
   };
 }

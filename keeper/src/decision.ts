@@ -162,3 +162,109 @@ export function isAlreadySlashedError(error: unknown): boolean {
     text.includes('reveal window not expired')
   );
 }
+
+export function isReceiptTimeoutError(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'WaitForTransactionReceiptTimeoutError') {
+    return true;
+  }
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return text.includes('timed out while waiting for transaction');
+}
+
+export function isReplacementUnderpricedError(error: unknown): boolean {
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    text.includes('replacement transaction underpriced') ||
+    text.includes('replacement fee too low') ||
+    text.includes('transaction underpriced') ||
+    text.includes('max fee per gas less than block base fee')
+  );
+}
+
+export function isNonceTooLowError(error: unknown): boolean {
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    text.includes('nonce too low') ||
+    text.includes('nonce has already been used') ||
+    text.includes('already known')
+  );
+}
+
+export const DEFAULT_MIN_PRIORITY_FEE_WEI = 1_000_000n; // 0.001 gwei
+export const DEFAULT_MIN_MAX_FEE_WEI = 250_000_000n; // 0.25 gwei (absorbs Sepolia baseFee spikes safely)
+
+export interface SafeFeeInput {
+  baseFeePerGas?: bigint | null;
+  estimatedMaxFeePerGas?: bigint | null;
+  estimatedPriorityFeePerGas?: bigint | null;
+  maxGasPriceWei: bigint;
+  minPriorityFeeWei?: bigint;
+  minMaxFeeWei?: bigint;
+}
+
+export interface FeeQuote {
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+}
+
+function maxBigInt(...values: bigint[]): bigint {
+  let out = 0n;
+  for (const v of values) {
+    if (v > out) out = v;
+  }
+  return out;
+}
+
+/**
+ * Computes EIP-1559 fee parameters with headroom against sudden Sepolia baseFee spikes.
+ * EIP-1559 only charges `min(maxFeePerGas, baseFee + maxPriorityFeePerGas)`, so providing
+ * generous `maxFeePerGas` headroom avoids stranded mempool txs at near-zero extra cost.
+ */
+export function computeSafeFees(input: SafeFeeInput): FeeQuote | null {
+  const cap = input.maxGasPriceWei;
+  if (cap <= 0n) return null;
+
+  const minPriority = input.minPriorityFeeWei ?? DEFAULT_MIN_PRIORITY_FEE_WEI;
+  const minMaxFee = input.minMaxFeeWei ?? DEFAULT_MIN_MAX_FEE_WEI;
+
+  const effectivePriorityFloor = minPriority < cap ? minPriority : cap;
+  const effectiveMaxFeeFloor = minMaxFee < cap ? minMaxFee : cap;
+
+  const priority = maxBigInt(input.estimatedPriorityFeePerGas ?? 0n, effectivePriorityFloor);
+  const baseFee = input.baseFeePerGas ?? 0n;
+  const rpcMaxFee = input.estimatedMaxFeePerGas ?? 0n;
+
+  const minNeeded = maxBigInt(baseFee + priority, rpcMaxFee);
+  if (minNeeded > cap || priority > cap) {
+    return null;
+  }
+
+  const desiredMaxFee = maxBigInt(baseFee * 3n + priority, rpcMaxFee, effectiveMaxFeeFloor, priority);
+  const maxFeePerGas = desiredMaxFee > cap ? cap : desiredMaxFee;
+  return { maxFeePerGas, maxPriorityFeePerGas: priority };
+}
+
+/**
+ * Computes replacement fees for the SAME nonce (at least +25% over previous maxFee & tip,
+ * clearing geth/reth/nethermind's >= 10% replacement threshold) capped by `maxGasPriceWei`.
+ */
+export function computeReplacementFees(
+  previous: FeeQuote,
+  fresh: FeeQuote,
+  maxGasPriceWei: bigint,
+): FeeQuote | null {
+  const minBumpedPriority = (previous.maxPriorityFeePerGas * 125n + 99n) / 100n + 1n;
+  const minBumpedMaxFee = maxBigInt(
+    (previous.maxFeePerGas * 125n + 99n) / 100n + 1n,
+    minBumpedPriority,
+  );
+  if (minBumpedMaxFee > maxGasPriceWei || minBumpedPriority > maxGasPriceWei) {
+    return null;
+  }
+  const desiredPriority = maxBigInt(minBumpedPriority, fresh.maxPriorityFeePerGas);
+  const maxPriorityFeePerGas =
+    desiredPriority > maxGasPriceWei ? maxGasPriceWei : desiredPriority;
+  const desiredMaxFee = maxBigInt(minBumpedMaxFee, fresh.maxFeePerGas, maxPriorityFeePerGas);
+  const maxFeePerGas = desiredMaxFee > maxGasPriceWei ? maxGasPriceWei : desiredMaxFee;
+  return { maxFeePerGas, maxPriorityFeePerGas };
+}

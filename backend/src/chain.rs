@@ -103,10 +103,13 @@ impl ChainBridgeConfig {
         if let Some(manifest) = load_sepolia_deployment_manifest() {
             cfg.apply_manifest_fallback(&manifest);
         }
-        if let Ok(env_rpc) = std::env::var("RPC_URL") {
-            let trimmed = env_rpc.trim();
-            if !trimmed.is_empty() && !is_local_rpc_url(trimmed) {
-                cfg.rpc_url = Some(trimmed.to_string());
+        if let Ok(alchemy_key) = std::env::var("ALCHEMY_API_KEY") {
+            if let Some(alchemy_rpc) = resolve_alchemy_sepolia_url(&alchemy_key) {
+                cfg.rpc_url = Some(alchemy_rpc);
+            }
+        } else if let Ok(env_rpc) = std::env::var("RPC_URL") {
+            if let Some(valid_rpc) = resolve_alchemy_sepolia_url(&env_rpc) {
+                cfg.rpc_url = Some(valid_rpc);
             }
         }
         cfg.chain_id = SEPOLIA_CHAIN_ID;
@@ -224,7 +227,7 @@ impl ChainBridgeConfig {
         HealthResponse {
             status: "ok".to_string(),
             execution_mode: self.execution_mode().to_string(),
-            rpc_url: self.rpc_url.clone(),
+            rpc_url: self.rpc_url.as_deref().map(mask_rpc_url),
             chain_id: self.chain_id,
             contracts: self.contracts_dto(),
             fe_artifacts_present: !names.is_empty(),
@@ -236,7 +239,7 @@ impl ChainBridgeConfig {
         let artifacts = scan_fe_artifacts();
         ContractsMetadataResponse {
             execution_mode: self.execution_mode().to_string(),
-            rpc_url: self.rpc_url.clone(),
+            rpc_url: self.rpc_url.as_deref().map(mask_rpc_url),
             chain_id: self.chain_id,
             contracts: self.contracts_dto(),
             fe_artifacts_present: !artifacts.is_empty(),
@@ -293,6 +296,43 @@ impl ChainBridgeConfig {
 
         send_json_rpc(rpc, &payload).await
     }
+}
+
+pub const ALCHEMY_SEPOLIA_BASE_URL: &str = "https://eth-sepolia.g.alchemy.com/v2/";
+
+pub fn is_incomplete_alchemy_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.ends_with("alchemy.com/v2/") || lower.ends_with("alchemy.com/v2")
+}
+
+pub fn resolve_alchemy_sepolia_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        if is_local_rpc_url(trimmed) || is_incomplete_alchemy_url(trimmed) {
+            return None;
+        }
+        return Some(trimmed.to_string());
+    }
+    let key = trimmed.trim_start_matches('/');
+    if key.is_empty() {
+        None
+    } else {
+        Some(format!("{ALCHEMY_SEPOLIA_BASE_URL}{key}"))
+    }
+}
+
+pub fn mask_rpc_url(url: &str) -> String {
+    if let Some(idx) = url.to_ascii_lowercase().find("alchemy.com/v2/") {
+        let prefix_end = idx + "alchemy.com/v2/".len();
+        if prefix_end < url.len() {
+            return format!("{}••••", &url[..prefix_end]);
+        }
+    }
+    url.to_string()
 }
 
 fn is_local_rpc_url(url: &str) -> bool {
@@ -712,5 +752,15 @@ mod tests {
         assert!(is_local_rpc_url("http://127.0.0.1:8545"));
         assert!(is_local_rpc_url("http://localhost:8546"));
         assert!(!is_local_rpc_url("https://ethereum-sepolia-rpc.publicnode.com"));
+        assert!(is_incomplete_alchemy_url("https://eth-sepolia.g.alchemy.com/v2/"));
+        assert_eq!(resolve_alchemy_sepolia_url("https://eth-sepolia.g.alchemy.com/v2/"), None);
+        assert_eq!(
+            resolve_alchemy_sepolia_url("demo_key_123").as_deref(),
+            Some("https://eth-sepolia.g.alchemy.com/v2/demo_key_123")
+        );
+        assert_eq!(
+            mask_rpc_url("https://eth-sepolia.g.alchemy.com/v2/secret_key_abc"),
+            "https://eth-sepolia.g.alchemy.com/v2/••••"
+        );
     }
 }
