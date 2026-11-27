@@ -764,6 +764,10 @@ describe('Simple mode end-to-end flows', () => {
     const { rerender } = render(<App />);
 
     // Enter amount > balance on Simple Swap
+    expect(screen.getByTestId('simple-round-countdown')).toHaveTextContent(
+      /Round #10 · Collecting orders/i,
+    );
+    expect(screen.getByTestId('simple-round-countdown')).toHaveTextContent(/Closes in 0:40/i);
     const swapInput = screen.getByTestId('simple-pay-input');
     fireEvent.change(swapInput, { target: { value: '2' } });
     expect(screen.getByTestId('simple-insufficient-balance')).toHaveTextContent(

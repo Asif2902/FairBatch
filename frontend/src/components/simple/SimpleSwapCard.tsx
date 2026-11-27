@@ -4,6 +4,7 @@ import {
   ArrowDownUp,
   ChevronDown,
   ChevronUp,
+  Clock,
   Droplets,
   Eye,
   KeyRound,
@@ -285,6 +286,11 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
   ]);
 
   const remaining = remainingSecondsForPhase(batch, livePhase, chainNow);
+  const openWindowSecs = Math.max(1, Number(batch.commitDeadline - batch.startTime));
+  const openProgressPct =
+    livePhase === 'Open'
+      ? Math.min(100, Math.max(0, (1 - remaining / openWindowSecs) * 100))
+      : 100;
 
   // Determine whether Reveal phase will auto-route via EIP-712 signed swap (Option A).
   const autoSignedInFinalizing = livePhase === 'Reveal' && orderMode === 'direct';
@@ -425,6 +431,31 @@ export const SimpleSwapCard: React.FC<SimpleSwapCardProps> = ({
       data-testid="simple-swap-card"
       className="ledger-panel overflow-hidden"
     >
+      {/* Live Open-round countdown strip directly on the Swap card */}
+      {livePhase === 'Open' && (
+        <div
+          data-testid="simple-round-countdown"
+          className="border-b border-rule bg-paper-soft px-5 py-2.5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-mono font-bold uppercase tracking-label text-pine-700">
+              <span className="h-2 w-2 rounded-full bg-pine-500" />
+              <span>Round #{state.batch_id} · Collecting orders</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 font-mono font-bold text-ink tabular-nums">
+              <Clock className="h-3.5 w-3.5 text-ink-muted" aria-hidden="true" />
+              <span>Closes in {formatClock(remaining)}</span>
+            </span>
+          </div>
+          <div className="mt-1.5 h-1 w-full bg-rule">
+            <div
+              className="h-1 bg-pine-600 transition-[width] duration-700"
+              style={{ width: `${openProgressPct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Prominent Ready-round banner — never a dead end */}
       {livePhase === 'Ready' && (
         <div

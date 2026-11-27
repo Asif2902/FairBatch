@@ -8,6 +8,7 @@ import {
 } from '../onchain/events';
 import {
   deriveLivePhase,
+  estimateChainTimeOffsetSecs,
   indexFairBatchEvents,
   reconstructReserveHistory,
   remainingSecondsForPhase,
@@ -215,6 +216,22 @@ describe('onchain/state indexing, reserve history, and phase derivation (Bugs 1a
 
     // Settled batches stay Settled regardless of timestamp
     expect(deriveLivePhase({ ...batch, phase: 3 }, 2_000)).toBe('Settled');
+  });
+
+  it('ignores normal 0-18s Ethereum block-age jitter in estimateChainTimeOffsetSecs while correcting genuine clock skew', () => {
+    const wall = 1_700_000_100;
+    // Normal Sepolia block ages (0s to 18s behind wall clock) keep offset = 0 so countdowns never jump
+    expect(estimateChainTimeOffsetSecs(wall, wall)).toBe(0);
+    expect(estimateChainTimeOffsetSecs(wall - 1, wall)).toBe(0);
+    expect(estimateChainTimeOffsetSecs(wall - 12, wall)).toBe(0);
+    expect(estimateChainTimeOffsetSecs(wall - 18, wall)).toBe(0);
+    expect(estimateChainTimeOffsetSecs(wall + 2, wall)).toBe(0);
+
+    // Local clock genuinely behind chain (+60s) -> shift forward by +60s
+    expect(estimateChainTimeOffsetSecs(wall + 60, wall)).toBe(60);
+
+    // Local clock genuinely ahead of chain (-120s) -> shift back with 6s half-slot bias (-114s)
+    expect(estimateChainTimeOffsetSecs(wall - 120, wall)).toBe(-114);
   });
 
   it('reconstructs reserve history without double-counting seedReserves LiquidityAdded', () => {

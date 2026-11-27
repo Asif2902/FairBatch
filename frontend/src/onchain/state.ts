@@ -180,6 +180,33 @@ export function remainingSecondsForPhase(
   return 0;
 }
 
+/**
+ * Estimates `chainNow - wallNow` without letting Ethereum's 12-second block
+ * cadence or slow `eth_getLogs` calls make UI countdowns jump backwards and
+ * forwards on every RPC refresh.
+ *
+ * On Ethereum Sepolia, `latestBlock.timestamp` is normally 0–18s behind live
+ * UTC wall-clock time (one 12s slot, or a slightly delayed slot). When within
+ * `[-18s, +2s]`, the browser clock is already aligned with Sepolia so offset
+ * stays `0`. Only genuine local clock skew (or a fork with custom timestamps)
+ * applies an offset.
+ */
+export function estimateChainTimeOffsetSecs(
+  blockTimestamp: number,
+  wallSecs: number,
+): number {
+  const rawDiff = blockTimestamp - wallSecs;
+  if (rawDiff >= -18 && rawDiff <= 2) {
+    return 0;
+  }
+  if (rawDiff > 2) {
+    return rawDiff;
+  }
+  // Local clock is genuinely ahead of chain time: add 6s half-slot bias so we
+  // estimate live chain time rather than the previous block's timestamp.
+  return rawDiff + 6;
+}
+
 export function phaseLabel(phase: BatchPhase): string {
   switch (phase) {
     case 'Open':
@@ -607,7 +634,7 @@ export async function loadOnchainSnapshot(
   account: Address | null,
 ): Promise<OnchainSnapshot> {
   const client = getPublicClient(config);
-  const [batchRaw, reservesRaw, domainRaw, latestBlock, events] = await Promise.all([
+  const [batchRaw, reservesRaw, domainRaw, latestBlockSample, events] = await Promise.all([
     client.readContract({
       address: config.fairBatch,
       abi: fairBatchAbi,
@@ -623,13 +650,21 @@ export async function loadOnchainSnapshot(
       abi: fairBatchAbi,
       functionName: 'domainSeparator',
     }),
-    client.getBlock({ blockTag: 'latest' }).catch(() => null),
+    client
+      .getBlock({ blockTag: 'latest' })
+      .then((block) => ({
+        block,
+        wallSecs: Math.floor(Date.now() / 1000),
+      }))
+      .catch(() => null),
     loadFairBatchEvents(client, config),
   ]);
 
-  const wallNowSecs = Math.floor(Date.now() / 1000);
-  const blockTimestamp = latestBlock?.timestamp ? Number(latestBlock.timestamp) : wallNowSecs;
-  const chainTimeOffsetSecs = blockTimestamp - wallNowSecs;
+  const wallAtBlockSecs = latestBlockSample?.wallSecs ?? Math.floor(Date.now() / 1000);
+  const blockTimestamp = latestBlockSample?.block?.timestamp
+    ? Number(latestBlockSample.block.timestamp)
+    : wallAtBlockSecs;
+  const chainTimeOffsetSecs = estimateChainTimeOffsetSecs(blockTimestamp, wallAtBlockSecs);
 
   const batch = batchRaw as unknown as RawBatchInfo;
   const reserves = reservesRaw as unknown as RawReserves;

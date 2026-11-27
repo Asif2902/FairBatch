@@ -236,10 +236,21 @@ export function useFairBatch(): FairBatchController {
     setRefreshNonce((value) => value + 1);
   }, []);
 
-  // Derive live chain timestamp & auto-advancing phase so countdowns never stall at 00:00.
+  // Derive live chain timestamp & auto-advancing phase so countdowns never stall at 00:00
+  // and never jump backwards across background RPC refreshes within the same batch.
+  const monotonicClockRef = useRef<{ batchId: string; maxNow: number } | null>(null);
   const chainNow = useMemo(() => {
     if (!snapshot) return wallNow;
-    return wallNow + snapshot.chainTimeOffsetSecs;
+    const rawNow = wallNow + snapshot.chainTimeOffsetSecs;
+    const batchKey = snapshot.batch.batchId.toString();
+    const prev = monotonicClockRef.current;
+    if (!prev || prev.batchId !== batchKey) {
+      monotonicClockRef.current = { batchId: batchKey, maxNow: rawNow };
+      return rawNow;
+    }
+    const next = Math.max(prev.maxNow, rawNow);
+    monotonicClockRef.current = { batchId: batchKey, maxNow: next };
+    return next;
   }, [snapshot, wallNow]);
 
   const livePhase: BatchPhase = useMemo(() => {
@@ -358,17 +369,29 @@ export function useFairBatch(): FairBatchController {
     };
   }, [refresh]);
 
-  // Fast confirmation poll when crossing commitDeadline or revealDeadline so
-  // on-chain `currentBatch()` catches up within a few seconds of a deadline passing.
+  // Immediately sync on-chain state when the live clock crosses commitDeadline or
+  // revealDeadline, and keep fast-polling every 3s while the round is Ready
+  // (waiting for keeper or public settlement to open the next round).
   const onChainPhaseMatchesLive =
     snapshot === null || snapshot.state.phase === livePhase;
+  const phaseSyncRef = useRef<string>('');
   useEffect(() => {
-    if (onChainPhaseMatchesLive || busyRef.current !== null) return;
+    if (!snapshot || onChainPhaseMatchesLive || busyRef.current !== null) return;
+    const key = `${snapshot.batch.batchId.toString()}:${livePhase}`;
+    if (phaseSyncRef.current === key) return;
+    phaseSyncRef.current = key;
+    refresh();
+  }, [snapshot, onChainPhaseMatchesLive, livePhase, refresh]);
+
+  const needsFastPoll =
+    snapshot !== null && (!onChainPhaseMatchesLive || livePhase === 'Ready');
+  useEffect(() => {
+    if (!needsFastPoll || busyRef.current !== null) return;
     const id = window.setInterval(() => {
       if (busyRef.current === null) refresh();
     }, 3_000);
     return () => window.clearInterval(id);
-  }, [onChainPhaseMatchesLive, refresh]);
+  }, [needsFastPoll, refresh]);
 
   // Auto-dismiss success/info banners after ~8s; error banners stay until dismissed.
   useEffect(() => {
