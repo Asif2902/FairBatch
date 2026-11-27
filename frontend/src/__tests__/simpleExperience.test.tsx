@@ -632,6 +632,21 @@ describe('Simple mode end-to-end flows', () => {
     expect(screen.getByTestId('glossary-round')).toBeInTheDocument();
     expect(screen.getByTestId('glossary-fair-price')).toBeInTheDocument();
 
+    // Live Demo section with YouTube link and privacy-first facade player
+    fireEvent.click(screen.getByTestId('docs-tab-demo'));
+    expect(screen.getByTestId('docs-live-demo')).toBeInTheDocument();
+    expect(screen.getByTestId('docs-live-demo-link')).toHaveAttribute(
+      'href',
+      'https://youtu.be/Qa4dRpZdwE0?si=tBphjOdlHJYVBnYI',
+    );
+    expect(document.querySelector('iframe')).toBeNull();
+    fireEvent.click(screen.getByTestId('docs-live-demo-play'));
+    const iframe = document.querySelector('iframe');
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute('src')).toBe(
+      'https://www.youtube-nocookie.com/embed/Qa4dRpZdwE0?autoplay=1&rel=0',
+    );
+
     // Back to exchange
     fireEvent.click(screen.getByTestId('docs-back-button'));
     expect(screen.getByTestId('simple-swap-card')).toBeInTheDocument();

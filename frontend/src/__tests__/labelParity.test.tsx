@@ -29,7 +29,7 @@ describe('UI button label parity across /docs, tooltips, and README.md', () => {
     );
 
     const observedLabels = new Set<string>();
-    const tabIds = ['user', 'developer', 'visuals', 'security', 'glossary'] as const;
+    const tabIds = ['user', 'developer', 'visuals', 'security', 'glossary', 'demo'] as const;
 
     for (const tabId of tabIds) {
       fireEvent.click(screen.getByTestId(`docs-tab-${tabId}`));

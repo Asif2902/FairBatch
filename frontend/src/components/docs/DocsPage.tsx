@@ -5,6 +5,8 @@ import {
   Code2,
   ExternalLink,
   HelpCircle,
+  Play,
+  PlayCircle,
   ShieldAlert,
   Sparkles,
 } from 'lucide-react';
@@ -21,7 +23,12 @@ const UiLabel: React.FC<{ text: string }> = ({ text }) => (
   <strong data-ui-label={text}>{text}</strong>
 );
 
-export type DocsSectionId = 'user' | 'developer' | 'visuals' | 'security' | 'glossary';
+export type DocsSectionId = 'user' | 'developer' | 'visuals' | 'security' | 'glossary' | 'demo';
+
+const LIVE_DEMO_VIDEO_ID = 'Qa4dRpZdwE0';
+const LIVE_DEMO_YOUTUBE_URL = 'https://youtu.be/Qa4dRpZdwE0?si=tBphjOdlHJYVBnYI';
+const LIVE_DEMO_EMBED_URL = `https://www.youtube-nocookie.com/embed/${LIVE_DEMO_VIDEO_ID}?autoplay=1&rel=0`;
+const LIVE_DEMO_POSTER_URL = `https://i.ytimg.com/vi/${LIVE_DEMO_VIDEO_ID}/hqdefault.jpg`;
 
 interface DocsPageProps {
   config: RuntimeConfig;
@@ -152,6 +159,8 @@ export const DocsPage: React.FC<DocsPageProps> = ({
 }) => {
   const [activeSection, setActiveSection] = useState<DocsSectionId>('user');
   const [guideSlippagePct, setGuideSlippagePct] = useState<number>(5);
+  const [demoPlayerLoaded, setDemoPlayerLoaded] = useState<boolean>(false);
+  const [demoPosterFailed, setDemoPosterFailed] = useState<boolean>(false);
 
   useEffect(() => {
     if (!anchor) return;
@@ -163,6 +172,8 @@ export const DocsPage: React.FC<DocsPageProps> = ({
       setActiveSection('visuals');
     } else if (anchor === 'security') {
       setActiveSection('security');
+    } else if (anchor === 'demo' || anchor === 'live-demo') {
+      setActiveSection('demo');
     }
     const timer = window.setTimeout(() => {
       const el = document.getElementById(anchor);
@@ -232,6 +243,7 @@ export const DocsPage: React.FC<DocsPageProps> = ({
               { id: 'visuals', label: '3. Visuals & Animations', icon: Sparkles },
               { id: 'security', label: '4. Threat Model', icon: ShieldAlert },
               { id: 'glossary', label: '5. Glossary', icon: HelpCircle },
+              { id: 'demo', label: '6. Live Demo', icon: PlayCircle },
             ] as const
           ).map((tab) => {
             const Icon = tab.icon;
@@ -1375,6 +1387,175 @@ cd keeper && npm ci && npm test && npm run start -- --dry-run`}
                 <p className="mt-1 text-xs leading-relaxed text-ink-muted">{entry.detail}</p>
               </article>
             ))}
+          </div>
+        </section>
+      )}
+
+      {/* =====================================================================
+          B6. LIVE DEMO
+         ===================================================================== */}
+      {activeSection === 'demo' && (
+        <section
+          id="live-demo"
+          aria-label="FairBatch Live Demo"
+          data-testid="docs-live-demo"
+          className="ledger-panel p-5 space-y-5 scroll-mt-20"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule pb-4">
+            <div className="min-w-0">
+              <span className="eyebrow text-vermilion-700">Part 6 · Live Demo</span>
+              <h2 className="mt-1 font-display text-xl font-bold text-ink sm:text-2xl">
+                Live Demo Walkthrough
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink-soft">
+                Watch the end-to-end FairBatch walkthrough on Ethereum Sepolia — wallet connection,
+                free testnet faucet claim, uniform-price batch swap, settlement, and token
+                collection.
+              </p>
+            </div>
+            <a
+              href={LIVE_DEMO_YOUTUBE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="docs-live-demo-link"
+              className="tap-target inline-flex shrink-0 items-center gap-2 bg-vermilion-500 px-4 font-display text-sm font-bold text-[#FBF8F0] transition hover:bg-vermilion-600"
+            >
+              <PlayCircle className="h-4 w-4" aria-hidden="true" />
+              <span>Watch on YouTube</span>
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+            </a>
+          </div>
+
+          {/* Privacy-first YouTube facade: loads youtube-nocookie iframe only after explicit user click */}
+          <div
+            data-testid="docs-live-demo-player"
+            className="relative aspect-video w-full overflow-hidden border border-ink bg-ink"
+          >
+            {demoPlayerLoaded ? (
+              <iframe
+                src={LIVE_DEMO_EMBED_URL}
+                title="FairBatch Live Demo Walkthrough"
+                width={1280}
+                height={720}
+                loading="lazy"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+                className="h-full w-full border-0"
+              />
+            ) : (
+              <button
+                type="button"
+                data-testid="docs-live-demo-play"
+                onClick={() => setDemoPlayerLoaded(true)}
+                aria-label="Play FairBatch Live Demo video"
+                className="group relative flex h-full w-full items-center justify-center bg-ink text-left text-paper focus-visible:outline-2"
+              >
+                {!demoPosterFailed && (
+                  <img
+                    src={LIVE_DEMO_POSTER_URL}
+                    alt="FairBatch Live Demo video thumbnail"
+                    width={1280}
+                    height={720}
+                    loading="lazy"
+                    onError={() => setDemoPosterFailed(true)}
+                    className="absolute inset-0 h-full w-full object-cover opacity-55 transition duration-300 group-hover:scale-[1.01] group-hover:opacity-65"
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/35 to-black/25" />
+                <div className="relative z-10 flex flex-col items-center gap-3 px-6 text-center">
+                  <span className="flex h-16 w-16 items-center justify-center border-2 border-[#FBF8F0] bg-vermilion-500 text-[#FBF8F0] shadow-lg transition group-hover:scale-105 group-hover:bg-vermilion-600">
+                    <Play className="ml-1 h-7 w-7 fill-current" aria-hidden="true" />
+                  </span>
+                  <div>
+                    <div className="font-mono text-xs font-bold uppercase tracking-label text-[#FBF8F0]/85">
+                      Ethereum Sepolia · Privacy-Enhanced Embed
+                    </div>
+                    <div className="mt-1 font-display text-lg font-bold text-[#FBF8F0] sm:text-xl">
+                      Play FairBatch Live Demo
+                    </div>
+                  </div>
+                </div>
+              </button>
+            )}
+          </div>
+
+          {/* Direct link & contract reference */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border border-rule bg-paper-soft px-4 py-3 text-xs">
+            <div className="min-w-0 space-y-0.5">
+              <div className="font-mono font-bold uppercase tracking-label text-ink-muted">
+                Direct Live Demo Link
+              </div>
+              <a
+                href={LIVE_DEMO_YOUTUBE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 break-all font-mono text-xs font-bold text-cobalt-700 underline decoration-dotted underline-offset-2 hover:text-ink"
+              >
+                <span>{LIVE_DEMO_YOUTUBE_URL}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </a>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {fairBatchUrl && (
+                <a
+                  href={fairBatchUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-h-[36px] items-center gap-1.5 border border-rule-strong bg-paper-bright px-3 font-mono text-xs font-bold text-ink transition hover:border-ink"
+                >
+                  <span>Sepolia Contract</span>
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={onBackToExchange}
+                className="inline-flex min-h-[36px] items-center gap-1.5 border border-ink bg-ink px-3 font-mono text-xs font-bold text-paper transition hover:bg-ink-soft"
+              >
+                <span>Try Live Exchange</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Demo highlights */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="border border-rule bg-paper-soft p-3.5 text-xs leading-relaxed">
+              <div className="font-mono font-bold uppercase text-vermilion-700">
+                01 · Wallet &amp; Faucet
+              </div>
+              <p className="mt-1 text-ink-soft">
+                Connects on Ethereum Sepolia and claims free test {config.baseSymbol} and{' '}
+                {config.quoteSymbol} from the on-chain faucet contract.
+              </p>
+            </div>
+            <div className="border border-rule bg-paper-soft p-3.5 text-xs leading-relaxed">
+              <div className="font-mono font-bold uppercase text-vermilion-700">
+                02 · Batch Order Flow
+              </div>
+              <p className="mt-1 text-ink-soft">
+                Demonstrates placing orders into an active uniform-price round alongside live
+                countdown synchronization.
+              </p>
+            </div>
+            <div className="border border-rule bg-paper-soft p-3.5 text-xs leading-relaxed">
+              <div className="font-mono font-bold uppercase text-pine-700">
+                03 · Uniform Clearing &amp; MEV Defense
+              </div>
+              <p className="mt-1 text-ink-soft">
+                Settles the batch on-chain at one shared price <code>p*</code> using the pure Fe
+                26.5.0 clearing kernel (<code>uses ()</code>).
+              </p>
+            </div>
+            <div className="border border-rule bg-paper-soft p-3.5 text-xs leading-relaxed">
+              <div className="font-mono font-bold uppercase text-pine-700">
+                04 · Pull Claims &amp; Verification
+              </div>
+              <p className="mt-1 text-ink-soft">
+                Collects settled payouts via pull-over-push receipts and verifies live state on
+                Sepolia Etherscan.
+              </p>
+            </div>
           </div>
         </section>
       )}
